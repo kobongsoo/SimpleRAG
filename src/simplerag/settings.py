@@ -154,6 +154,8 @@ SCHEMA = {
         "top_k": _int(1, 20),
         "max_tokens": _int(16, 1024),             # 답변 토큰 상한 — n_ctx(2048) 안에 근거 자리를 남긴다
         "prompt": _choice("v0", "v4"),            # 시스템 지시문(generate/prompts.py PROMPTS)
+        # 기본 생성 모델 — 빠름(0.6B) | 정밀(1.7B). 정밀은 답이 정확하지만 TTFT 가 3초를 넘는다(§42)
+        "model": _choice("qwen3-0.6b-q4", "qwen3-1.7b-q4"),
     },
 }
 

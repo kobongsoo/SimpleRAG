@@ -256,8 +256,8 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
   <div class="meta">
     <span><b>작성</b> 2026-09-15</span>
     <span><b>기준선</b> REPORT §36 (운영 설정, pool 10 · 근거 3 · qwen3-0.6b-q4 · iGPU)</span>
-    <span><b>상태</b> 1단계 끝 · 2-2 1.7B 품질 상승 확정(F +0.100, 506문항 +22 p=0.007) · 속도 불합격 · D7 ②(근거 3→2) 기각 — 1.7B 운용 방식 결정 대기(D8)</span>
-    <span><b>갱신</b> 2026-09-16 · REPORT §37 ~ §43</span>
+    <span><b>상태</b> 1단계 끝 · 2-2 1.7B 품질 상승 확정(F +0.100, 506문항 +22 p=0.007) · 2-2 품질 상승 확정 · D7 ② 기각 · <b>D8 ③ 정밀 모드 적용 완료</b></span>
+    <span><b>갱신</b> 2026-09-16 · REPORT §37 ~ §44</span>
   </div>
 </header>
 
@@ -461,8 +461,10 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
           <dt>소요</dt><dd>약 1시간 30분(CP 채점이 대부분)</dd></dl>
         </div></li>
         <li class="step"><div class="sid">4-2</div><div class="body">
-          <h4>기본값·배포물 반영 <span class="chip wait">대기</span></h4>
-          <dl><dt>무엇</dt><dd><code>config.yaml</code>(저장소·exe 폴더)·코드 기본값, 회귀 테스트, exe 재빌드, README·doc/03·doc/04 갱신</dd></dl>
+          <h4>기본값·배포물 반영 <span class="chip good">정밀 모드분 완료</span></h4>
+          <dl><dt>무엇</dt><dd><code>config.yaml</code>(저장소·exe 폴더)·코드 기본값, 회귀 테스트, exe 재빌드, README·doc/03·doc/04 갱신</dd>
+          <dt>완료</dt><dd>정밀 모드(§44) — 설정·CLI·캐시·테스트 21건·문서·exe 2.07GB. <b>주의:</b> exe 재빌드는 exe 폴더 인덱스를 지운다 → <code>index --dir sample --rebuild</code> 필요</dd>
+          <dt>남음</dt><dd>1-4(되뱉기 후처리)·3-3(표 행 평문화)을 한 뒤 최종 4지표 측정(4-1)</dd></dl>
         </div></li>
       </ol>
     </div>
@@ -568,7 +570,7 @@ python bench\ragas_golden.py score --exp final --metrics cp --workers 12</pre>
     <li><span class="chip bad">D2</span><p><b>Answer Relevancy 한국어 보정(0-3) 여부</b> — 상대 비교만이면 생략, 보고서에 절대값을 쓸 거면 수행.</p></li>
     <li><span class="chip bad">D3</span><p><b>2-3 후보 모델 범위</b> — 사내 배포가 가능한 라이선스인지, exe 용량 상한은 얼마인지.</p></li>
     <li><span class="chip good">D4</span><p><b>1-1 착수 승인</b> — 승인됨(2026-09-15), 측정 완료.</p></li>
-    <li><span class="chip bad">D8</span><p><b>1.7B 운용 방식</b> — ③ 정밀 모드 분리(권장: 기본 0.6B 유지 + 선택 시 1.7B, 399/506) · 1.7B 기본 + "3초 이내 90%" 기준 완화 · 0.6B 유지하고 2-3(한국어 소형 모델)로. 근거 축약 길은 §43 에서 닫혔다</p></li>
+    <li><span class="chip good">D8</span><p><b>1.7B 운용 방식</b> — <b>③ 정밀 모드</b>(2026-09-16, 사용자 결정, 적용 완료). 기본은 빠름(0.6B), <code>--precise</code> 로 그 실행만 정밀(1.7B). 설정 <code>generation.model</code>·<code>SIMPLERAG_GEN_MODEL</code> 로 기본을 바꿀 수도 있다. 백엔드 측정 캐시를 모델별로 나눠 모드 전환 때 재측정하지 않는다. exe 재빌드 완료(2.07GB) — REPORT §44</p></li>
     <li><span class="chip good">D7</span><p><b>②(근거 3→2)로 3초 맞추기</b> — 측정 후 <b>기각</b>(2026-09-16). 속도는 못 맞추고 품질만 잃었다(REPORT §43.3)</p></li>
     <li><span class="chip good">D6</span><p><b>2-1 불합격 뒤 경로</b> — <b>① 1.7B 품질부터 확정</b>(2026-09-15, 사용자 결정). 결과에 따라 ② 근거·접두 축약으로 3초 맞추기 또는 ③ 정밀 모드 분리를 정한다(REPORT §41.5)</p></li>
     <li><span class="chip good">D5</span><p><b>1-1 유지 또는 되돌림</b> — <b>유지</b>(2026-09-15, 사용자 결정). 결함 수정으로 두고 기준선을 <code>e11_dedup</code>(골든셋)·<code>e11_dedup/large_answer</code>(506문항, 377)로 옮김.</p></li>

@@ -29,7 +29,7 @@ TOTAL = [0]
 PY = sys.executable
 KEYS = ["CHUNK_TOKENS", "CHUNK_OVERLAP", "CHUNK_MODE", "MIN_CHUNK_TOKENS",
         "TABLE_HEADER_MAX_TOKENS", "DENSE_TOP_K", "BM25_TOP_K", "RRF_K", "BM25_K1",
-        "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT"]
+        "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT", "DEFAULT_GEN_MODEL"]
 
 
 #------------------------------------------------------------------
@@ -136,6 +136,17 @@ generation:
     rc, v, err = load_in_child(env={"SIMPLERAG_CONFIG": "-", "SIMPLERAG_PROMPT": "v9"})
     check("SIMPLERAG_PROMPT 오타 → 시작할 때 오류", rc != 0 and "v0 | v4" in err, (rc, err[-200:]))
 
+    # 정밀 모드(REPORT §44) — 기본은 빠른 0.6B, 설정·환경변수로 정밀(1.7B)을 기본값으로 둘 수 있다
+    check("기본 생성 모델은 빠름(0.6B)", d0 and d0["DEFAULT_GEN_MODEL"] == "qwen3-0.6b-q4", d0)
+    rc, v, err = load_in_child("generation:\n  model: qwen3-1.7b-q4\n", tmp=tmp)
+    check("generation.model 로 정밀을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "qwen3-1.7b-q4", (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  model: qwen3-1.7b-q4\n",
+                               env={"SIMPLERAG_GEN_MODEL": "qwen3-0.6b-q4"}, tmp=tmp)
+    check("SIMPLERAG_GEN_MODEL 이 config.yaml 보다 우선",
+          rc == 0 and v["DEFAULT_GEN_MODEL"] == "qwen3-0.6b-q4", (rc, v, err))
+    rc, v, err = load_in_child(env={"SIMPLERAG_CONFIG": "-", "SIMPLERAG_GEN_MODEL": "qwen3-8b"})
+    check("SIMPLERAG_GEN_MODEL 오타 → 시작할 때 오류", rc != 0 and "qwen3-0.6b-q4" in err, (rc, err[-200:]))
+
     rc, v, err = load_in_child("chunk:\n  tokens: 256\n", env={"SIMPLERAG_CHUNK_TOKENS": "200"}, tmp=tmp)
     check("환경변수가 config.yaml 보다 우선(200, 겹침 25)",
           rc == 0 and v["CHUNK_TOKENS"] == 200 and v["CHUNK_OVERLAP"] == 25, (rc, v, err))
@@ -152,6 +163,7 @@ generation:
         ("bool 을 정수로", "generation:\n  top_k: yes\n", ["정수"]),
         ("답변 토큰 상한 범위 밖", "generation:\n  max_tokens: 4096\n", ["16~1024"]),
         ("모르는 프롬프트 이름", "generation:\n  prompt: v3\n", ["v0 | v4"]),
+        ("모르는 생성 모델", "generation:\n  model: qwen3-14b\n", ["qwen3-0.6b-q4 | qwen3-1.7b-q4"]),
         ("겹침 ≥ 크기", "chunk:\n  tokens: 64\n  overlap: 64\n", ["겹침"]),
         ("rerank.mode 오타", "rerank:\n  mode: always\n", ["auto | on | off"]),
     ]

@@ -42,7 +42,7 @@ dist/simplerag/
 │  └─ llama_vulkan/       ← iGPU(Vulkan) 판 llama.cpp DLL (59MB)
 └─ models/
    ├─ Qwen3-0.6B-Q4_K_M.gguf     378MB
-   ├─ Qwen3-1.7B-Q4_K_M.gguf    1056MB  (정밀 모드용, 선택)
+   ├─ Qwen3-1.7B-Q4_K_M.gguf    1056MB  (정밀 모드 `--precise` — 없으면 그 명령만 실패)
    ├─ e5-small-ko/               129MB
    └─ bge-reranker-base-int8/    283MB  (리랭커)
 ```
@@ -187,6 +187,7 @@ D:\SimpleRAG\simplerag.exe status
 | `SIMPLERAG_CHUNK_TOKENS` | 청크 크기 | `128` |
 | `SIMPLERAG_CHUNK_OVERLAP` | 청크 겹침 | 청크의 12.5% |
 | `SIMPLERAG_GEN_BACKEND` | 생성 백엔드 `auto` / `cpu` / `vulkan` | `auto` (재서 고름) |
+| `SIMPLERAG_GEN_MODEL` | 기본 생성 모델 `qwen3-0.6b-q4`(빠름) / `qwen3-1.7b-q4`(정밀) | `qwen3-0.6b-q4` |
 | `SIMPLERAG_RERANK` | 리랭킹 `auto` / `1` / `0` | `auto` (iGPU 일 때만 켬) |
 | `SIMPLERAG_VULKAN_LIB` | Vulkan 판 DLL 폴더 | `<exe 폴더>\runtime\llama_vulkan` |
 | `SIMPLERAG_RERANK_DIR` | 리랭커 모델 폴더 | `<MODELS_DIR>\bge-reranker-base-int8` |

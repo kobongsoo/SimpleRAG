@@ -45,6 +45,9 @@ VULKAN_DLLS = ("ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll", "ggml.dll", "
 
 _lock = threading.Lock()
 _selected = None        # 프로세스당 한 번만 정한다(DLL 은 바꿀 수 없으므로)
+# 캐시에 남겨 둘 측정 개수 — 모델(빠름 0.6B·정밀 1.7B)마다 하나씩 + 여유분.
+#   넘치면 오래된 것부터 버린다(정밀 모드, REPORT §44).
+_CACHE_KEEP = 4
 
 
 #------------------------------------------------------------------
@@ -199,8 +202,32 @@ def cache_key(model_alias=None):
 
 
 #------------------------------------------------------------------
+# 캐시 파일 읽기 (내부)
+#=> 저장 형식이 두 가지다. 옛 파일은 측정 하나만 담고 있고(최상위에 key),
+#   새 파일은 모델마다 하나씩 여러 개를 entries 에 담는다(정밀 모드 — REPORT §44).
+#   옛 파일도 그대로 읽어 한 건짜리 목록으로 바꾼다.
+#
+# -in: 없음
+#
+# -out: [측정 dict, ...] (파일이 없거나 깨졌으면 빈 목록)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _load_entries():
+    try:
+        # BOM 이 붙어 저장된 파일도 읽는다(사용자가 편집기로 열어 저장한 경우)
+        with open(config.BACKEND_CACHE_PATH, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict) and isinstance(data.get("entries"), list):
+        return [e for e in data["entries"] if isinstance(e, dict)]
+    return [data] if isinstance(data, dict) and data.get("key") else []
+
+
+#------------------------------------------------------------------
 # 저장된 측정 보기 (측정하지 않음)
 #=> 생성 모델을 안 쓰는 명령(search 등)이 리랭킹 여부만 알고 싶을 때 쓴다.
+#   모델을 오갈 때(빠름 ↔ 정밀) 서로의 측정이 지워지지 않게, 모델별로 찾아 준다.
 #
 # -in: model_alias = 생성 모델 별칭
 #
@@ -208,12 +235,11 @@ def cache_key(model_alias=None):
 # -out: error = 없음 (파일 손상도 None)
 #------------------------------------------------------------------
 def peek(model_alias=None):
-    try:
-        with open(config.BACKEND_CACHE_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    return data if data.get("key") == cache_key(model_alias) else None
+    want = cache_key(model_alias)
+    for e in _load_entries():
+        if e.get("key") == want:
+            return e
+    return None
 
 
 #------------------------------------------------------------------
@@ -226,10 +252,15 @@ def peek(model_alias=None):
 # -out: error = 없음 (저장 실패는 무시 — 다음 실행 때 다시 잴 뿐이다)
 #------------------------------------------------------------------
 def _save(data):
+    # 같은 키(모델·DLL·설정)의 옛 측정만 밀어내고 나머지 모델의 측정은 남긴다.
+    # 그래야 `ask` 와 `ask --precise` 를 오갈 때마다 15~40초짜리 측정을 다시 하지 않는다.
+    entries = [e for e in _load_entries() if e.get("key") != data.get("key")]
+    entries.insert(0, data)
+    payload = {"version": 2, "entries": entries[:_CACHE_KEEP]}
     tmp = config.BACKEND_CACHE_PATH + ".tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(payload, f, ensure_ascii=False, indent=2)
         os.replace(tmp, config.BACKEND_CACHE_PATH)
     except OSError:
         pass

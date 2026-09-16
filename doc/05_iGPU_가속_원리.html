@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimpleRAG iGPU 가속 원리 — prefill 과 KV 캐시</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa;
+  --surface: #ffffff;
+  --sunken: #eceff4;
+  --ink: #19212d;
+  --ink-2: #3c4656;
+  --muted: #647083;
+  --rule: #d9dee6;
+  --accent: #2c5aa0;
+  --accent-soft: #e3ebf7;
+  --good: #2a7a57;
+  --good-soft: #e2f1ea;
+  --warn: #a8701a;
+  --warn-soft: #f7ecd8;
+  --bad: #b0463b;
+  --bad-soft: #f6e3e0;
+  --bar-track: #e3e7ee;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630;
+    --ink: #e4e8ee; --ink-2: #c2c9d3; --muted: #8f9aa9; --rule: #2b3441;
+    --accent: #86a9e3; --accent-soft: #1f2c42;
+    --good: #6cc39a; --good-soft: #17322a;
+    --warn: #e0ad5c; --warn-soft: #3a2d17;
+    --bad: #e58a7f; --bad-soft: #3b1f1c;
+    --bar-track: #26303c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630;
+  --ink: #e4e8ee; --ink-2: #c2c9d3; --muted: #8f9aa9; --rule: #2b3441;
+  --accent: #86a9e3; --accent-soft: #1f2c42;
+  --good: #6cc39a; --good-soft: #17322a;
+  --warn: #e0ad5c; --warn-soft: #3a2d17;
+  --bad: #e58a7f; --bad-soft: #3b1f1c;
+  --bar-track: #26303c;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0;
+  background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 16px; line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 880px; margin: 0 auto; padding: 48px 16px 96px; }
+header.doc {
+  border-bottom: 2px solid var(--rule); padding-bottom: 20px; margin-bottom: 36px;
+}
+header.doc .eyebrow {
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent); font-weight: 600; margin-bottom: 8px;
+}
+header.doc h1 { font-size: 30px; line-height: 1.3; margin: 0 0 10px; font-weight: 700; }
+header.doc .sub { color: var(--muted); font-size: 14.5px; margin: 0; }
+h2 {
+  font-size: 22px; margin: 52px 0 16px; padding-top: 18px;
+  border-top: 1px solid var(--rule); font-weight: 700;
+}
+h2 .num {
+  display: inline-block; min-width: 1.9em; color: var(--accent);
+  font-family: var(--mono); font-size: 18px; font-weight: 500;
+}
+h3 { font-size: 17px; margin: 30px 0 10px; font-weight: 600; color: var(--ink); }
+h4 { font-size: 15.5px; margin: 22px 0 8px; font-weight: 600; color: var(--ink); }
+p { margin: 0 0 14px; color: var(--ink-2); }
+strong { color: var(--ink); font-weight: 600; }
+ul, ol { margin: 0 0 16px; padding-left: 22px; color: var(--ink-2); }
+li { margin-bottom: 6px; }
+code {
+  font-family: var(--mono); font-size: 13.5px;
+  background: var(--sunken); border: 1px solid var(--rule);
+  border-radius: 4px; padding: 1px 5px; color: var(--ink);
+}
+pre {
+  background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 14px 16px; overflow-x: auto; margin: 0 0 18px;
+}
+pre code { background: none; border: 0; padding: 0; font-size: 13px; line-height: 1.6; }
+table {
+  width: 100%; border-collapse: collapse; margin: 0 0 20px;
+  font-size: 14.5px; background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
+}
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink); font-size: 13.5px; }
+tr:last-child td { border-bottom: 0; }
+td { color: var(--ink-2); }
+td.hl-bad { color: var(--bad); font-weight: 600; }
+td.hl-good { color: var(--good); font-weight: 600; }
+.callout {
+  border-left: 3px solid var(--accent); background: var(--accent-soft);
+  padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 0 0 20px;
+}
+.callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.callout.good { border-left-color: var(--good); background: var(--good-soft); }
+.callout p:last-child { margin-bottom: 0; }
+.callout .tag {
+  display: block; font-size: 12px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; margin-bottom: 6px; color: var(--accent);
+}
+.callout.warn .tag { color: var(--warn); }
+.callout.good .tag { color: var(--good); }
+.src {
+  display: inline-block; font-family: var(--mono); font-size: 12px;
+  color: var(--muted); background: var(--sunken);
+  border: 1px solid var(--rule); border-radius: 4px; padding: 0 5px;
+}
+.toc {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 8px; padding: 18px 22px; margin-bottom: 40px;
+}
+.toc h4 {
+  margin: 0 0 10px; font-size: 13px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600;
+}
+.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 28px; }
+.toc a { color: var(--ink-2); text-decoration: none; font-size: 14.5px; }
+.toc a:hover { color: var(--accent); text-decoration: underline; }
+.bars { margin: 0 0 20px; }
+.bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 14px; }
+.bar-row .lab { width: 62px; font-weight: 600; color: var(--ink); flex: none; }
+.bar-row .track { flex: 1; height: 22px; background: var(--bar-track); border-radius: 4px; overflow: hidden; }
+.bar-row .fill { height: 100%; border-radius: 4px; }
+.bar-row .val { width: 120px; flex: none; font-family: var(--mono); font-size: 12.5px; color: var(--muted); text-align: right; }
+footer.doc {
+  margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--rule);
+  color: var(--muted); font-size: 13px;
+}
+@media (max-width: 640px) {
+  .wrap { padding: 32px 16px 64px; }
+  header.doc h1 { font-size: 24px; }
+  .toc ol { columns: 1; }
+  .bar-row .val { width: 90px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="eyebrow">SimpleRAG 구현 해설 · 05</div>
+  <h1>SimpleRAG 는 어떻게 iGPU 를 쓰는가</h1>
+  <p class="sub">내장 그래픽(Vulkan) 가속 구조와, 그 배경이 되는 prefill · KV 캐시 개념</p>
+</header>
+
+<div class="toc">
+  <h4>목차</h4>
+  <ol>
+    <li><a href="#s1">한눈에 보기</a></li>
+    <li><a href="#s2">DLL 두 벌 구조</a></li>
+    <li><a href="#s3">왜 Vulkan 인가</a></li>
+    <li><a href="#s4">백엔드 선택 5단계</a></li>
+    <li><a href="#s5">왜 자식 프로세스로 재는가</a></li>
+    <li><a href="#s6">무엇을 어떻게 재는가</a></li>
+    <li><a href="#s7">1.3배 문턱</a></li>
+    <li><a href="#s8">측정 결과 캐싱</a></li>
+    <li><a href="#s9">선택 → 실제 적재</a></li>
+    <li><a href="#s10">iGPU 와 리랭킹</a></li>
+    <li><a href="#s11">prefill 이란</a></li>
+    <li><a href="#s12">KV 캐시란</a></li>
+    <li><a href="#s13">확인 방법</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="num">1</span>한눈에 보기</h2>
+
+<p><strong>iGPU 는 "답변 생성(LLM)" 한 군데에만, 그것도 Vulkan 을 통해서만 쓴다.</strong>
+임베딩·리랭커(ONNX)는 <code>providers=["CPUExecutionProvider"]</code> 로 못 박아 항상 CPU 다
+(<span class="src">src/simplerag/embed/onnx_embedder.py:96</span>).</p>
+
+<table>
+  <tr><th>구성요소</th><th>실행 장치</th><th>근거</th></tr>
+  <tr><td>임베딩 (ONNX)</td><td>CPU 고정</td><td><span class="src">onnx_embedder.py:96</span></td></tr>
+  <tr><td>리랭커 (ONNX)</td><td>CPU 고정</td><td>같은 ONNX Runtime 경로</td></tr>
+  <tr><td><strong>생성 LLM (GGUF)</strong></td><td class="hl-good"><strong>CPU 또는 iGPU — 측정해서 결정</strong></td><td><span class="src">generate/backend.py</span></td></tr>
+</table>
+
+<div class="callout">
+  <span class="tag">핵심 한 줄</span>
+  <p>iGPU 를 무조건 쓰지 않는다. <strong>첫 실행 때 이 PC 에서 CPU 와 iGPU 를 직접 재 보고,
+  iGPU 가 1.3배 이상 확실히 빠를 때만</strong> iGPU 를 쓴다. 결과는 파일에 저장해 다음부터는 재지 않는다.</p>
+</div>
+
+<h2 id="s2"><span class="num">2</span>핵심 아이디어 — DLL 두 벌을 동봉한다</h2>
+
+<p>llama-cpp-python 은 파이썬 껍데기일 뿐이고, 실제 계산은 네이티브 <code>llama.dll</code> 이 한다.
+SimpleRAG 는 <strong>같은 버전(0.3.35)의 DLL 을 두 벌</strong> 가진다.</p>
+
+<table>
+  <tr><th>판</th><th>위치</th><th>성격</th></tr>
+  <tr><td>CPU 판</td><td><code>llama_cpp</code> 패키지 내부 (기본)</td><td>순수 CPU</td></tr>
+  <tr><td>Vulkan 판</td><td><code>runtime/llama_vulkan/</code> (약 59MB, DLL 5개)</td><td><code>vulkan-1.dll</code> 링크 → iGPU 사용</td></tr>
+</table>
+
+<p>전환 스위치는 환경변수 하나다 — <code>LLAMA_CPP_LIB_PATH</code>.
+이걸 Vulkan 폴더로 가리키면 iGPU 판이 올라온다 (<span class="src">backend.py:427 _apply()</span>).</p>
+
+<pre><code>if info["backend"] == "vulkan":
+    os.environ["LLAMA_CPP_LIB_PATH"] = config.VULKAN_LIB_DIR</code></pre>
+
+<div class="callout warn">
+  <span class="tag">제약</span>
+  <p><code>import llama_cpp</code> 하는 순간 DLL 이 확정되고, 한 프로세스에서는 <strong>바꿀 수 없다</strong>.
+  그래서 백엔드 선택은 반드시 <strong>import 이전에</strong> 끝나야 한다. 코드 구조가 이 제약을 중심으로 짜여 있다.</p>
+</div>
+
+<h3>왜 Vulkan 판을 CPU 용으로 겸하지 않는가</h3>
+<ul>
+  <li><code>n_gpu_layers=0</code> 으로 둬도 Vulkan 판은 큰 행렬곱을 iGPU 로 보낸다(실측 1041토큰 2.87초 vs CPU 판 4.0~4.2초).
+      즉 'CPU 모드'가 사실은 CPU 가 아니게 되어 비교가 무의미해진다.</li>
+  <li><code>vulkan-1.dll</code> 이 없는 PC 에서는 적재 자체가 실패한다. CPU 판이 없으면 앱이 아예 못 돈다.</li>
+</ul>
+
+<h2 id="s3"><span class="num">3</span>왜 CUDA 가 아니라 Vulkan 인가</h2>
+
+<p>내장 그래픽(Intel Iris Xe, AMD Radeon 등)에는 CUDA 가 없다. Vulkan 은 Intel·AMD·NVIDIA 를 모두 덮는
+표준이고, 그래픽 드라이버만 최신이면 <code>C:\Windows\System32\vulkan-1.dll</code> 이 이미 깔려 있다.
+<strong>사용자가 별도 런타임을 설치하지 않아도 iGPU 를 굴릴 수 있다</strong>는 것이 채택 이유다.</p>
+
+<h2 id="s4"><span class="num">4</span>선택 절차 — 무조건 쓰지 않고 "재서" 쓴다</h2>
+
+<p><span class="src">backend.py:366 _select()</span> 의 5단계:</p>
+
+<pre><code>1) llama_cpp 가 이미 import 됐나?   → 그 DLL 그대로 (바꿀 수 없음)
+2) SIMPLERAG_GEN_BACKEND=cpu 인가?  → 끝, CPU
+3) 사전 점검 vulkan_available()      → 탈락이면 CPU
+4) 저장된 측정이 이 환경과 맞나?      → 그대로 사용 (source=cache)
+5) 아니면 자식 프로세스로 둘 다 재고 decide()  (source=probe)</code></pre>
+
+<p><strong>3단계 사전 점검</strong>(<span class="src">backend.py:131 vulkan_available()</span>)은
+프로세스를 띄우기 전에 <em>파일만 보고</em> 거른다.</p>
+<ol>
+  <li>런타임 폴더와 DLL 5개가 있는가</li>
+  <li><code>VERSION.txt</code> 가 파이썬 바인딩 버전과 일치하는가 — 다르면 구조체 배치가 달라 죽거나 <strong>조용히 오작동</strong>한다</li>
+  <li><code>System32\vulkan-1.dll</code> 이 있는가 — 없으면 적재 자체가 실패</li>
+</ol>
+
+<h2 id="s5"><span class="num">5</span>왜 자식 프로세스에서 재는가</h2>
+
+<p><span class="src">backend.py:301 run_probe()</span> 는 <code>subprocess</code> 로 자기 자신을
+<code>_probe-backend</code> 라는 숨은 명령으로 띄운다. 이유는 두 가지다.</p>
+
+<ol>
+  <li><strong>안전</strong> — 드라이버가 깨진 PC 에서 Vulkan DLL 적재 실패는 파이썬 예외가 아니라
+      <strong>네이티브 크래시</strong>다. 본 프로세스에서 하면 앱이 통째로 죽는다.
+      자식이 죽으면 부모는 "비정상 종료"로 읽고 조용히 CPU 로 폴백하면 된다.</li>
+  <li><strong>비교 불가능성</strong> — 한 프로세스엔 DLL 이 하나뿐이니, 두 판의 속도를 비교하려면
+      프로세스가 둘이어야 한다.</li>
+</ol>
+
+<p>자식은 결과를 <strong>표준출력의 마지막 JSON 한 줄</strong>로 넘긴다. 부모는 뒤에서부터 <code>{</code> 로
+시작하는 줄을 찾아 파싱하고, 못 찾으면 실패로 처리한다.</p>
+
+<h2 id="s6"><span class="num">6</span>무엇을 어떻게 재는가</h2>
+
+<p><span class="src">backend.py:454 probe_main()</span> 이 <strong>운영과 같은 모양</strong>의 프롬프트
+(시스템 지시문 + 근거 3건, 611토큰)로 잰다.</p>
+
+<pre><code>for i in range(3):
+    llm.reset()                                     # KV 재사용 방지 — 매번 전체 prefill
+    llm.create_completion(prompt(i), max_tokens=1)  # 1토큰만 = 순수 prefill 시간
+
+sec = sum(times[1:]) / len(times[1:])   # 첫 회는 셰이더 컴파일 포함 → 버린다</code></pre>
+
+<ul>
+  <li><code>max_tokens=1</code> — decode 는 iGPU 나 CPU 나 비슷하고, RAG 는 프롬프트가 길어
+      <strong>prefill 이 체감 속도를 지배</strong>하므로 prefill 만 끊어서 잰다. (→ <a href="#s11">11장</a>)</li>
+  <li><code>llm.reset()</code> — llama.cpp 는 프롬프트 앞부분이 같으면 KV 캐시를 살려 prefill 을 건너뛴다.
+      그냥 3회 돌리면 2·3회차가 거의 공짜가 되어 엉터리 숫자가 나온다. (→ <a href="#s12">12장</a>)</li>
+  <li>회차마다 <strong>질문 번호만 바꾼</strong> 프롬프트를 쓴다 — 길이는 같고 내용은 다르게.</li>
+  <li>첫 회를 버리는 이유 — Vulkan 은 최초 실행 시 셰이더를 컴파일하므로 그 시간이 섞인다.</li>
+</ul>
+
+<h2 id="s7"><span class="num">7</span>판정 — 1.3배 이상 빨라야만 iGPU</h2>
+
+<p><span class="src">backend.py:162 decide()</span> 는 부수효과 없는 순수 함수라 테스트하기 쉽게 분리돼 있다.</p>
+
+<pre><code>ratio = gpu["prefill_tps"] / max(cpu["prefill_tps"], 1e-6)
+if ratio &gt;= min_speedup:      # GPU_MIN_SPEEDUP = 1.3
+    return "vulkan", ...</code></pre>
+
+<div class="callout warn">
+  <span class="tag">문턱을 둔 이유</span>
+  <p><span class="src">config.py:326</span> 에 적힌 대로, iGPU 는 부동소수 연산 순서가 달라
+  <strong>답변 문장이 CPU 와 달라지고 정답률이 조금 내려가는 신호</strong>가 있었다(−3/−4문항, 통계적으로 비유의).
+  또 iGPU 성능은 PC 편차가 커서 구형 UHD 그래픽은 CPU 보다 느릴 수도 있다.
+  그래서 "확실히 빠를 때만" 바꾼다.</p>
+</div>
+
+<p>이 노트북(LG, Intel Iris Xe)의 실제 측정 결과 — <code>gen_backend.json</code>:</p>
+
+<div class="bars">
+  <div class="bar-row">
+    <span class="lab">CPU</span>
+    <span class="track"><span class="fill" style="width:36.3%; background:var(--muted);"></span></span>
+    <span class="val">313 t/s</span>
+  </div>
+  <div class="bar-row">
+    <span class="lab">iGPU</span>
+    <span class="track"><span class="fill" style="width:100%; background:var(--accent);"></span></span>
+    <span class="val">862 t/s</span>
+  </div>
+</div>
+
+<pre><code>"backend": "vulkan",
+"reason":  "iGPU prefill 862 t/s = CPU 313 t/s 의 2.8배"
+
+CPU    611토큰 prefill 1.952초   (적재 0.56초)
+iGPU   611토큰 prefill 0.709초   (적재 0.53초)
+                     ↑ 약 1.24초 단축 = 사용자가 체감하는 "답변 시작까지"의 차이</code></pre>
+
+<h2 id="s8"><span class="num">8</span>측정 결과 캐싱</h2>
+
+<p>매번 15~40초씩 재면 못 쓴다. <span class="src">backend.py:189 cache_key()</span> 가 만드는 키로
+"이 측정이 아직 유효한가"를 판단한다.</p>
+
+<table>
+  <tr><th>키 구성요소</th><th>바뀌면</th></tr>
+  <tr><td><code>host</code> — PC 이름</td><td>다른 PC → 다시 측정</td></tr>
+  <tr><td><code>model</code> — GGUF 파일명</td><td>빠름 0.6B ↔ 정밀 1.7B → 각각 따로 보관</td></tr>
+  <tr><td><code>llama_cpp_python</code> — 바인딩 버전</td><td>업그레이드 → 다시 측정</td></tr>
+  <tr><td><code>vulkan_dll</code> — DLL 크기 + 수정시각</td><td>DLL 교체 → 다시 측정</td></tr>
+  <tr><td><code>min_speedup</code>, <code>threads</code></td><td>판정 기준/설정 변경 → 다시 측정</td></tr>
+</table>
+
+<p>모델별로 최대 4개(<code>_CACHE_KEEP</code>)를 보관해서, <code>ask</code> ↔ <code>ask --precise</code> 를
+오갈 때마다 재측정하지 않는다. 저장은 임시 파일에 쓰고 <code>os.replace</code> 로 바꿔치기해
+쓰다 죽어도 반쪽 파일이 남지 않게 한다.</p>
+
+<div class="callout">
+  <span class="tag">주의</span>
+  <p><strong>그래픽 드라이버 갱신은 키에 없다</strong>(조회에 WMI 가 필요해 느리다).
+  드라이버를 업데이트했거나 전원 설정을 바꿨다면 <code>backend --reprobe</code> 로 직접 다시 재야 한다.</p>
+</div>
+
+<h2 id="s9"><span class="num">9</span>선택 결과가 실제 적재로 이어지는 길</h2>
+
+<pre><code>App.warmup()                             warmup.py:89
+  └ gen_backend.select()                 → 환경변수 LLAMA_CPP_LIB_PATH 설정
+     └ generator.backend = "vulkan"
+        └ GgufGenerator.ensure_loaded()  gguf_generator.py:55
+             import llama_cpp             ← 이제서야 Vulkan DLL 이 적재된다
+             Llama(n_gpu_layers=-1, flash_attn=False, ...)</code></pre>
+
+<p>적재 인자도 백엔드별로 갈린다 (<span class="src">gguf_generator.py:86</span>):</p>
+
+<table>
+  <tr><th>인자</th><th>CPU</th><th>iGPU</th><th>이유</th></tr>
+  <tr><td><code>n_gpu_layers</code></td><td>0</td><td>-1 (전 레이어)</td><td>decode 는 어차피 같으니 쪼개면 CPU↔GPU 복사 비용만 늘어난다</td></tr>
+  <tr><td><code>flash_attn</code></td><td>True</td><td>False</td><td>CPU 는 prefill 1.6배 이득 / iGPU 는 속도 차 0, 정답률 근소 우위</td></tr>
+</table>
+
+<p>안전장치도 있다. 환경변수가 누락돼 CPU 판이 올라왔는데 라벨만 "vulkan"인 상황을 바로잡는다:</p>
+
+<pre><code>if self.backend == "vulkan" and not llama_cpp.llama_supports_gpu_offload():
+    self.backend = "cpu"</code></pre>
+
+<h2 id="s10"><span class="num">10</span>iGPU 는 리랭킹 스위치도 겸한다</h2>
+
+<p><span class="src">backend.py:76 rerank_enabled()</span> 는 설정이 <code>auto</code> 일 때
+<strong>iGPU 인 경우에만 리랭킹을 켠다</strong>.</p>
+
+<table>
+  <tr><th>조합</th><th>TTFT 3초 달성률</th></tr>
+  <tr><td>CPU + 리랭킹 끔</td><td>74%</td></tr>
+  <tr><td>CPU + 리랭킹 켬</td><td class="hl-bad">53% — 무너짐</td></tr>
+  <tr><td>iGPU + 리랭킹 켬</td><td class="hl-good">98~99%</td></tr>
+</table>
+
+<p>LLM 을 iGPU 로 넘기면 CPU 가 한가해지고, 그 여유를 리랭커(CPU ONNX)가 쓴다.
+즉 <strong>iGPU 채택은 속도뿐 아니라 검색 품질까지 끌어올리는 결정</strong>이다.</p>
+
+<h2 id="s11"><span class="num">11</span>배경 개념 ① — prefill 이란</h2>
+
+<p>LLM 이 답을 만드는 과정은 <strong>성격이 완전히 다른 두 단계</strong>로 나뉜다.</p>
+
+<pre><code>[ prefill ]  질문+근거를 통째로 읽는 단계  ──→  [ decode ]  답을 한 글자씩 뱉는 단계
+   (한 번에 쭉)                                   (1토큰씩 반복)</code></pre>
+
+<h3>비유</h3>
+<p>사람이 시험 문제를 푼다고 하자.</p>
+<ul>
+  <li><strong>prefill</strong> = 문제지와 참고자료 5장을 <strong>훑어 읽는 시간</strong></li>
+  <li><strong>decode</strong> = 답안지에 <strong>한 글자씩 써 내려가는 시간</strong></li>
+</ul>
+<p>읽기는 눈으로 전체를 빠르게 병렬로 스캔할 수 있다. 하지만 쓰기는 앞 글자를 써야 다음 글자를 쓰니 무조건 순차다.</p>
+
+<h3>기술적으로</h3>
+<table>
+  <tr><th></th><th>prefill</th><th>decode</th></tr>
+  <tr><td>처리 단위</td><td>입력 토큰 611개를 <strong>한꺼번에</strong></td><td><strong>1토큰씩</strong> 순차</td></tr>
+  <tr><td>연산 모양</td><td>행렬 × 행렬</td><td>행렬 × 벡터 1개</td></tr>
+  <tr><td>병목</td><td>연산량 (compute)</td><td>메모리 대역폭</td></tr>
+  <tr><td>GPU 코어 활용</td><td>꽉 채워 쓴다</td><td>논다</td></tr>
+  <tr><td><strong>iGPU 효과</strong></td><td class="hl-good"><strong>큼 (2.8배)</strong></td><td>거의 없음</td></tr>
+  <tr><td>산출물</td><td>KV 캐시 생성</td><td>KV 캐시에 1칸씩 추가</td></tr>
+</table>
+
+<h3>SimpleRAG 에서 왜 prefill 만 재는가</h3>
+<p>RAG 는 <strong>입력이 길고 출력이 짧다</strong>. 검색된 근거 문서 3건을 프롬프트에 다 넣으니
+입력 600~1000토큰, 답변은 1~2문장(50토큰 남짓). 그래서
+<strong>"첫 글자가 나오기까지의 시간(TTFT)"을 prefill 이 거의 다 잡아먹는다.</strong></p>
+
+<p><code>prefill_tps = 토큰수 / 걸린시간</code> — 1초에 몇 토큰을 <em>읽어내는가</em>다.
+862 t/s 는 "1초에 862토큰 분량의 프롬프트를 소화한다"는 뜻이다.</p>
+
+<h2 id="s12"><span class="num">12</span>배경 개념 ② — KV 캐시란</h2>
+
+<h3>문제 상황부터</h3>
+<p>LLM 은 토큰을 하나씩 만드는데, <strong>매 토큰마다 그때까지의 문장 전체를 다시 본다</strong>.</p>
+
+<pre><code>"서울"   을 만들려면 → [질문 611토큰] 을 본다
+"특별시" 를 만들려면 → [질문 611토큰 + "서울"] 을 본다
+"의"     를 만들려면 → [질문 611토큰 + "서울" + "특별시"] 을 본다
+...</code></pre>
+
+<p>순진하게 짜면 토큰 하나 만들 때마다 611토큰을 처음부터 다시 계산한다.
+50토큰짜리 답이면 <strong>같은 계산을 50번 반복</strong>하는 셈이다.</p>
+
+<h3>해결 = KV 캐시</h3>
+<div class="callout good">
+  <span class="tag">핵심 관찰</span>
+  <p><strong>이미 지나간 토큰의 계산 결과는 절대 안 변한다.</strong>
+  "서울"이라는 새 토큰이 붙어도 611번째 토큰의 계산 결과는 그대로다 —
+  LLM 은 왼쪽→오른쪽으로만 보기 때문에, 앞 토큰이 뒤 토큰의 영향을 받지 않는다.
+  그러니 한 번 계산해서 저장해 두고 재사용하면 된다.</p>
+</div>
+
+<pre><code>prefill:  611토큰을 한 번 계산 → 611개분 K/V 를 저장   ← 이게 KV 캐시
+decode:   새 토큰 1개만 계산  → 캐시에 1칸씩 덧붙임</code></pre>
+
+<h3>K 와 V 는 뭔가 — 도서관 비유</h3>
+<p>Attention(주의 집중)에서 각 토큰은 세 가지 역할을 한다.</p>
+
+<table>
+  <tr><th></th><th>이름</th><th>도서관 비유</th></tr>
+  <tr><td><strong>Q</strong></td><td>Query (질의)</td><td>"나는 지금 이런 걸 찾고 있다" — 검색어</td></tr>
+  <tr><td><strong>K</strong></td><td>Key (색인)</td><td>"나는 이런 내용의 책이다" — 책등 라벨</td></tr>
+  <tr><td><strong>V</strong></td><td>Value (내용)</td><td>실제 책 내용</td></tr>
+</table>
+
+<p>새 토큰을 만들 때, 그 토큰의 <strong>Q</strong> 로 앞의 모든 토큰의 <strong>K</strong> 를 훑어
+"누가 관련 있나"를 점수 매기고, 점수가 높은 토큰의 <strong>V</strong> 를 가져와 섞는다.</p>
+
+<p>여기서 <strong>Q 는 매번 새로 만들지만(지금 찾는 게 매번 다르니까), K 와 V 는 고정</strong>이다.
+611번 토큰의 "책등 라벨"과 "내용"은 영원히 안 변한다.
+그래서 <strong>K 와 V 만</strong> 저장한다 → <em>KV</em> 캐시.</p>
+
+<h3>크기 감각 — n_ctx 를 크게 잡으면 손해인 이유</h3>
+<p>캐시 크기는 <code>n_ctx</code>(최대 문맥 길이)에 비례해 <strong>미리 통째로 잡아 둔다</strong>.
+<span class="src">config.py:293</span>:</p>
+
+<pre><code>GEN_N_CTX = 2048    # top-3 x 128토큰이면 충분. 크게 잡을수록 손해</code></pre>
+
+<p><code>n_ctx=32768</code> 로 잡으면 실제로 611토큰만 쓰더라도 <strong>32768토큰분의 메모리를 미리 예약</strong>해서
+수백 MB~GB 를 먹는다. iGPU 는 시스템 메모리를 공유하므로 더 아프다.
+RAG 는 검색된 근거 3건만 넣으니 2048 이면 충분하다.</p>
+
+<h3>SimpleRAG 코드에 KV 캐시가 등장하는 세 곳</h3>
+
+<h4>① 측정할 때 — 캐시를 일부러 지운다</h4>
+<p><span class="src">backend.py:498</span></p>
+<pre><code>llm.reset()   # 앞 측정의 KV 를 재사용하지 않게 — 매번 전체 prefill</code></pre>
+<p>llama.cpp 는 <strong>프롬프트 앞부분이 이전과 같으면 그 구간의 KV 캐시를 그대로 살려 쓰고
+prefill 을 건너뛴다</strong>(prefix 재사용). 측정 3회를 그냥 돌리면 2·3회차는 거의 공짜가 되어
+"iGPU 가 1000배 빠르다" 같은 엉터리 숫자가 나온다.</p>
+
+<h4>② 예열할 때 — 캐시를 일부러 남긴다</h4>
+<p>①과 정반대다. <span class="src">gguf_generator.py warm()</span> 이 운영과 똑같은 시스템 프롬프트로
+1토큰짜리 더미 생성을 미리 돌린다. 답은 버린다 — <strong>결과가 아니라 부수 효과가 목적</strong>이다.</p>
+
+<pre><code>[시스템 지시문]   ← 항상 동일 → KV 캐시 재사용 ✅ (prefill 건너뜀)
+[근거 문서 3건]   ← 질문마다 다름 → 새로 계산
+[사용자 질문]     ← 매번 다름   → 새로 계산</code></pre>
+
+<div class="callout">
+  <span class="tag">설계 포인트</span>
+  <p><strong>고정된 부분을 프롬프트 맨 앞에</strong> 두었기 때문에 재사용이 가능하다.
+  순서를 뒤집어 질문을 앞에 두면 이 이득이 통째로 날아간다.</p>
+</div>
+
+<p>예열은 Vulkan 셰이더 컴파일 비용(새 PC 첫 실행 9.75초)도 함께 흡수한다.
+드라이버가 컴파일 결과를 캐시하므로 두 번째 실행부터는 거의 0이다.</p>
+
+<h4>③ flash_attn — 캐시를 읽는 방식</h4>
+<p><code>flash_attn</code> 은 KV 캐시를 읽으며 attention 을 계산할 때 <strong>중간 결과를 메모리에 다 펼치지 않고
+조각내어 처리</strong>하는 최적화다. 메모리를 덜 쓰고 보통 더 빠르다.
+다만 실측이 백엔드마다 갈려 SimpleRAG 는 나눠 놓았다 — CPU <code>True</code>(prefill 1.6배),
+iGPU <code>False</code>(속도 차 0, 정답률 근소 우위).</p>
+
+<div class="callout good">
+  <span class="tag">한 줄 정리</span>
+  <p><strong>KV 캐시 = "이미 읽은 부분의 계산 결과를 적어 둔 메모장".</strong>
+  prefill 이 이 메모장을 만드는 단계고, decode 는 메모장을 보며 한 칸씩 덧붙이는 단계다.
+  SimpleRAG 는 측정할 땐 메모장을 지워 공정하게 재고, 운영할 땐 시스템 프롬프트분 메모장을
+  미리 채워 첫 질문을 빠르게 만든다.</p>
+</div>
+
+<h2 id="s13"><span class="num">13</span>직접 확인하는 법</h2>
+
+<p>현재 이 PC 가 무엇으로 답을 만드는지, 왜 그렇게 골랐는지 보여 준다.
+인덱스를 열지 않으므로 다른 명령과 겹쳐 실행해도 된다.</p>
+
+<pre><code>python -m simplerag backend</code></pre>
+
+<p>드라이버를 갱신했거나 전원 설정을 바꿨다면 저장된 측정을 무시하고 다시 잰다.</p>
+
+<pre><code>python -m simplerag backend --reprobe</code></pre>
+
+<p>강제 지정은 환경변수로 한다.</p>
+
+<table>
+  <tr><th>환경변수</th><th>값</th><th>효과</th></tr>
+  <tr><td rowspan="3"><code>SIMPLERAG_GEN_BACKEND</code></td><td><code>auto</code> (기본)</td><td>재서 1.3배 이상이면 iGPU</td></tr>
+  <tr><td><code>cpu</code></td><td>항상 CPU — 측정도 생략</td></tr>
+  <tr><td><code>vulkan</code></td><td>iGPU 강제 (불가하면 CPU 폴백 + 이유 안내)</td></tr>
+  <tr><td><code>SIMPLERAG_RERANK</code></td><td><code>1</code> / <code>0</code> / <code>auto</code></td><td>리랭킹 강제 켬 / 끔 / 백엔드 따름</td></tr>
+  <tr><td><code>SIMPLERAG_VULKAN_LIB</code></td><td>경로</td><td>Vulkan DLL 폴더 위치 변경</td></tr>
+</table>
+
+<h3>관련 파일</h3>
+<table>
+  <tr><th>파일</th><th>역할</th></tr>
+  <tr><td><code>src/simplerag/generate/backend.py</code></td><td>백엔드 선택·측정·캐싱 전부</td></tr>
+  <tr><td><code>src/simplerag/generate/gguf_generator.py</code></td><td>실제 모델 적재(백엔드별 인자)</td></tr>
+  <tr><td><code>src/simplerag/config.py</code> §생성 백엔드</td><td>설정값과 그 근거 주석</td></tr>
+  <tr><td><code>src/simplerag/warmup.py</code></td><td>select() 호출 지점 · 병렬 예열</td></tr>
+  <tr><td><code>runtime/llama_vulkan/</code></td><td>Vulkan 판 DLL 5개 + VERSION.txt</td></tr>
+  <tr><td><code>gen_backend.json</code></td><td>측정 결과 캐시 (모델별 최대 4건)</td></tr>
+  <tr><td><code>build_exe.py</code></td><td>배포 시 runtime 폴더를 exe 옆으로 복사</td></tr>
+</table>
+
+<footer class="doc">
+  SimpleRAG 구현 해설 05 — iGPU 가속 원리 · prefill · KV 캐시<br>
+  본문의 실측 수치는 개발 노트북(Intel Iris Xe, 8스레드, Qwen3-0.6B-Q4_K_M) 기준이며
+  <code>gen_backend.json</code> 과 REPORT §31·§32 에 근거한다.
+</footer>
+
+</div>
+</body>
+</html>

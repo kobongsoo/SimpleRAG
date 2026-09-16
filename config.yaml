@@ -36,3 +36,6 @@ generation:
   top_k: 3                      # sLLM 에 넣는 근거 청크 수 (리랭킹 후 상위 N)
   max_tokens: 200               # 답변 토큰 상한. 16~1024
   prompt: v0                    # 시스템 지시문. v0(채택) | v4(기각 — 506문항 377→358, REPORT §40)
+  model: qwen3-0.6b-q4          # 기본 생성 모델. qwen3-0.6b-q4(빠름, TTFT 1.9초) |
+                                #   qwen3-1.7b-q4(정밀, 정답 +4.4%p 이지만 TTFT 2.7~3.4초 — REPORT §42)
+                                #   한 번만 정밀하게 묻고 싶으면 명령에 --precise 를 붙인다

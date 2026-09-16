@@ -108,7 +108,7 @@ def cmd_ask(args):
     if not args.query:
         return cmd_chat(args)
 
-    app = App(args.model)
+    app = App(_pick_model(args))
     try:
         app.warmup(wait=True, on_log=_log)
         # 1회용 질의는 준비 직후 바로 묻는다. 백그라운드 리랭커 적재(GIL 점유)와 검색이 겹치면
@@ -318,7 +318,8 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
 #   두 번째 질문부터는 예열 비용 없이 바로 검색·생성으로 들어간다.
 #------------------------------------------------------------------
 def cmd_chat(args):
-    app = App(args.model)
+    model = _pick_model(args)
+    app = App(model)
     top_k = args.top_k
     rr_warned = False        # 백그라운드 리랭커 적재 실패를 한 번만 알리기 위한 표시
 
@@ -326,9 +327,10 @@ def cmd_chat(args):
         print("모델 적재 중...")
         warm = app.warmup(wait=True, on_log=_log)
         stats = app.store.stats()
-        print("준비 완료 ({:.1f}초) — {:,}청크 / {}".format(
+        alias = model or config.DEFAULT_GEN_MODEL
+        print("준비 완료 ({:.1f}초) — {:,}청크 / {} ({} 모드)".format(
             warm["_total_ms"] / 1000, stats["count"],
-            config.GEN_MODELS[args.model or config.DEFAULT_GEN_MODEL]))
+            config.GEN_MODELS[alias], _model_mode(alias)))
         print("생성 {} / 리랭킹 {}".format(
             gen_backend.label(warm.get("_backend")),
             ("켬(백그라운드 적재 중)" if warm.get("_rerank_deferred") else "켬")
@@ -480,7 +482,10 @@ def cmd_status(args):
             print("  ⚠️ 인덱스는 다른 청킹 설정으로 만들어짐 — --rebuild 필요: {}".format(rec))
         print("검색     : dense {} + BM25 {} → RRF(k={:g}) → 리랭커 입력 {} → sLLM 근거 {}건".format(
             config.DENSE_TOP_K, config.BM25_TOP_K, config.RRF_K, config.RERANK_POOL, config.TOP_K))
-        print("생성모델 : {}".format(config.GEN_MODELS[config.DEFAULT_GEN_MODEL]))
+        print("생성모델 : {} ({} 모드)   ← {}".format(
+            config.GEN_MODELS[config.DEFAULT_GEN_MODEL], _model_mode(config.DEFAULT_GEN_MODEL),
+            "한 번만 정밀하게: ask --precise" if config.DEFAULT_GEN_MODEL == config.FAST_GEN_MODEL
+            else "빠르게: ask --model {}".format(config.FAST_GEN_MODEL)))
         cached = gen_backend.peek()
         print("생성백엔드: {}".format(
             "{} — {}".format(gen_backend.label(cached["backend"]), cached.get("reason", ""))
@@ -598,6 +603,42 @@ def cmd_clear(args):
 
 
 #------------------------------------------------------------------
+# 모델 별칭 → 사람이 읽는 모드 이름
+#=> 화면에 "빠름/정밀" 로 보여 준다. 설정으로 다른 모델을 넣었을 때는 별칭을 그대로 쓴다.
+#
+# -in: alias = 생성 모델 별칭
+#
+# -out: "빠름" | "정밀" | 별칭 그대로
+# -out: error = 없음
+#------------------------------------------------------------------
+def _model_mode(alias):
+    return {config.FAST_GEN_MODEL: "빠름", config.PRECISE_GEN_MODEL: "정밀"}.get(alias, alias)
+
+
+#------------------------------------------------------------------
+# 이번 명령에서 쓸 생성 모델 고르기 (정밀 모드 — 계획서 D8 ③ / REPORT §44)
+#=> 기본은 빠른 0.6B(설정 generation.model), `--precise` 를 붙이면 그 실행만 1.7B 로 답한다.
+#    1) `--precise` 면 정밀 모델 별칭
+#    2) `--model` 로 직접 고른 것이 있으면 그것
+#    3) 둘 다 없으면 None — App 이 설정 기본값을 쓴다
+#   두 옵션을 서로 다르게 함께 주면 어느 쪽인지 알 수 없으므로 오류로 멈춘다.
+#
+# -in: args = argparse 결과 (precise·model 을 가질 수 있다)
+#
+# -out: 모델 별칭 문자열 또는 None(설정 기본값)
+# -out: error = --precise 와 --model 이 충돌하면 SystemExit
+#------------------------------------------------------------------
+def _pick_model(args):
+    precise = getattr(args, "precise", False)
+    chosen = getattr(args, "model", None)
+    if precise:
+        if chosen and chosen != config.PRECISE_GEN_MODEL:
+            raise SystemExit("--precise 와 --model {} 를 함께 쓸 수 없습니다".format(chosen))
+        return config.PRECISE_GEN_MODEL
+    return chosen
+
+
+#------------------------------------------------------------------
 # 생성 백엔드 명령
 #=> 이 PC 에서 CPU 와 iGPU 중 무엇으로 답변을 만드는지, 왜 그렇게 골랐는지
 #   보여 준다. --reprobe 면 저장된 측정을 무시하고 다시 잰다(드라이버 갱신,
@@ -642,7 +683,7 @@ def cmd_backend(args):
 #=> 콜드스타트 실측용. 병렬 예열이 실제로 최장 항목으로 수렴하는지 확인한다.
 #------------------------------------------------------------------
 def cmd_warmup(args):
-    app = App(args.model)
+    app = App(_pick_model(args))
     try:
         r = app.warmup(wait=True, on_log=_log)
         print("  생성      {} / 리랭킹 {}".format(
@@ -691,7 +732,10 @@ def main(argv=None):
     pa.add_argument("--top-k", type=int, default=None)
     pa.add_argument("--max-tokens", type=int, default=None)
     pa.add_argument("--model", default=None,
-                    choices=list(config.GEN_MODELS), help="정밀 모드는 1.7b")
+                    choices=list(config.GEN_MODELS), help="생성 모델 직접 지정")
+    pa.add_argument("--precise", action="store_true",
+                    # argparse 는 help 를 %-서식으로 처리한다 — "%p" 를 쓰면 --help 가 죽는다(%% 로 적는다)
+                    help="정밀 모드(1.7B) — 506문항 정답 +4.4%%p, 첫 글자까지 3초를 넘을 수 있다")
     pa.add_argument("--no-stream", action="store_true",
                     help="답변을 한 번에 출력(콘솔 렌더링 문제 회피)")
     pa.set_defaults(func=cmd_ask)
@@ -700,6 +744,7 @@ def main(argv=None):
     pc.add_argument("--top-k", type=int, default=None)
     pc.add_argument("--max-tokens", type=int, default=None)
     pc.add_argument("--model", default=None, choices=list(config.GEN_MODELS))
+    pc.add_argument("--precise", action="store_true", help="정밀 모드(1.7B)로 대화")
     pc.add_argument("--no-stream", action="store_true",
                     help="답변을 한 번에 출력(콘솔 렌더링 문제 회피)")
     pc.set_defaults(func=cmd_chat, query=None)
@@ -731,6 +776,7 @@ def main(argv=None):
 
     pw = sub.add_parser("warmup", help="예열만 수행(콜드스타트 측정)")
     pw.add_argument("--model", default=None, choices=list(config.GEN_MODELS))
+    pw.add_argument("--precise", action="store_true", help="정밀 모드(1.7B) 예열")
     pw.set_defaults(func=cmd_warmup)
 
     _force_utf8_output()       # cp949 로 못 쓰는 문자 때문에 죽지 않게(리다이렉트 대비)

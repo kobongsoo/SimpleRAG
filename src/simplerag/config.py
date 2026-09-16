@@ -275,7 +275,19 @@ GEN_MODELS = {
     "qwen3-0.6b-q4": "Qwen3-0.6B-Q4_K_M.gguf",   # 기본. TTFT 2.75s / 정답률 83%
     "qwen3-1.7b-q4": "Qwen3-1.7B-Q4_K_M.gguf",   # 정밀 모드. TTFT 8.46s / 92%
 }
-DEFAULT_GEN_MODEL = "qwen3-0.6b-q4"
+# 정밀 모드(계획서 D8 ③ / REPORT §44): 기본은 빠른 0.6B, 필요할 때만 1.7B 를 쓴다.
+#   1.7B 는 506문항 정답 377 → 399(p=0.007)지만 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).
+#   그래서 "기본값을 바꾸는" 대신 "고를 수 있게" 한다 — config.yaml generation.model,
+#   환경변수 SIMPLERAG_GEN_MODEL, CLI `--precise` / `--model`.
+FAST_GEN_MODEL = "qwen3-0.6b-q4"        # 빠름(기본)
+PRECISE_GEN_MODEL = "qwen3-1.7b-q4"     # 정밀
+DEFAULT_GEN_MODEL = str(_setting("generation.model", FAST_GEN_MODEL,
+                                 "SIMPLERAG_GEN_MODEL", str)).strip().lower()
+if DEFAULT_GEN_MODEL not in GEN_MODELS:
+    # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것
+    from .settings import ConfigError as _ConfigError
+    raise _ConfigError("SIMPLERAG_GEN_MODEL={!r} — {} 중 하나여야 합니다".format(
+        DEFAULT_GEN_MODEL, " | ".join(GEN_MODELS)))
 
 GEN_THREADS = 8             # prefill 이 8스레드에서 가장 빠름(REPORT §6)
 GEN_N_CTX = 2048            # top-3 x 128토큰이면 충분. 크게 잡을수록 손해
