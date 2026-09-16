@@ -216,6 +216,8 @@ class ChatPanel:
         self._last_rect = None
         self._width = settings.win_width   # 사용자가 너비를 바꾸면 여기에 반영된다
         self._frame = None          # 창 테두리가 차지하는 크기(한 번만 잰다)
+        self._saved_width = settings.win_width   # INI 에 적혀 있는 값
+        self._width_save_at = 0.0   # 너비를 저장한 시각(연달아 쓰지 않으려고)
         self._saved = None          # 탐색기 창을 옮기기 전 상태(되돌리려고)
         self._room_rect = None      # 우리가 옮겨 놓은 자리
         self._closed_for = set()    # 사용자가 닫기를 누른 탐색기 창들
@@ -704,13 +706,20 @@ class ChatPanel:
         except Exception:
             return
         width = r - l
-        if abs(width - self._width) <= 4:
+        # ⚠️ 우리가 마지막으로 놓은 너비와 견준다. self._width 와 견주면 창 테두리 두께만큼
+        #    차이가 나서, 우리가 만든 그 차이를 "사용자가 넓혔다" 로 잘못 읽는다
+        #    (실측: 460 으로 놓았는데 476 이 저장됐다).
+        placed = self._last_rect[2] if self._last_rect else self._width
+        if abs(width - placed) <= 4:
             return                       # 너비는 그대로다
+        if self._frame is None:
+            return                       # 테두리 두께를 아직 모른다 — 섣불리 판단하지 않는다
 
         work = rsb_dock.work_area(self.target_hwnd)
         self._width = max(260, min(width, (work[2] - work[0]) // 2))
         self.log.info("패널 너비를 %dpx 로 바꿨다 — 탐색기 자리를 다시 만든다", self._width)
         self._last_rect = None           # 다시 배치하게 한다
+        self._remember_width()           # 다음에 켤 때도 이 너비로 뜨게 (§18)
 
         # 넓어진 만큼 탐색기가 침범당하지 않게 다시 물린다
         if self.s.shrink_explorer and self.target_hwnd:
@@ -720,6 +729,32 @@ class ChatPanel:
                 if rsb_dock.make_room(self.target_hwnd, region):
                     _, _, now = rsb_dock.target_state(self.target_hwnd)
                     self._room_rect = now
+
+    #--------------------------------------------------------------
+    # 바뀐 너비를 설정 파일에 적어 두기 (§18)
+    #=> 다음에 프로그램을 켤 때도 그 너비로 뜨게 한다.
+    #   끄는 동안 여러 번 불리므로 2초에 한 번만, 값이 실제로 달라졌을 때만 쓴다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (읽기 전용 파일 등으로 실패하면 로그만 남기고 계속 쓴다)
+    #--------------------------------------------------------------
+    def _remember_width(self):
+        import time
+        if abs(self._width - self._saved_width) <= 4:
+            return
+        now = time.monotonic()
+        if now - self._width_save_at < 2.0:
+            return
+        self._width_save_at = now
+        ok, detail = rsb_settings.save_window_width(self.s.ini_path, self._width)
+        if ok:
+            self._saved_width = self._width
+            self.s.win_width = self._width      # 이번 실행에도 바로 반영
+            self.log.info("패널 너비 %dpx 를 설정에 저장했다", self._width)
+        else:
+            rsb_log.diag(self.log, "너비를 저장하지 못했다: %s", detail)
 
     #--------------------------------------------------------------
     # 자리 잡기 — 오른쪽 띠에 두고 탐색기를 왼쪽으로 물린다 (§18)
@@ -783,12 +818,23 @@ class ChatPanel:
         if getattr(self, "_frame", None) is not None:
             return self._frame
         try:
-            import win32gui
-            self.win.update_idletasks()
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
             h = hwnd_of(self.win)
-            l, t, r, b = win32gui.GetWindowRect(h)
-            dw = (r - l) - self.win.winfo_width()
-            dh = (b - t) - self.win.winfo_height()
+            if not h:
+                return (0, 0)
+            # ⚠️ "창을 한 번 그려 보고 재는" 방법은 처음 띄울 때 아직 그려지지 않아 0 이 나온다.
+            #    그러면 geometry 가 테두리만큼 커지고, 그 차이를 "사용자가 넓혔다" 로 잘못 읽어
+            #    너비가 저절로 늘었다 줄었다 했다(실측: 460 → 476 → 450 …).
+            #    Windows 에 직접 물어보면 그리기 전에도 정확한 값을 준다.
+            style = user32.GetWindowLongW(h, -16)      # GWL_STYLE
+            exstyle = user32.GetWindowLongW(h, -20)    # GWL_EXSTYLE
+            r = wintypes.RECT(0, 0, 500, 500)
+            if not user32.AdjustWindowRectEx(ctypes.byref(r), style, False, exstyle):
+                return (0, 0)
+            dw = (r.right - r.left) - 500
+            dh = (r.bottom - r.top) - 500
             if 0 <= dw < 200 and 0 <= dh < 200:
                 self._frame = (dw, dh)
                 return self._frame

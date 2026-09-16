@@ -7,6 +7,7 @@
 #------------------------------------------------------------------
 
 import configparser
+import io
 import os
 import sys
 
@@ -266,3 +267,67 @@ def find_worker_cmd(s):
         return [py, cli], "개발용 소스(.venv)"
 
     return None, "SimpleRAG 실행 파일을 찾지 못했습니다 — INI 의 SimpleRagExe 를 지정하세요"
+
+
+#------------------------------------------------------------------
+# 창 너비를 INI 에 되쓰기 (§18 — 사용자가 패널 너비를 바꿨을 때)
+#=> configparser 로 다시 쓰면 파일의 주석이 모두 날아간다. 이 INI 는 설명 주석이
+#   본문만큼 중요하므로, [Window] 의 Width 줄만 찾아 값을 바꾼다.
+#    1) [Window] 구역을 찾는다
+#    2) 그 안의 Width 줄을 찾아 값만 갈아 끼운다(앞뒤 여백·주석은 그대로 둔다)
+#    3) 구역이나 키가 없으면 만들어 붙인다
+#
+# -in: path  = INI 경로(없으면 아무것도 하지 않는다)
+# -in: width = 저장할 너비(픽셀)
+#
+# -out: (True, 저장한 값) 또는 (False, 사유)
+# -out: error = 없음 (쓰기 실패도 사유 문자열로 돌려준다)
+#------------------------------------------------------------------
+def save_window_width(path, width):
+    if not path or not os.path.isfile(path):
+        return False, "설정 파일이 없어 저장하지 않습니다: {}".format(path)
+    try:
+        width = int(width)
+    except (TypeError, ValueError):
+        return False, "너비가 숫자가 아닙니다"
+    if not (300 <= width <= 1200):
+        return False, "허용 범위(300~1200) 밖이라 저장하지 않습니다: {}".format(width)
+
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception as e:
+        return False, "설정 파일을 읽지 못했습니다: {}".format(e)
+
+    in_window = False
+    done = False
+    window_at = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if in_window and not done:
+                break                       # [Window] 가 끝났는데 Width 가 없었다
+            in_window = stripped.lower() == "[window]"
+            if in_window:
+                window_at = i
+            continue
+        if not in_window or stripped.startswith(";") or stripped.startswith("#"):
+            continue
+        if "=" in stripped and stripped.split("=", 1)[0].strip().lower() == "width":
+            key = line.split("=", 1)[0]     # 원래 들여쓰기·정렬을 그대로 쓴다
+            lines[i] = "{}= {}".format(key, width)
+            done = True
+            break
+
+    if not done:
+        if window_at >= 0:
+            lines.insert(window_at + 1, "Width            = {}".format(width))
+        else:
+            lines += ["", "[Window]", "Width            = {}".format(width)]
+
+    try:
+        with io.open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        return False, "설정 파일에 쓰지 못했습니다: {}".format(e)
+    return True, width

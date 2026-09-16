@@ -163,7 +163,14 @@ def deploy():
         print("  ⚠️ 배포 폴더가 없습니다(먼저 build_exe.py 로 워커를 빌드하세요): {}"
               .format(DEPLOY_DIR))
         return None
-    shutil.copy2(os.path.join(DIST, APP + ".exe"), os.path.join(DEPLOY_DIR, APP + ".exe"))
+    try:
+        shutil.copy2(os.path.join(DIST, APP + ".exe"), os.path.join(DEPLOY_DIR, APP + ".exe"))
+    except PermissionError:
+        # 실행 중이면 그 파일을 덮어쓸 수 없다. 조용히 실패하면 "왜 안 바뀌지" 로 헤맨다.
+        print("  ❌ 배포하지 못했습니다 — RAGSearchBox.exe 가 실행 중입니다.\n"
+              "     트레이 아이콘 → 종료 로 내린 뒤 다시 실행하세요: {}"
+              .format(os.path.join(DEPLOY_DIR, APP + ".exe")), file=sys.stderr)
+        return None
     ini_dst = os.path.join(DEPLOY_DIR, APP + ".ini")
     if os.path.isfile(ini_dst):
         print("  INI 는 이미 있어 그대로 둡니다: {}".format(ini_dst))
