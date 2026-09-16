@@ -161,6 +161,14 @@ class App:
                 self._handle(ev)
             except Exception:
                 self.log.exception("이벤트 처리에서 예외: %s", ev[0] if ev else ev)
+
+        # §17 — 붙어 있는 패널을 탐색기 창에 맞춘다. 이 주기(50ms)가 따라오는 속도다.
+        # 창을 옮기는 일은 tkinter 스레드에서만 할 수 있어 여기에 얹었다.
+        try:
+            self.window.follow()
+        except Exception:
+            self.log.exception("패널 따라가기에서 예외")
+
         if not self._quitting:
             self._job_pump = self.root.after(PUMP_MS, self._pump)
 
@@ -234,7 +242,7 @@ class App:
 
         self.log.info("질문: %r (폴더 %s)", question, folders[0] if folders else "-")
         self._answer_hwnd = hwnd          # 근거 목록을 띄울 대상 창(§16)
-        self.window.show(question, anchor=anchor, status="검색 중")
+        self.window.show(question, anchor=anchor, status="검색 중", target=hwnd)
 
         if self.worker is None:
             self.window.show_error(self.worker_error or "SimpleRAG 를 찾지 못했습니다")

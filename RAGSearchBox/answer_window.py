@@ -15,6 +15,7 @@
 import tkinter as tk
 from tkinter import font as tkfont
 
+import dock as rsb_dock
 import log as rsb_log
 import settings as rsb_settings
 
@@ -176,6 +177,9 @@ class AnswerWindow:
         # §16 근거 목록 — app 이 채워 넣는다. 눌렀을 때 부를 함수 fn()
         self.on_show_evidence = None
         self.on_restore = None
+        # §17 따라다니는 패널 — 붙어 다닐 탐색기 창과 마지막으로 맞춘 자리
+        self.target_hwnd = None
+        self._last_rect = None
         # 오류를 보여 준 뒤에는 상태 글을 덮어쓰지 않는다(아래 set_status 설명 참고)
         self._errored = False
 
@@ -220,16 +224,39 @@ class AnswerWindow:
         self.lbl_status = tk.Label(outer, text="", font=small, fg="#647083", bg="white", anchor="w")
         self.lbl_status.pack(fill="x", pady=(2, 6))
 
-        self.frm_evidence = tk.Frame(outer, bg="white")
+        # 근거와 답변은 스크롤되는 칸 안에 넣는다.
+        # 떠다니는 창에서는 MaxHeight 를, 붙어 있는 패널에서는 탐색기 창 높이를 넘길 수 없는데,
+        # 그때 내용이 길면 그냥 잘려서 읽을 방법이 없었다(도킹 확인에서 답변이 통째로 잘렸다).
+        # 캔버스 안에 담아 두면 넘칠 때 굴려서 볼 수 있다.
+        mid = tk.Frame(outer, bg="white")
+        mid.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(mid, bg="white", highlightthickness=0, bd=0, height=1)
+        self.vbar = tk.Scrollbar(mid, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.body = tk.Frame(self.canvas, bg="white")
+        self.canvas.create_window((0, 0), window=self.body, anchor="nw", tags="body")
+        # 내용이 바뀌면 굴릴 범위를 다시 잡고, 칸 너비에 맞춰 내용 너비를 맞춘다
+        self.body.bind("<Configure>", lambda e: self._sync_scroll())
+        # 칸 크기가 바뀌면(도킹 중 탐색기 창 크기 변경 포함) 내용 너비와 굴릴 범위를 다시 잡는다.
+        # 여기서 _sync_scroll 을 부르지 않으면 패널이 작아져도 스크롤 막대가 안 나온다(실제로 겪었다).
+        self.canvas.bind("<Configure>", self._on_canvas_resize)
+
+        self.frm_evidence = tk.Frame(self.body, bg="white")
         self.frm_evidence.pack(fill="x")
 
         self.lbl_answer_head = tk.Label(
-            outer, text="AI 요약 — 위 근거로 확인하세요", font=small, fg="#a8701a",
+            self.body, text="AI 요약 — 위 근거로 확인하세요", font=small, fg="#a8701a",
             bg="white", anchor="w")
 
-        self.txt_answer = tk.Text(outer, height=6, font=base, wrap="word", bg="white",
+        self.txt_answer = tk.Text(self.body, height=6, font=base, wrap="word", bg="white",
                                   relief="flat", highlightthickness=0, bd=0)
         self.txt_answer.configure(state="disabled")
+
+        # 창이 포커스를 갖지 않으므로, 마우스가 올라간 것만으로 굴러가야 한다
+        for w in (self.canvas, self.body, self.frm_evidence, self.txt_answer):
+            w.bind("<MouseWheel>", self._on_wheel)
 
         foot = tk.Frame(outer, bg="white")
         foot.pack(fill="x", side="bottom", pady=(8, 0))
@@ -262,11 +289,12 @@ class AnswerWindow:
     # -in: question = 보여 줄 질문(접두어를 뗀 것)
     # -in: anchor   = 검색창 화면 좌표 (left, top, right, bottom). 없으면 오른쪽 위
     # -in: status   = 처음 보여 줄 상태 글
+    # -in: target   = 질문이 나온 탐색기 창(§17 에서 따라다닐 대상). 없으면 안 따라간다
     #
     # -out: 없음
     # -out: error = 없음 (창 만들기 실패는 로그만 남긴다)
     #--------------------------------------------------------------
-    def show(self, question, anchor=None, status="검색 중"):
+    def show(self, question, anchor=None, status="검색 중", target=None):
         try:
             self._build()
             self.question = question
@@ -274,6 +302,8 @@ class AnswerWindow:
             self._docs = []
             self._errored = False          # 새 질문이니 지난 오류는 잊는다
             self._status = status
+            self.target_hwnd = target
+            self._last_rect = None
             # 근거가 오기 전에는 보여 줄 파일이 없다
             self.btn_files.config(state="disabled")
             self.btn_restore.config(state="disabled")
@@ -288,14 +318,22 @@ class AnswerWindow:
             self.txt_answer.delete("1.0", "end")
             self.txt_answer.configure(state="disabled")
 
-            w, h = self.s.win_width, 180
-            x, y = place_near(anchor, w, h,
-                              (self.win.winfo_screenwidth(), self.win.winfo_screenheight()))
-            self.win.geometry("{}x{}+{}+{}".format(w, h, x, y))
+            if self._docking():
+                # 탐색기 창에 붙는다. 높이는 창에 맞추므로 여기서 정하지 않는다(§17)
+                self.win.attributes("-topmost", False)
+                self.win.geometry("{}x{}".format(self.s.win_width, 400))
+            else:
+                self.win.attributes("-topmost", True)
+                w, h = self.s.win_width, 180
+                x, y = place_near(anchor, w, h,
+                                  (self.win.winfo_screenwidth(), self.win.winfo_screenheight()))
+                self.win.geometry("{}x{}+{}+{}".format(w, h, x, y))
             prev_fg = _foreground()          # 지금 사용자가 쓰던 창(보통 탐색기)
             self.win.deiconify()
             _show_without_focus(self.win, prev_fg)
             self.visible = True
+            if self._docking():
+                self.follow(force=True)      # 뜨자마자 제자리에 붙인다
 
             import time
             self._t0 = time.monotonic()
@@ -411,11 +449,16 @@ class AnswerWindow:
     def append_token(self, text):
         if not self.visible or not self.win or not text:
             return
+        first = (self._answer_chars == 0)
         self.txt_answer.configure(state="normal")
         self.txt_answer.insert("end", text)
         self.txt_answer.see("end")
         self.txt_answer.configure(state="disabled")
         self._answer_chars += len(text)
+        if first:
+            # 근거가 길면 정작 기다리던 답변이 접힌 아래에 깔린다(도킹 확인에서 실제로 그랬다).
+            # 답변이 시작되는 순간 한 번만 그 자리로 내려 준다. 근거는 바로 위에 그대로 있다.
+            self._scroll_to_answer()
 
     #--------------------------------------------------------------
     # 답변 마무리
@@ -480,6 +523,63 @@ class AnswerWindow:
         self.log.warning("창에 오류 표시: %s", msg)
 
     #--------------------------------------------------------------
+    # 지금 도킹 모드인가 (§17)
+    #=> 설정이 right 이고, 따라다닐 탐색기 창을 알고 있을 때만 붙는다.
+    #
+    # -in: 없음
+    #
+    # -out: bool
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _docking(self):
+        return self.s.dock == "right" and bool(self.target_hwnd)
+
+    #--------------------------------------------------------------
+    # 탐색기 창을 따라가기 (§17) — app 이 50ms 마다 불러 준다
+    #=> 창을 끌거나 크기를 바꾸거나 최대화·스냅하면 그에 맞춰 붙는다.
+    #    1) 대상 창이 사라졌으면 패널도 닫는다
+    #    2) 최소화됐으면 숨긴다. 복원되면 다시 보인다
+    #    3) 자리가 바뀌었을 때만 옮긴다 — 매번 옮기면 깜빡이고 CPU 만 먹는다
+    #
+    #   창을 옮기는 일은 tkinter 스레드(메인)에서만 해야 하므로, 감시 스레드가 아니라
+    #   app 의 큐 처리 주기에 얹었다. 그 주기가 곧 따라오는 속도(50ms)다.
+    #
+    # -in: force = True 면 자리가 같아도 한 번 맞춘다(띄운 직후)
+    #
+    # -out: 없음
+    # -out: error = 없음 (실패는 로그만 — 따라가지 못해도 창은 살아 있어야 한다)
+    #--------------------------------------------------------------
+    def follow(self, force=False):
+        if not self.visible or not self.win or not self._docking():
+            return
+        try:
+            alive, minimized, rect = rsb_dock.target_state(self.target_hwnd)
+            if not alive:
+                # 탐색기 창이 닫혔다 — 붙어 있을 자리가 없어졌다
+                self.close()
+                return
+            if minimized:
+                if self.win.winfo_viewable():
+                    self.win.withdraw()      # visible 은 그대로 둔다(복원되면 다시 보여 준다)
+                return
+            if not self.win.winfo_viewable():
+                prev_fg = _foreground()
+                self.win.deiconify()
+                _show_without_focus(self.win, prev_fg)
+
+            target = rsb_dock.panel_rect(rect, rsb_dock.work_area(self.target_hwnd),
+                                         self.s.win_width)
+            if force or target != self._last_rect:
+                self._last_rect = target
+                hwnd = _hwnd_of(self.win)
+                if hwnd:
+                    rsb_dock.place_above_target(hwnd, self.target_hwnd, target)
+                    self._sync_scroll()      # 높이가 바뀌었으니 굴릴 범위도 다시
+        except Exception:
+            self.log.exception("패널이 탐색기를 따라가지 못했다")
+
+    #--------------------------------------------------------------
+    # 짧은 알림 한 줄 (§16 단추 결과)    #--------------------------------------------------------------
     # 짧은 알림 한 줄 (§16 단추 결과)
     #=> 오류 표시(show_error)와 달리 "이번 일만" 알리는 것이라 _errored 를 세우지 않는다.
     #   예: 창을 최소화해 둔 채 "근거 파일 보기" 를 누른 경우.
@@ -540,14 +640,109 @@ class AnswerWindow:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _fit_height(self):
+        # 도킹 중에는 높이를 탐색기 창에 맞춘다 — 내용에 따라 늘이지 않고 굴려서 본다(§17)
+        if self._docking():
+            self._sync_scroll()
+            return
         try:
+            self.win.update_idletasks()
+            need_body = self.body.winfo_reqheight()
+            # 캔버스는 스스로 크기를 주장하지 않으므로 내용 높이를 직접 준다
+            self.canvas.configure(height=max(1, need_body))
             self.win.update_idletasks()
             need = self.win.winfo_reqheight()
             h = max(150, min(need, self.s.win_max_height))
+            if need > h:
+                # 최대 높이에 걸렸다 — 캔버스를 그만큼 줄이고 나머지는 굴려서 본다
+                self.canvas.configure(height=max(60, need_body - (need - h)))
             geo = self.win.geometry().split("+")
             self.win.geometry("{}x{}+{}+{}".format(self.s.win_width, h, geo[1], geo[2]))
+            self._sync_scroll()
         except Exception:
             pass
+
+    #--------------------------------------------------------------
+    # 굴릴 범위 맞추기
+    #=> 내용이 칸보다 길 때만 스크롤 막대를 보여 준다. 짧으면 막대가 없어야 깔끔하다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _sync_scroll(self):
+        if not self.win:
+            return
+        try:
+            # 창 크기 변경이 아직 반영되지 않았을 수 있다 — 재어 보기 전에 한 번 정리한다
+            self.win.update_idletasks()
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            need = self.body.winfo_reqheight()
+            room = self.canvas.winfo_height()
+            if need > room + 2:
+                if not self.vbar.winfo_ismapped():
+                    self.vbar.pack(side="right", fill="y")
+            else:
+                if self.vbar.winfo_ismapped():
+                    self.vbar.pack_forget()
+                self.canvas.yview_moveto(0)
+        except Exception:
+            pass
+
+    #--------------------------------------------------------------
+    # 답변이 보이는 자리로 한 번 내리기
+    #=> 내용이 칸보다 길 때만 움직인다. 다 보이면 그대로 둔다(근거가 먼저라는 §7 원칙 유지).
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _scroll_to_answer(self):
+        try:
+            self.win.update_idletasks()
+            total = self.body.winfo_reqheight()
+            if total <= self.canvas.winfo_height() + 2:
+                return                       # 다 보인다 — 굳이 움직이지 않는다
+            y = self.lbl_answer_head.winfo_y()
+            if total > 0 and y > 0:
+                self.canvas.yview_moveto(max(0.0, min(1.0, float(y) / total)))
+        except Exception:
+            pass
+
+    #--------------------------------------------------------------
+    # 칸 크기가 바뀌었을 때
+    #=> 내용 너비를 칸에 맞추고, 굴릴 범위·막대를 다시 잡는다.
+    #
+    # -in: event = Configure 이벤트
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_canvas_resize(self, event):
+        try:
+            self.canvas.itemconfigure("body", width=event.width)
+        except Exception:
+            return
+        self._sync_scroll()
+
+    #--------------------------------------------------------------
+    # 마우스 휠로 굴리기
+    #=> 이 창은 포커스를 갖지 않으므로, 마우스가 올라간 것만으로 굴러가야 한다.
+    #   (Windows 10 이후 기본값인 "비활성 창 스크롤" 설정이 이 이벤트를 보내 준다.)
+    #
+    # -in: event = 휠 이벤트
+    #
+    # -out: "break" (부모로 전달하지 않는다)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_wheel(self, event):
+        try:
+            if self.body.winfo_reqheight() > self.canvas.winfo_height():
+                self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
+        except Exception:
+            pass
+        return "break"
 
     #--------------------------------------------------------------
     # 복사 단추

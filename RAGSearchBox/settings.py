@@ -35,6 +35,7 @@ INI_NAME = "RAGSearchBox.ini"
 # -필드: dedup_sec        = 같은 질문을 무시할 시간(초)
 # -필드: scope_folders    = 동작할 폴더 목록(비면 아무 데서도 동작하지 않는다)
 # -필드: scope_recheck_min= 없는 폴더를 다시 확인할 주기(분)
+# -필드: dock            = "off"(검색창 아래 뜨는 창) | "right"(탐색기 오른쪽에 붙어 따라다님)
 # -필드: win_width / win_max_height / font_size = 답변 창 모양
 # -필드: log_level        = 로그 단계
 # -필드: warnings         = 잘못된 값 안내 목록(트레이·로그로 알린다)
@@ -66,6 +67,7 @@ class Settings:
         self.dedup_sec = 3
         self.scope_folders = []
         self.scope_recheck_min = 5
+        self.dock = "off"
         self.win_width = 460
         self.win_max_height = 560
         self.font_size = 10
@@ -185,6 +187,11 @@ def load(path=None):
     s.scope_folders = [p.strip() for p in folders.split(";") if p.strip()]
     s.scope_recheck_min = _int(cp, "Scope", "RecheckMin", 5, 1, 120, w)
 
+    dock = cp.get("Window", "Dock", fallback="").strip().lower()
+    if dock in ("off", "right"):
+        s.dock = dock
+    elif dock:
+        w.append("[Window] Dock = {} 를 알 수 없어 off 를 씁니다".format(dock))
     s.win_width = _int(cp, "Window", "Width", 460, 300, 1200, w)
     s.win_max_height = _int(cp, "Window", "MaxHeight", 560, 200, 2000, w)
     s.font_size = _int(cp, "Window", "FontSize", 10, 7, 20, w)
