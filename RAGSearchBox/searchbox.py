@@ -29,6 +29,10 @@ UIA_BUTTON = 50000
 UIA_VALUE_PATTERN = 10002
 UIA_LEGACY_PATTERN = 10018
 
+UIA_AUTOMATION_ID_PROPERTY = 30011
+UIA_CONTROL_TYPE_PROPERTY = 30003
+TREE_SCOPE_DESCENDANTS = 4
+
 
 #------------------------------------------------------------------
 # UIA 요소 한 줄 요약
@@ -185,6 +189,60 @@ class SearchBox:
             return (int(r.left), int(r.top), int(r.right), int(r.bottom))
         except Exception:
             return None
+
+    #--------------------------------------------------------------
+    # 창 번호로 검색창 입력칸 찾기 (§16 근거 목록용)
+    #=> 포커스와 상관없이, 그 탐색기 창의 검색창을 직접 찾는다.
+    #   armed 때 붙잡아 둔 요소는 확정하면서 놓아 주므로 여기서 다시 찾는다.
+    #   창이 최소화되면 이 요소 자체가 사라진다(실측) — 그때는 None 이다.
+    #
+    # -in: hwnd = 탐색기 창 핸들
+    #
+    # -out: 입력칸 UIA 요소 또는 None
+    # -out: error = 없음 (못 찾으면 None)
+    #--------------------------------------------------------------
+    def find_edit(self, hwnd):
+        if not self.ok:
+            return None
+        try:
+            root = self.uia.ElementFromHandle(hwnd)
+            box = root.FindFirst(
+                TREE_SCOPE_DESCENDANTS,
+                self.uia.CreatePropertyCondition(UIA_AUTOMATION_ID_PROPERTY, PARENT_ID))
+            if not box:
+                return None
+            return box.FindFirst(
+                TREE_SCOPE_DESCENDANTS,
+                self.uia.CreatePropertyCondition(UIA_CONTROL_TYPE_PROPERTY, UIA_EDIT))
+        except Exception:
+            return None
+
+    #--------------------------------------------------------------
+    # 검색창에 글자 써 넣기 (포커스를 뺏지 않는 방법으로)
+    #=> ⚠️ ValuePattern.SetValue 를 쓰면 탐색기 창이 앞으로 튀어나온다(실측).
+    #   답변은 질문 몇 초 뒤에 오므로 그 사이 사용자가 다른 창을 보고 있을 수 있고,
+    #   그때 창을 뺏으면 §7 의 "포커스를 뺏지 않는다" 원칙이 깨진다.
+    #   LegacyIAccessible 쪽 SetValue 는 같은 일을 하면서 전경을 건드리지 않는다.
+    #
+    # -in: e    = find_edit() 로 얻은 입력칸
+    # -in: text = 써 넣을 글자
+    #
+    # -out: True = 썼다
+    # -out: error = 없음 (실패는 False + DIAG 로그)
+    #--------------------------------------------------------------
+    def set_value_no_focus(self, e, text):
+        if not self.ok or e is None:
+            return False
+        try:
+            p = e.GetCurrentPattern(UIA_LEGACY_PATTERN)
+            if not p:
+                rsb_log.diag(self.log, "LegacyIAccessible 패턴이 없다")
+                return False
+            p.QueryInterface(self._UIA.IUIAutomationLegacyIAccessiblePattern).SetValue(text)
+            return True
+        except Exception as ex:
+            rsb_log.diag(self.log, "검색창에 쓰지 못했다: %s", ex)
+            return False
 
     #--------------------------------------------------------------
     # 이 요소가 지금 키보드 포커스를 쥐고 있는가

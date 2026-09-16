@@ -81,8 +81,12 @@ class App:
                                   icon_path=rsb_settings.icon_path())
         self.monitor = Monitor(s, self.scope,
                                lambda text, folders, anchor, hwnd:
-                                   self.q.put(("query", text, folders, anchor)),
+                                   self.q.put(("query", text, folders, anchor, hwnd)),
                                on_note=lambda kind, msg: self.q.put(("note", kind, msg)))
+        # §16 근거 목록 — 지금 답변이 어느 탐색기 창에서 나온 것인지 기억해 둔다
+        self._answer_hwnd = None
+        self.window.on_show_evidence = self._show_evidence
+        self.window.on_restore = self._restore_search
         self._quitting = False
         self._last_tooltip = ""
         # 예약해 둔 root.after 두 개(큐 처리·상태 갱신). 끝낼 때 취소한다.
@@ -173,7 +177,7 @@ class App:
         kind = ev[0]
 
         if kind == "query":
-            self._on_query(ev[1], ev[2], ev[3])
+            self._on_query(ev[1], ev[2], ev[3], ev[4])
 
         elif kind == "state":
             state = ev[1]
@@ -219,7 +223,7 @@ class App:
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
-    def _on_query(self, text, folders, anchor):
+    def _on_query(self, text, folders, anchor, hwnd=None):
         question, why = query_filter.to_question(text, self.s.prefix, self.s.min_chars)
         if question is None:
             self.log.info("무시: %s (%r)", why, text[:20])
@@ -229,6 +233,7 @@ class App:
             return
 
         self.log.info("질문: %r (폴더 %s)", question, folders[0] if folders else "-")
+        self._answer_hwnd = hwnd          # 근거 목록을 띄울 대상 창(§16)
         self.window.show(question, anchor=anchor, status="검색 중")
 
         if self.worker is None:
@@ -263,8 +268,49 @@ class App:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _on_note(self, kind, msg):
+        # §16 근거 목록 결과는 트레이 풍선까지 띄울 일이 아니다. 창에 한 줄로 알린다.
+        if kind == "evidence":
+            self.log.info("근거 목록 표시: %s", msg[:60])
+            self.window.notice("근거 파일을 탐색기에 띄웠습니다")
+            return
+        if kind == "evidence_fail":
+            self.log.info("근거 목록 실패: %s", msg)
+            self.window.notice(msg)
+            return
         self.log.warning("감시 알림(%s): %s", kind, msg)
         self.tray.notify("RAGSearchBox", msg)
+
+    #--------------------------------------------------------------
+    # "근거 파일 보기" (§16)
+    #=> 답변에 나온 근거 문서 이름들을, 질문을 친 그 탭의 검색 결과로 띄운다.
+    #   UIA 조작은 감시 스레드 몫이라 여기서는 부탁만 한다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (대상 창을 모르면 창에 한 줄로 알린다)
+    #--------------------------------------------------------------
+    def _show_evidence(self):
+        docs = [d for d in self.window._docs if d]
+        if not self._answer_hwnd or not docs:
+            self.window.notice("근거 파일을 알 수 없습니다")
+            return
+        self.monitor.show_evidence(self._answer_hwnd, docs)
+
+    #--------------------------------------------------------------
+    # "원래대로" (§16)
+    #=> 질문을 쳤을 때의 검색어로 탐색기를 되돌린다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _restore_search(self):
+        if not self._answer_hwnd:
+            self.window.notice("되돌릴 창을 알 수 없습니다")
+            return
+        self.monitor.restore_search(self._answer_hwnd)
 
     #--------------------------------------------------------------
     # 트레이 메뉴 처리

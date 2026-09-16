@@ -85,17 +85,22 @@ def main(seconds):
     # 감시 스레드는 띄우지 않는다(탐색기가 없으니 할 일이 없다). 대신 질문을 직접 넣는다.
     application.monitor.start = lambda: None
     application.monitor.stop = lambda: None
+    # §16 근거 목록 — 감시 스레드에 무엇이 전달되는지만 본다(탐색기는 건드리지 않는다)
+    asked = []
+    application.monitor.show_evidence = lambda h, names: asked.append(("show", h, list(names)))
+    application.monitor.restore_search = lambda h: asked.append(("restore", h, None))
 
     application.start()
 
     anchor = (900, 60, 1200, 90)
+    HWND = 4242            # 가짜 탐색기 창 번호 — 전달만 확인한다
     results = []
 
     #--------------------------------------------------------------
     # 감시 스레드가 보내는 것과 같은 모양으로 질문 넣기
     #--------------------------------------------------------------
     def send(text):
-        application.q.put(("query", text, [scope_dir], anchor))
+        application.q.put(("query", text, [scope_dir], anchor, HWND))
 
     #--------------------------------------------------------------
     # 자체 점검 — 창·거르기·트레이가 기대대로인지 본다
@@ -112,6 +117,21 @@ def main(seconds):
                         "RAGSearchBox" in application._last_tooltip
                         and application._last_tooltip != "RAGSearchBox"))
         results.append(("범위 폴더를 읽었다", application.scope.usable()))
+
+        # §16 — 근거가 왔으면 "근거 파일 보기" 단추가 열려야 한다
+        results.append(("근거 파일 보기 단추가 열렸다",
+                        str(w.btn_files.cget("state")) == "normal"))
+        results.append(("원래대로 단추는 아직 잠겨 있다",
+                        str(w.btn_restore.cget("state")) == "disabled"))
+        w.btn_files.invoke()
+        results.append(("누르면 근거 이름이 감시 스레드로 간다",
+                        len(asked) == 1 and asked[0][0] == "show"
+                        and asked[0][1] == HWND and asked[0][2] == ["규정_A.doc", "규정_B.doc", "규정_C.docx"]))
+        results.append(("누른 뒤 원래대로 단추가 열린다",
+                        str(w.btn_restore.cget("state")) == "normal"))
+        w.btn_restore.invoke()
+        results.append(("원래대로를 누르면 되돌리기가 전달된다",
+                        len(asked) == 2 and asked[1][0] == "restore" and asked[1][1] == HWND))
 
     #--------------------------------------------------------------
     # 너무 짧은 질문·중복 질문이 걸러지는지 본다

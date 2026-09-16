@@ -173,6 +173,9 @@ class AnswerWindow:
         self._t0 = None
         self._status = "준비 중"
         self._docs = []
+        # §16 근거 목록 — app 이 채워 넣는다. 눌렀을 때 부를 함수 fn()
+        self.on_show_evidence = None
+        self.on_restore = None
         # 오류를 보여 준 뒤에는 상태 글을 덮어쓰지 않는다(아래 set_status 설명 참고)
         self._errored = False
 
@@ -236,6 +239,16 @@ class AnswerWindow:
                   font=small, takefocus=0).pack(side="right", padx=(6, 0))
         tk.Button(foot, text="복사", command=self._copy, relief="groove",
                   font=small, takefocus=0).pack(side="right")
+        # §16 — 근거 파일들을 질문을 친 그 탭의 검색 결과로 띄운다.
+        # 자동으로 하지 않는 이유: 사용자가 자기 검색 결과를 보고 있을 수 있어서다.
+        self.btn_restore = tk.Button(foot, text="원래대로", command=self._restore,
+                                     relief="groove", font=small, takefocus=0,
+                                     state="disabled")
+        self.btn_restore.pack(side="right", padx=(6, 6))
+        self.btn_files = tk.Button(foot, text="근거 파일 보기", command=self._show_files,
+                                   relief="groove", font=small, takefocus=0,
+                                   state="disabled")
+        self.btn_files.pack(side="right")
 
         # 창을 처음 보여 주기 전에 "활성화 안 함" 을 걸어 둔다 (보여 준 뒤에 걸면 늦다)
         win.update_idletasks()
@@ -261,6 +274,9 @@ class AnswerWindow:
             self._docs = []
             self._errored = False          # 새 질문이니 지난 오류는 잊는다
             self._status = status
+            # 근거가 오기 전에는 보여 줄 파일이 없다
+            self.btn_files.config(state="disabled")
+            self.btn_restore.config(state="disabled")
 
             self.lbl_question.config(text=question)
             self.lbl_timing.config(text="")
@@ -360,6 +376,8 @@ class AnswerWindow:
         # tkinter 위젯은 바깥에서 들여다볼 방법이 없다(UIA 로도 안 읽힌다).
         # 무엇을 그렸는지 확인할 길은 이 로그뿐이라 DIAG 로 남긴다.
         rsb_log.diag(self.log, "근거 %d건 그림 (검색 %sms)", len(items), ms)
+        if self._docs and self.on_show_evidence:
+            self.btn_files.config(state="normal")
         small = tkfont.Font(family="Malgun Gothic", size=max(7, self.s.font_size - 2))
         base = tkfont.Font(family="Malgun Gothic", size=self.s.font_size)
 
@@ -460,6 +478,57 @@ class AnswerWindow:
         # 이 뒤에 오는 상태 갱신이 이 문구를 덮지 않게 한다(set_status 참고)
         self._errored = True
         self.log.warning("창에 오류 표시: %s", msg)
+
+    #--------------------------------------------------------------
+    # 짧은 알림 한 줄 (§16 단추 결과)
+    #=> 오류 표시(show_error)와 달리 "이번 일만" 알리는 것이라 _errored 를 세우지 않는다.
+    #   예: 창을 최소화해 둔 채 "근거 파일 보기" 를 누른 경우.
+    #
+    # -in: msg = 보여 줄 한 줄
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def notice(self, msg):
+        if not self.visible or not self.win:
+            return
+        self.lbl_status.config(text="● " + msg)
+
+    #--------------------------------------------------------------
+    # "근거 파일 보기" 눌렀을 때 (§16)
+    #=> 실제 조작은 감시 스레드가 한다(UIA 요소가 그 스레드 것이라서).
+    #   여기서는 부탁만 하고, 되돌리기 단추를 열어 둔다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (콜백 예외는 로그만 — 창이 죽으면 안 된다)
+    #--------------------------------------------------------------
+    def _show_files(self):
+        if not self.on_show_evidence:
+            return
+        try:
+            self.on_show_evidence()
+            self.btn_restore.config(state="normal")
+        except Exception:
+            self.log.exception("근거 파일 보기에서 예외")
+
+    #--------------------------------------------------------------
+    # "원래대로" 눌렀을 때 (§16)
+    #=> 질문을 쳤을 때의 검색어로 탐색기를 되돌린다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _restore(self):
+        if not self.on_restore:
+            return
+        try:
+            self.on_restore()
+        except Exception:
+            self.log.exception("원래대로에서 예외")
 
     #--------------------------------------------------------------
     # 내용에 맞춰 창 높이 맞추기

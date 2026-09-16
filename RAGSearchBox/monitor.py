@@ -25,12 +25,14 @@
 #------------------------------------------------------------------
 
 import ctypes
+import queue
 import threading
 import time
 from ctypes import wintypes
 
 import log as rsb_log
 import searchbox as rsb_searchbox
+from evidence_list import EvidenceList
 from explorer import ExplorerLocator
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -168,6 +170,10 @@ class Monitor(threading.Thread):
         self._last_forget = 0.0
         self._last_focus_scan = 0.0
         self._period = max(0.02, settings.poll_ms / 1000.0)
+        # 근거 목록 요청함 (§16). UIA 요소는 이 스레드 것이라 여기서만 만져야 해서,
+        # 메인 스레드는 부탁만 넣고 실제 일은 _tick 이 한다.
+        self._requests = queue.Queue()
+        self.evidence = None
 
     #--------------------------------------------------------------
     # 스레드 본체
@@ -190,6 +196,7 @@ class Monitor(threading.Thread):
                 self.log.error("UIA 실패로 감시를 시작하지 못했다: %s", self._box.error)
                 return
             self._locator = ExplorerLocator()
+            self.evidence = EvidenceList(self._box)
 
             if self.s.monitor_mode == 0:
                 self._install_hook()
@@ -251,6 +258,9 @@ class Monitor(threading.Thread):
     # -out: error = 없음
     #--------------------------------------------------------------
     def _tick(self):
+        # 메인 스레드가 부탁한 일(근거 목록 표시·되돌리기)을 먼저 처리한다
+        self._serve_requests()
+
         # Enter 의 "눌렸음" 비트는 읽으면 지워진다. 무장 전에 눌린 Enter 가
         # 나중에 뒤늦게 잡히지 않도록 무장 여부와 상관없이 매 주기 한 번 읽어 비운다.
         state = user32.GetAsyncKeyState(VK_RETURN)
@@ -308,6 +318,57 @@ class Monitor(threading.Thread):
 
         if (state & KEY_DOWN_BIT) or (state & KEY_PRESSED_BIT):
             self._confirm()
+
+    #--------------------------------------------------------------
+    # 메인 스레드가 부탁한 일 처리 (§16)
+    #=> UIA 요소는 만든 스레드에서만 만질 수 있다. 그래서 답변 창(메인 스레드)은
+    #   show_evidence()/restore_search() 로 부탁만 넣고, 실제 조작은 여기서 한다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (실패는 on_note 로 알리고 로그만 남긴다)
+    #--------------------------------------------------------------
+    def _serve_requests(self):
+        while True:
+            try:
+                what, hwnd, names = self._requests.get_nowait()
+            except queue.Empty:
+                return
+            if self.evidence is None:
+                continue
+            try:
+                if what == "show":
+                    ok, detail = self.evidence.show(hwnd, names)
+                else:
+                    ok, detail = self.evidence.restore(hwnd)
+                self.on_note("evidence" if ok else "evidence_fail", detail)
+            except Exception:
+                self.log.exception("근거 목록 처리에서 예외")
+                self.on_note("evidence_fail", "탐색기를 조작하지 못했습니다")
+
+    #--------------------------------------------------------------
+    # 근거 파일 목록 띄우기 부탁 (다른 스레드에서 불러도 된다)
+    #
+    # -in: hwnd  = 질문이 나온 탐색기 창
+    # -in: names = 근거 문서 이름 목록
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def show_evidence(self, hwnd, names):
+        self._requests.put(("show", hwnd, list(names or [])))
+
+    #--------------------------------------------------------------
+    # 원래 검색어로 되돌리기 부탁
+    #
+    # -in: hwnd = 탐색기 창
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def restore_search(self, hwnd):
+        self._requests.put(("restore", hwnd, None))
 
     #--------------------------------------------------------------
     # 질문처럼 보이는가 (가벼운 선검사)
@@ -475,6 +536,9 @@ class Monitor(threading.Thread):
             return
 
         self.log.info("질문 확정: %r (폴더 %s)", text[:40], known[0])
+        # 나중에 "원래대로" 로 되돌릴 수 있게 지금 검색창 글자를 기억해 둔다(§16)
+        if self.evidence is not None:
+            self.evidence.remember(a.hwnd, text)
         try:
             self.on_query(text, known, a.anchor, a.hwnd)
         except Exception:
