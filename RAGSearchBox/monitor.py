@@ -54,6 +54,9 @@ READ_DELAY_S = 0.08            # Enter 뒤 글자를 읽기까지 기다리는 �
 #       즉시 풀면 그 Enter 를 통째로 놓친다. 대신 이 시간이 지나면 확실히 푼다 —
 #       파일 목록에서 누른 Enter 가 질문으로 오해되면 안 되기 때문이다.
 FOCUS_GRACE_S = 0.4
+# §18 패널이 다른 탐색기 창으로 옮겨 가기 전에 그 창에 머물러야 하는 시간.
+# 창을 빠르게 오갈 때마다 창을 물렸다 돌려줬다 하면 화면이 어지럽다.
+SWITCH_DWELL_S = 0.8
 
 WinEventProcType = ctypes.WINFUNCTYPE(
     None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
@@ -181,6 +184,8 @@ class Monitor(threading.Thread):
         self._folder_seen = {}     # {hwnd: 마지막으로 알린 폴더}
         self._last_folder_check = 0.0
         self._watch_hwnd = None    # 패널이 붙어 있는 창(앞에 없어도 계속 지켜본다)
+        self._fg_candidate = None  # 패널을 옮겨 갈까 보고 있는 창
+        self._fg_since = 0.0
 
     #--------------------------------------------------------------
     # 스레드 본체
@@ -435,6 +440,25 @@ class Monitor(threading.Thread):
                 self.on_folder(hwnd, folder)
             except Exception:
                 self.log.exception("폴더 알림에서 예외")
+
+        # 앞에 있는 창이 범위 안인데 패널은 다른 창에 붙어 있다면 그쪽으로 옮긴다.
+        # (폴더가 "바뀔 때" 만 알리면, 같은 폴더를 보던 창으로 돌아왔을 때 패널이 따라오지
+        #  않는다 — 창을 여러 개 띄워 놓고 오가는 확인에서 실제로 그랬다.)
+        # 다만 잠깐 스쳐 지나가는 창까지 따라가면 창을 물렸다 돌려줬다 하며 어지러우므로,
+        # 그 창에 SWITCH_DWELL_S 만큼 머물렀을 때만 옮긴다.
+        if fg and self._watch_hwnd and fg != self._watch_hwnd and self._folder_seen.get(fg):
+            if self._fg_candidate != fg:
+                self._fg_candidate, self._fg_since = fg, now
+            elif (now - self._fg_since) >= SWITCH_DWELL_S:
+                self._fg_candidate = None
+                folder = self._folder_seen.get(fg)
+                rsb_log.diag(self.log, "패널을 앞의 창으로 옮긴다: hwnd=%s → %s", fg, folder)
+                try:
+                    self.on_folder(fg, folder)
+                except Exception:
+                    self.log.exception("폴더 알림에서 예외")
+        else:
+            self._fg_candidate = None
 
         # 닫힌 창의 기억은 버린다
         if len(self._folder_seen) > 16:
