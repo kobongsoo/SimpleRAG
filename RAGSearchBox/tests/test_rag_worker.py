@@ -213,6 +213,39 @@ class TestFailures(WorkerTestBase):
         self.assertEqual(w.state, STOPPED)
 
     #--------------------------------------------------------------
+    # 어느 모델이 올라갔는지 알아낸다
+    #=> 설정 파일을 뒤지지 않고도 로그·트레이에서 확인할 수 있어야 한다.
+    #   워커가 시작하며 내는 "준비 완료 … / Qwen3-0.6B-Q4_K_M.gguf" 줄에서 뽑는다.
+    #--------------------------------------------------------------
+    def test_model_name(self):
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        self.assertEqual(w.model, "Qwen3-0.6B-Q4_K_M.gguf", w.startup_lines)
+        self.assertIn("준비 완료", w.ready_line)
+        # 트레이 툴팁에는 짧게 — "Qwen3-0.6B"
+        self.assertIn("Qwen3-0.6B", w.status_text())
+
+    #--------------------------------------------------------------
+    # 진짜 CLI 가 내는 꼬리표까지 붙은 줄에서도 파일 이름만 집는다
+    #=> 실제 줄: "준비 완료 (9.3초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf (빠름 모드)"
+    #   경로가 통째로 나오는 경우도 대비한다.
+    #--------------------------------------------------------------
+    def test_model_name_parsing(self):
+        cases = [
+            ("준비 완료 (9.3초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf (빠름 모드)",
+             "Qwen3-0.6B-Q4_K_M.gguf"),
+            ("준비 완료 (0.1초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf",
+             "Qwen3-0.6B-Q4_K_M.gguf"),
+            ("준비 완료 (12초) — 498청크 / D:" + chr(92) + "models" + chr(92)
+             + "Qwen3-1.7B-Q4_K_M.gguf (정밀 모드)", "Qwen3-1.7B-Q4_K_M.gguf"),
+        ]
+        for line, want in cases:
+            m = rag_worker.MODEL_RE.search(line)
+            self.assertIsNotNone(m, line)
+            self.assertEqual(m.group(1), want, line)
+
+    #--------------------------------------------------------------
     # 인덱스가 잠겨 있으면 자동 재시작하지 않는다 (설계서 §10)
     #=> chat 이나 index 가 이미 돌고 있으면 Qdrant 가 폴더를 내주지 않는다.
     #   계속 다시 띄워 봐야 같은 이유로 죽으므로, 사용자에게 알리고 멈춘다.

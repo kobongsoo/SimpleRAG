@@ -20,6 +20,7 @@
 import codecs
 import os
 import subprocess
+import re
 import threading
 import time
 
@@ -34,6 +35,9 @@ BUSY = "busy"            # 답변을 만드는 중
 
 # stdin 인코딩 — 동결 exe 가 환경변수를 무시하므로 코드에 박는다(P0-4)
 STDIN_ENCODING = "cp949"
+# 워커가 시작하며 내는 줄에서 모델 파일 이름만 집어내는 본 —
+# "준비 완료 (9.3초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf (빠름 모드)" 처럼 꼬리표가 붙는다
+MODEL_RE = re.compile(r"([^/\\\s]+\.gguf)")
 # 재시작 한도를 세는 시간창(초)
 RESTART_WINDOW_S = 300
 # 인덱스를 다른 프로세스가 잡고 있을 때 SimpleRAG 가 내는 문구
@@ -103,6 +107,7 @@ def _assign_job(job, pid):
 # -필드: state    = STOPPED / STARTING / READY / BUSY
 # -필드: detail   = 상태를 사람 말로 (트레이 툴팁용)
 # -필드: backend  = 워커가 알려 준 생성 백엔드 줄("생성 iGPU(Vulkan) / 리랭킹 켬")
+# -필드: model    = 워커가 올린 생성 모델 파일 이름("Qwen3-0.6B-Q4_K_M.gguf")
 #------------------------------------------------------------------
 class RagWorker:
     #--------------------------------------------------------------
@@ -139,6 +144,8 @@ class RagWorker:
         self.state = STOPPED
         self.detail = "시작 전"
         self.backend = ""
+        self.model = ""
+        self.ready_line = ""
         self.startup_lines = []
 
         self._lock = threading.RLock()
@@ -263,8 +270,13 @@ class RagWorker:
         with self._lock:
             name = {STOPPED: "내려감", STARTING: "준비 중", READY: "준비됨", BUSY: "답변 중"}[self.state]
             extra = self.backend or self.detail
+            model = self.model
             if self.state == STARTING:
                 extra = "{:.0f}초째".format(time.monotonic() - self._t_state)
+        if model and self.state in (READY, BUSY):
+            # 파일 이름 그대로는 길다 — "Qwen3-0.6B-Q4_K_M.gguf" → "Qwen3-0.6B"
+            short = model.split("-Q4")[0].split(".gguf")[0]
+            extra = "{} · {}".format(short, extra) if extra else short
         return "{} · {}".format(name, extra) if extra else name
 
     # ── 안에서 쓰는 것들 ──────────────────────────────
@@ -337,6 +349,8 @@ class RagWorker:
             self._parser = ChatParser()
             self._stderr_tail = []
             self.backend = ""
+            self.model = ""
+            self.ready_line = ""
             self.startup_lines = []
         self._set_state(STARTING, "모델 적재 중")
 
@@ -379,6 +393,14 @@ class RagWorker:
                 for ln in text.splitlines():
                     if ln.startswith("생성 "):
                         self.backend = ln.strip()
+                    elif ln.startswith("준비 완료"):
+                        # 실제 줄: "준비 완료 (9.3초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf (빠름 모드)"
+                        # 어느 모델이 올라갔는지는 여기서만 알 수 있다. 설정 파일을 뒤지지 않고도
+                        # 알 수 있게 뽑아 둔다(로그·트레이 툴팁에 쓴다).
+                        # 뒤에 "(빠름 모드)" 같은 꼬리가 붙으므로 파일 이름만 집는다.
+                        m = MODEL_RE.search(ln)
+                        self.model = m.group(1) if m else ""
+                        self.ready_line = ln.strip()
             for ev in parser.feed(text):
                 self._on_parsed(ev)
 
@@ -394,6 +416,13 @@ class RagWorker:
     def _on_parsed(self, ev):
         kind = ev[0]
         if kind == "ready":
+            # 워커가 시작하며 낸 안내를 그대로 남긴다 — 어느 모델·백엔드로 올라갔는지
+            # 나중에 확인할 길이 로그뿐이다
+            line = self.ready_line
+            if line:
+                self.log.info("워커 %s", line)
+            if self.backend:
+                self.log.info("워커 %s", self.backend)
             self._set_state(READY, self.backend or "준비됨")
             return
         if kind == "done":
