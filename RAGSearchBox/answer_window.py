@@ -173,6 +173,8 @@ class AnswerWindow:
         self._t0 = None
         self._status = "준비 중"
         self._docs = []
+        # 오류를 보여 준 뒤에는 상태 글을 덮어쓰지 않는다(아래 set_status 설명 참고)
+        self._errored = False
 
     #--------------------------------------------------------------
     # 위젯 만들기 (한 번만)
@@ -257,6 +259,7 @@ class AnswerWindow:
             self.question = question
             self._answer_chars = 0
             self._docs = []
+            self._errored = False          # 새 질문이니 지난 오류는 잊는다
             self._status = status
 
             self.lbl_question.config(text=question)
@@ -331,6 +334,12 @@ class AnswerWindow:
     # -out: error = 없음
     #--------------------------------------------------------------
     def set_status(self, text):
+        # 오류를 보여 준 뒤라면 덮어쓰지 않는다.
+        # 워커가 죽으면 곧바로 다시 뜨면서 "모델 준비 중" 상태가 이어 오는데,
+        # 그대로 두면 사용자가 정작 봐야 할 "SimpleRAG 가 종료되었습니다" 가
+        # 1초도 안 되어 사라진다(오류 재현 확인에서 실제로 그랬다).
+        if self._errored:
+            return
         self._status = text
         if self.visible and self.win:
             self.lbl_status.config(text="● {}".format(text))
@@ -448,6 +457,8 @@ class AnswerWindow:
             return
         self._stop_tick()
         self.lbl_status.config(text="● " + msg)
+        # 이 뒤에 오는 상태 갱신이 이 문구를 덮지 않게 한다(set_status 참고)
+        self._errored = True
         self.log.warning("창에 오류 표시: %s", msg)
 
     #--------------------------------------------------------------

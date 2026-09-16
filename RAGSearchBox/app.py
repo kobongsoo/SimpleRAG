@@ -85,6 +85,10 @@ class App:
                                on_note=lambda kind, msg: self.q.put(("note", kind, msg)))
         self._quitting = False
         self._last_tooltip = ""
+        # 예약해 둔 root.after 두 개(큐 처리·상태 갱신). 끝낼 때 취소한다.
+        # 목록에 쌓지 않고 마지막 것만 들고 있는다 — 50ms 마다 쌓으면 한 시간에 7만 개가 된다.
+        self._job_pump = None
+        self._job_tip = None
 
     #--------------------------------------------------------------
     # 시작
@@ -128,6 +132,9 @@ class App:
 
         self.monitor.start()
         self.root.after(PUMP_MS, self._pump)
+        # 첫 갱신을 기다리지 않고 지금 한 번 채운다 — 범위 폴더 미설정 같은 안내가
+        # 시작 직후부터 트레이 글에 보여야 한다
+        self._update_tooltip(once=True)
         self.root.after(TOOLTIP_MS, self._update_tooltip)
         self.log.info("시작 완료 (범위 폴더 %d개)", len(self.scope.active))
 
@@ -151,7 +158,7 @@ class App:
             except Exception:
                 self.log.exception("이벤트 처리에서 예외: %s", ev[0] if ev else ev)
         if not self._quitting:
-            self.root.after(PUMP_MS, self._pump)
+            self._job_pump = self.root.after(PUMP_MS, self._pump)
 
     #--------------------------------------------------------------
     # 이벤트 한 건 처리
@@ -339,7 +346,7 @@ class App:
         except Exception:
             self.log.exception("트레이 상태 갱신에서 예외")
         if not once and not self._quitting:
-            self.root.after(TOOLTIP_MS, self._update_tooltip)
+            self._job_tip = self.root.after(TOOLTIP_MS, self._update_tooltip)
 
     #--------------------------------------------------------------
     # 끝내기
@@ -356,6 +363,16 @@ class App:
             return
         self._quitting = True
         self.log.info("종료를 시작한다")
+        # 예약해 둔 50ms 큐 처리·상태 갱신을 먼저 취소한다.
+        # 창이 없어진 뒤에 돌면 Tk 가 "invalid command name" 을 찍는다.
+        for job in (self._job_pump, self._job_tip):
+            if job is None:
+                continue
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._job_pump = self._job_tip = None
         for step, fn in (("감시", self.monitor.stop),
                          ("워커", (self.worker.shutdown if self.worker else lambda: None)),
                          ("트레이", self.tray.stop),

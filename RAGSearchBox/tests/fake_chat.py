@@ -14,6 +14,8 @@
 #    FAKE_HANG         : 이 질문을 받으면 답하지 않고 멈춘다(답변 시간 초과 시험)
 #    FAKE_DIE_ON       : 이 질문을 받으면 그냥 죽는다(재시작 시험)
 #    FAKE_EXIT_CODE    : 시작하자마자 이 코드로 끝난다(설정 오류 시험)
+#    FAKE_LOCK         : 인덱스가 잠겨 있을 때처럼 stderr 에 알리고 죽는다(잠금 충돌 시험)
+#    FAKE_NO_EVIDENCE  : 근거를 못 찾은 답변을 낸다(인덱스가 비었을 때)
 #------------------------------------------------------------------
 import os
 import sys
@@ -46,6 +48,11 @@ def out(text):
 def answer(q):
     # 시험에서 BUSY 상태를 관찰할 수 있도록 일부러 늦출 수 있게 한다
     time.sleep(float(os.environ.get("FAKE_ANSWER_DELAY", "0")))
+    if os.environ.get("FAKE_NO_EVIDENCE"):
+        # 인덱스가 비었을 때 진짜 CLI 가 내는 모양
+        out("\n검색된 근거가 없습니다.\n\n")
+        out("질문> ")
+        return
     out("\n── 근거 3건 (845ms) ─────────────────────\n")
     for i, doc in enumerate(("규정_A.doc", "규정_B.doc", "규정_C.docx"), 1):
         out("  [{}] {}\n".format(i, doc))
@@ -62,6 +69,13 @@ def answer(q):
 
 
 def main():
+    if os.environ.get("FAKE_LOCK"):
+        # 진짜 Qdrant 가 내는 문구 그대로 — rag_worker 가 이 글귀로 잠금 충돌을 알아챈다
+        sys.stderr.write("RuntimeError: Storage folder qdrant_data is already accessed "
+                         "by another instance of Qdrant client\n")
+        sys.stderr.flush()
+        return 1
+
     code = os.environ.get("FAKE_EXIT_CODE")
     if code:
         # 설정 오류 흉내: 진짜 CLI 도 stderr 로 알리고 코드 2 로 끝낸다

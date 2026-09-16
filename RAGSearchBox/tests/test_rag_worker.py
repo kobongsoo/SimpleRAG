@@ -213,6 +213,53 @@ class TestFailures(WorkerTestBase):
         self.assertEqual(w.state, STOPPED)
 
     #--------------------------------------------------------------
+    # 인덱스가 잠겨 있으면 자동 재시작하지 않는다 (설계서 §10)
+    #=> chat 이나 index 가 이미 돌고 있으면 Qdrant 가 폴더를 내주지 않는다.
+    #   계속 다시 띄워 봐야 같은 이유로 죽으므로, 사용자에게 알리고 멈춘다.
+    #--------------------------------------------------------------
+    def test_index_lock_no_restart(self):
+        os.environ["FAKE_LOCK"] = "1"
+        self.addCleanup(os.environ.pop, "FAKE_LOCK", None)
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: any("chat/index 가 실행 중입니다" in e[1]
+                                             for e in col.of("error")), timeout=20),
+                        "잠금 안내가 오지 않았다: {}".format(col.of("error")))
+        time.sleep(1.0)
+        self.assertEqual(w.state, STOPPED)
+
+    #--------------------------------------------------------------
+    # 재시작 한도를 넘으면 멈추고 알린다 (설계서 §10)
+    #=> 5분 안에 restart_max 번 넘게 죽으면 더 띄우지 않는다.
+    #   계속 되살리면 무한히 프로세스를 띄우며 CPU 만 태운다.
+    #--------------------------------------------------------------
+    def test_restart_limit(self):
+        os.environ["FAKE_EXIT_CODE"] = "9"      # 설정 오류(2)가 아닌 이유로 계속 죽는다
+        self.addCleanup(os.environ.pop, "FAKE_EXIT_CODE", None)
+        w, col = self.make(restart_max=2)
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: any("반복해서 종료됩니다" in e[1]
+                                             for e in col.of("error")), timeout=30),
+                        "한도 초과 안내가 오지 않았다: {}".format(col.of("error")))
+        time.sleep(1.0)
+        self.assertEqual(w.state, STOPPED)
+
+    #--------------------------------------------------------------
+    # 근거가 없어도 답변 창이 빈 채로 남지 않는다 (인덱스가 비었을 때)
+    #=> 진짜 CLI 는 "검색된 근거가 없습니다." 만 내고 답변 구분선을 내지 않는다.
+    #   해석기가 이것을 raw 로 넘겨 창이 그 문구를 그대로 보여 준다.
+    #--------------------------------------------------------------
+    def test_no_evidence(self):
+        os.environ["FAKE_NO_EVIDENCE"] = "1"
+        self.addCleanup(os.environ.pop, "FAKE_NO_EVIDENCE", None)
+        w, col = self.make()
+        w.ensure_started()
+        w.ask("아무 질문")
+        self.assertTrue(wait_for(lambda: any("근거가 없습니다" in e[1] for e in col.of("raw")),
+                                 timeout=20),
+                        "안내 문구가 오지 않았다: {}".format(col.events[-5:]))
+
+    #--------------------------------------------------------------
     # 오래 안 쓰면 모델을 내린다 (인덱스 잠금·메모리 반납)
     #--------------------------------------------------------------
     def test_idle_unload(self):
