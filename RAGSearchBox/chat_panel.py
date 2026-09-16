@@ -82,6 +82,34 @@ def foreground():
 
 
 #------------------------------------------------------------------
+# "활성화되지 않는 창" 표시 켜고 끄기
+#=> Windows 는 창을 보여 주는 그 순간에 활성화 여부를 정한다. 그래서
+#   보여 주기 직전에 WS_EX_NOACTIVATE 를 켜 두면 아예 포커스를 가져가지 않는다.
+#   보여 준 뒤 곧바로 꺼야 사용자가 눌렀을 때 글을 쓸 수 있다.
+#   (뺏고 나서 돌려주는 방법만으로는 가끔 그대로 차지해 버렸다 — 실측 20/20.)
+#
+# -in: win = 패널 창
+# -in: on  = True 면 활성화 안 함
+#
+# -out: 없음
+# -out: error = 없음
+#------------------------------------------------------------------
+def set_no_activate(win, on):
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        h = hwnd_of(win)
+        if not h:
+            return
+        GWL_EXSTYLE, WS_EX_NOACTIVATE = -20, 0x08000000
+        ex = user32.GetWindowLongW(h, GWL_EXSTYLE)
+        user32.SetWindowLongW(h, GWL_EXSTYLE,
+                              (ex | WS_EX_NOACTIVATE) if on else (ex & ~WS_EX_NOACTIVATE))
+    except Exception:
+        pass
+
+
+#------------------------------------------------------------------
 # 뺏은 포커스 돌려주기
 #=> deiconify() 는 창을 활성화한다. SW_SHOWNOACTIVATE 만으로는 이미 늦어서,
 #   빼앗았으면 곧바로 원래 창으로 돌려준다(답변 창에서 겪은 것과 같은 함정).
@@ -98,11 +126,32 @@ def give_focus_back(win, prev_fg):
     try:
         import ctypes
         user32 = ctypes.windll.user32
-        h = hwnd_of(win)
-        if prev_fg and h and user32.GetForegroundWindow() == h:
+        if not prev_fg or not user32.IsWindow(prev_fg):
+            return
+        # 우리 창이 아니라 "원래 창이 아닌 것" 을 기준으로 본다 —
+        # 창 손잡이가 방금 바뀐 경우에도 제대로 돌려주기 위해서다
+        if user32.GetForegroundWindow() != prev_fg:
             user32.SetForegroundWindow(prev_fg)
     except Exception:
         pass
+
+
+#------------------------------------------------------------------
+# 지금 마우스 왼쪽 단추가 눌려 있는가
+#=> 사용자가 패널을 끌고 있는 중에 우리가 자리를 되돌리면 서로 싸운다.
+#   끌고 있는 동안에는 가만히 두고, 놓은 뒤에 다시 붙인다.
+#
+# -in: 없음
+#
+# -out: bool
+# -out: error = 없음
+#------------------------------------------------------------------
+def _mouse_down():
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+    except Exception:
+        return False
 
 
 #------------------------------------------------------------------
@@ -165,6 +214,8 @@ class ChatPanel:
         self.turns = []
         self._busy = False
         self._last_rect = None
+        self._width = settings.win_width   # 사용자가 너비를 바꾸면 여기에 반영된다
+        self._frame = None          # 창 테두리가 차지하는 크기(한 번만 잰다)
         self._saved = None          # 탐색기 창을 옮기기 전 상태(되돌리려고)
         self._room_rect = None      # 우리가 옮겨 놓은 자리
         self._closed_for = set()    # 사용자가 닫기를 누른 탐색기 창들
@@ -288,8 +339,10 @@ class ChatPanel:
             self.target_hwnd = hwnd
             self._place(first=True)
             prev_fg = foreground()           # 사용자가 쓰던 창(보통 탐색기)
+            set_no_activate(self.win, True)  # 보여 주는 순간 활성화되지 않게
             self.win.deiconify()
             show_no_activate(self.win)
+            set_no_activate(self.win, False)  # 이제 사용자가 누르면 글을 쓸 수 있다
             give_focus_back(self.win, prev_fg)
             self.visible = True
             self.log.info("패널 표시: %s (창 %s)", folder, hwnd)
@@ -354,9 +407,17 @@ class ChatPanel:
                 return
             if not self.win.winfo_viewable():
                 prev_fg = foreground()
+                set_no_activate(self.win, True)
                 self.win.deiconify()
                 show_no_activate(self.win)
+                set_no_activate(self.win, False)
                 give_focus_back(self.win, prev_fg)
+
+            # 사용자가 지금 끌고 있는 중이면 건드리지 않는다 — 끌면서 되돌리면 싸움이 된다
+            if _mouse_down():
+                return
+
+            self._adopt_user_size()
             self._place()
         except Exception:
             self.log.exception("패널이 탐색기를 따라가지 못했다")
@@ -621,6 +682,46 @@ class ChatPanel:
                 self.log.exception("근거 파일 보기에서 예외")
 
     #--------------------------------------------------------------
+    # 사용자가 바꾼 크기·자리 받아들이기 (§18)
+    #=> 패널은 붙어 있는 창이라 아무 데나 떠 있으면 안 된다. 그래서
+    #    - 너비를 바꿨으면 그 너비를 받아들이고, 탐색기 자리를 다시 만들어 준다
+    #      (안 그러면 넓힌 만큼 탐색기를 덮는다 — 실측에서 그랬다)
+    #    - 자리를 옮겼으면 제자리로 되돌린다
+    #   높이는 탐색기 창에 맞추므로 사용자가 바꿔도 다음 배치 때 다시 맞춰진다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _adopt_user_size(self):
+        h = hwnd_of(self.win)
+        if not h:
+            return
+        try:
+            import win32gui
+            l, t, r, b = win32gui.GetWindowRect(h)
+        except Exception:
+            return
+        width = r - l
+        if abs(width - self._width) <= 4:
+            return                       # 너비는 그대로다
+
+        work = rsb_dock.work_area(self.target_hwnd)
+        self._width = max(260, min(width, (work[2] - work[0]) // 2))
+        self.log.info("패널 너비를 %dpx 로 바꿨다 — 탐색기 자리를 다시 만든다", self._width)
+        self._last_rect = None           # 다시 배치하게 한다
+
+        # 넓어진 만큼 탐색기가 침범당하지 않게 다시 물린다
+        if self.s.shrink_explorer and self.target_hwnd:
+            region = rsb_dock.left_region(work, self._width)
+            _, _, rect = rsb_dock.target_state(self.target_hwnd)
+            if rect and not rsb_dock.fits_in(rect, region):
+                if rsb_dock.make_room(self.target_hwnd, region):
+                    _, _, now = rsb_dock.target_state(self.target_hwnd)
+                    self._room_rect = now
+
+    #--------------------------------------------------------------
     # 자리 잡기 — 오른쪽 띠에 두고 탐색기를 왼쪽으로 물린다 (§18)
     #
     # -in: first = 처음 띄울 때인지(이때만 탐색기를 옮긴다)
@@ -630,8 +731,8 @@ class ChatPanel:
     #--------------------------------------------------------------
     def _place(self, first=False):
         work = rsb_dock.work_area(self.target_hwnd)
-        strip = rsb_dock.right_strip(work, self.s.win_width)
-        region = rsb_dock.left_region(work, self.s.win_width)
+        strip = rsb_dock.right_strip(work, self._width)
+        region = rsb_dock.left_region(work, self._width)
 
         if first and self.s.shrink_explorer:
             self._saved = rsb_dock.snapshot(self.target_hwnd)
@@ -644,15 +745,56 @@ class ChatPanel:
             else:
                 self._saved = None           # 건드리지 않았으니 되돌릴 것도 없다
 
-        if strip != self._last_rect:
+        drifted = False
+        h0 = hwnd_of(self.win)
+        if h0 and self._last_rect:
+            try:
+                import win32gui
+                l, t, r, b = win32gui.GetWindowRect(h0)
+                drifted = (abs(l - strip[0]) > 4 or abs(t - strip[1]) > 4
+                           or abs((r - l) - strip[2]) > 4 or abs((b - t) - strip[3]) > 4)
+            except Exception:
+                drifted = False
+
+        if strip != self._last_rect or drifted:
             self._last_rect = strip
             x, y, w, ht = strip
             # ⚠️ tkinter 에게도 알려 줘야 한다. SetWindowPos 로만 크기를 바꾸면
             #    tk 가 "내용에 맞는 크기" 로 곧 되돌려 놓는다(실측: 패널이 짧게 나왔다).
-            self.win.geometry("{}x{}+{}+{}".format(w, ht, x, y))
+            #    다만 geometry 는 "내용 칸" 크기라, 창 테두리·제목 표시줄만큼 빼서 줘야
+            #    창 전체가 딱 그 자리에 들어간다(안 그러면 처음 한 번 작업 영역을 넘친다).
+            fw, fh = self._frame_delta()
+            self.win.geometry("{}x{}+{}+{}".format(max(200, w - fw), max(120, ht - fh), x, y))
             h = hwnd_of(self.win)
             if h:
                 rsb_dock.place_above_target(h, self.target_hwnd, strip)
+
+    #--------------------------------------------------------------
+    # 창 테두리가 차지하는 크기 재기 (한 번만)
+    #=> tkinter 의 geometry 는 내용 칸 기준이고, 화면 배치는 창 전체 기준이다.
+    #   그 차이를 한 번 재어 두고 계속 쓴다.
+    #
+    # -in: 없음
+    #
+    # -out: (가로 차이, 세로 차이) 픽셀
+    # -out: error = 없음 (재지 못하면 (0, 0))
+    #--------------------------------------------------------------
+    def _frame_delta(self):
+        if getattr(self, "_frame", None) is not None:
+            return self._frame
+        try:
+            import win32gui
+            self.win.update_idletasks()
+            h = hwnd_of(self.win)
+            l, t, r, b = win32gui.GetWindowRect(h)
+            dw = (r - l) - self.win.winfo_width()
+            dh = (b - t) - self.win.winfo_height()
+            if 0 <= dw < 200 and 0 <= dh < 200:
+                self._frame = (dw, dh)
+                return self._frame
+        except Exception:
+            pass
+        return (0, 0)
 
     #--------------------------------------------------------------
     # 옮겨 둔 탐색기 창 돌려주기
