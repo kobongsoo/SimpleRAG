@@ -35,6 +35,10 @@ INI_NAME = "RAGSearchBox.ini"
 # -필드: dedup_sec        = 같은 질문을 무시할 시간(초)
 # -필드: scope_folders    = 동작할 폴더 목록(비면 아무 데서도 동작하지 않는다)
 # -필드: scope_recheck_min= 없는 폴더를 다시 확인할 주기(분)
+# -필드: panel_enabled   = 폴더 패널(§18)을 쓸지 — 지정 폴더를 열면 오른쪽에 대화창이 뜬다
+# -필드: shrink_explorer = 패널 자리를 만들려고 탐색기 창을 왼쪽으로 물릴지
+# -필드: folder_poll_ms  = 지금 보고 있는 폴더를 얼마나 자주 확인할지
+# -필드: searchbox_trigger = 옛 방식(검색창에 ? 입력 → 답변 창). 기본은 끔
 # -필드: dock            = "off"(검색창 아래 뜨는 창) | "right"(탐색기 오른쪽에 붙어 따라다님)
 # -필드: win_width / win_max_height / font_size = 답변 창 모양
 # -필드: log_level        = 로그 단계
@@ -67,6 +71,10 @@ class Settings:
         self.dedup_sec = 3
         self.scope_folders = []
         self.scope_recheck_min = 5
+        self.panel_enabled = True
+        self.shrink_explorer = True
+        self.folder_poll_ms = 500
+        self.searchbox_trigger = False
         self.dock = "off"
         self.win_width = 460
         self.win_max_height = 560
@@ -177,6 +185,12 @@ def load(path=None):
     s.poll_ms = _int(cp, "Monitor", "PollMs", 100, 20, 1000, w)
     s.input_recent_ms = _int(cp, "Monitor", "InputRecentMs", 1500, 100, 10000, w)
 
+    s.panel_enabled = _bool(cp, "Panel", "Enabled", True, w)
+    s.shrink_explorer = _bool(cp, "Panel", "ShrinkExplorer", True, w)
+    s.folder_poll_ms = _int(cp, "Panel", "FolderPollMs", 500, 100, 5000, w)
+
+    # 옛 방식(검색창 ? 감지)은 기본으로 끈다 — 켜면 검색창 찾기까지 함께 돈다
+    s.searchbox_trigger = _bool(cp, "Trigger", "SearchBox", False, w)
     raw_prefix = cp.get("Trigger", "Prefix", fallback=None)
     if raw_prefix is not None:
         s.prefix = raw_prefix.strip() or "?"

@@ -146,3 +146,144 @@ def place_above_target(panel_hwnd, target_hwnd, rect):
     except Exception:
         rsb_log.get("dock").exception("패널을 옮기지 못했다")
         return False
+
+
+#------------------------------------------------------------------
+# 패널이 차지할 오른쪽 띠 (§18)
+#=> 새 패널은 탐색기와 겹치지 않는다. 화면 오른쪽 끝에 세로 띠를 잡고,
+#   탐색기는 그 왼쪽 영역으로 물러나게 한다.
+#
+# -in: work  = 모니터 작업 영역 (left, top, right, bottom)
+# -in: width = 패널 너비
+#
+# -out: (x, y, w, h)
+# -out: error = 없음
+#------------------------------------------------------------------
+def right_strip(work, width):
+    kl, kt, kr, kb = work
+    w = max(200, min(int(width), (kr - kl) // 2))      # 화면 절반은 넘지 않게
+    return int(kr - w), int(kt), int(w), int(kb - kt)
+
+
+#------------------------------------------------------------------
+# 탐색기가 쓸 왼쪽 영역
+#=> 오른쪽 띠를 뺀 나머지. 여기에 탐색기 창을 맞춰 넣는다.
+#
+# -in: work  = 작업 영역
+# -in: width = 패널 너비
+#
+# -out: (left, top, right, bottom)
+# -out: error = 없음
+#------------------------------------------------------------------
+def left_region(work, width):
+    kl, kt, kr, kb = work
+    x, y, w, h = right_strip(work, width)
+    return int(kl), int(kt), int(x - GAP), int(kb)
+
+
+#------------------------------------------------------------------
+# 창이 왼쪽 영역 안에 있는가
+#=> 이미 안쪽이면 건드리지 않는다 — 사용자가 놓아둔 자리를 함부로 바꾸지 않기 위해서다.
+#
+# -in: rect   = 창 사각형
+# -in: region = 왼쪽 영역
+#
+# -out: bool
+# -out: error = 없음
+#------------------------------------------------------------------
+def fits_in(rect, region):
+    l, t, r, b = rect
+    rl, rt, rr, rb = region
+    return l >= rl - 2 and t >= rt - 2 and r <= rr + 2 and b <= rb + 2
+
+
+#------------------------------------------------------------------
+# 지금 창 상태 기억해 두기 (되돌리려고)
+#=> 최대화 여부와 사각형을 함께 담는다.
+#
+# -in: hwnd = 대상 창
+#
+# -out: {"maximized": bool, "rect": (l,t,r,b)} 또는 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def snapshot(hwnd):
+    try:
+        import win32con
+        import win32gui
+        place = win32gui.GetWindowPlacement(hwnd)
+        return {"maximized": place[1] == win32con.SW_SHOWMAXIMIZED,
+                "rect": tuple(win32gui.GetWindowRect(hwnd))}
+    except Exception:
+        return None
+
+
+#------------------------------------------------------------------
+# 탐색기를 왼쪽으로 물려 자리 만들기 (§18)
+#=> 최대화되어 있으면 최대화를 풀고 왼쪽 영역에 맞춘다.
+#   최대화가 아니면 폭만큼만 밀거나 줄인다 — 필요 이상으로 창을 흔들지 않는다.
+#
+# -in: hwnd   = 탐색기 창
+# -in: region = 왼쪽 영역 (left, top, right, bottom)
+#
+# -out: True = 창을 옮겼다(되돌릴 거리가 생겼다)
+# -out: error = 없음 (실패는 False)
+#------------------------------------------------------------------
+def make_room(hwnd, region):
+    try:
+        import win32con
+        import win32gui
+
+        rl, rt, rr, rb = region
+        place = win32gui.GetWindowPlacement(hwnd)
+        was_max = place[1] == win32con.SW_SHOWMAXIMIZED
+        if was_max:
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+        l, t, r, b = win32gui.GetWindowRect(hwnd)
+        if was_max:
+            # 최대화였다면 왼쪽 영역을 꽉 채운다 — 쓰던 넓이를 최대한 지켜 준다
+            nl, nt, nw, nh = rl, rt, rr - rl, rb - rt
+        else:
+            nw = min(r - l, rr - rl)
+            nh = min(b - t, rb - rt)
+            nl = min(max(l, rl), rr - nw)      # 오른쪽 띠를 넘지 않게 왼쪽으로 민다
+            nt = min(max(t, rt), rb - nh)
+            if (nl, nt, nw, nh) == (l, t, r - l, b - t):
+                return False                   # 이미 자리 안에 있다
+        win32gui.MoveWindow(hwnd, int(nl), int(nt), int(nw), int(nh), True)
+        return True
+    except Exception:
+        rsb_log.get("dock").exception("탐색기 자리를 만들지 못했다")
+        return False
+
+
+#------------------------------------------------------------------
+# 옮겨 둔 창을 원래대로
+#=> 사용자가 그 뒤에 창을 직접 옮겼으면 되돌리지 않는다 — 사용자의 손을 이긴다는 인상을 주지 않게.
+#
+# -in: hwnd  = 대상 창
+# -in: saved = snapshot() 결과
+# -in: ours  = 우리가 옮겨 놓은 사각형(그대로면 되돌린다)
+#
+# -out: True = 되돌렸다
+# -out: error = 없음
+#------------------------------------------------------------------
+def restore(hwnd, saved, ours=None):
+    if not saved:
+        return False
+    try:
+        import win32con
+        import win32gui
+        if not win32gui.IsWindow(hwnd):
+            return False
+        now = tuple(win32gui.GetWindowRect(hwnd))
+        if ours and any(abs(a - b) > 4 for a, b in zip(now, ours)):
+            return False                       # 사용자가 그 뒤에 옮겼다 — 그대로 둔다
+        if saved["maximized"]:
+            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+        else:
+            l, t, r, b = saved["rect"]
+            win32gui.MoveWindow(hwnd, int(l), int(t), int(r - l), int(b - t), True)
+        return True
+    except Exception:
+        return False

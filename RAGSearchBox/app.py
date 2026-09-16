@@ -21,6 +21,7 @@ import subprocess
 
 import answer_window
 import autorun
+import chat_panel
 import log as rsb_log
 import query_filter
 import settings as rsb_settings
@@ -59,7 +60,9 @@ class App:
         self.q = queue.Queue()
 
         self.scope = Scope(s.scope_folders, s.scope_recheck_min)
-        self.window = answer_window.AnswerWindow(root, s)
+        self.window = answer_window.AnswerWindow(root, s)     # 옛 방식(검색창 ?)
+        # §18 폴더 패널 — 지정 폴더를 열면 오른쪽에 뜨는 대화창
+        self.panel = chat_panel.ChatPanel(root, s, on_ask=self._on_panel_ask)
         self.dedup = query_filter.Dedup(s.dedup_sec)
 
         self.worker = None
@@ -82,11 +85,14 @@ class App:
         self.monitor = Monitor(s, self.scope,
                                lambda text, folders, anchor, hwnd:
                                    self.q.put(("query", text, folders, anchor, hwnd)),
-                               on_note=lambda kind, msg: self.q.put(("note", kind, msg)))
+                               on_note=lambda kind, msg: self.q.put(("note", kind, msg)),
+                               on_folder=lambda hwnd, folder:
+                                   self.q.put(("folder", hwnd, folder)))
         # §16 근거 목록 — 지금 답변이 어느 탐색기 창에서 나온 것인지 기억해 둔다
         self._answer_hwnd = None
         self.window.on_show_evidence = self._show_evidence
         self.window.on_restore = self._restore_search
+        self.panel.on_show_evidence = self._show_evidence
         self._quitting = False
         self._last_tooltip = ""
         # 예약해 둔 root.after 두 개(큐 처리·상태 갱신). 끝낼 때 취소한다.
@@ -166,6 +172,7 @@ class App:
         # 창을 옮기는 일은 tkinter 스레드에서만 할 수 있어 여기에 얹었다.
         try:
             self.window.follow()
+            self.panel.follow()
         except Exception:
             self.log.exception("패널 따라가기에서 예외")
 
@@ -187,25 +194,28 @@ class App:
         if kind == "query":
             self._on_query(ev[1], ev[2], ev[3], ev[4])
 
+        elif kind == "folder":
+            self._on_folder(ev[1], ev[2])
+
         elif kind == "state":
             state = ev[1]
             if state == "starting":
-                self.window.set_status("모델 준비 중 (첫 질문)")
+                self._ui().set_status("모델 준비 중 (첫 질문)")
             elif state == "busy":
-                self.window.set_status("검색 중")
+                self._ui().set_status("검색 중")
             self._update_tooltip(once=True)
 
         elif kind == "evidence":
-            self.window.set_evidence(ev[1], ev[2])
+            self._ui().set_evidence(ev[1], ev[2])
 
         elif kind == "token":
-            self.window.append_token(ev[1])
+            self._ui().append_token(ev[1])
 
         elif kind == "done":
-            self.window.finish(ev[1])
+            self._ui().finish(ev[1])
 
         elif kind == "raw":
-            self.window.show_raw(ev[1])
+            self._ui().show_raw(ev[1])
 
         elif kind == "sent":
             pass                       # 워커에 실제로 보낸 시점 — 로그는 워커가 남긴다
@@ -260,7 +270,9 @@ class App:
     #--------------------------------------------------------------
     def _on_error(self, msg):
         self.log.warning("오류: %s", msg)
-        if self.window.visible:
+        if self.panel.visible:
+            self.panel.show_error(msg)
+        elif self.window.visible:
             self.window.show_error(msg)
         else:
             self.tray.notify("RAGSearchBox", msg)
@@ -279,14 +291,73 @@ class App:
         # §16 근거 목록 결과는 트레이 풍선까지 띄울 일이 아니다. 창에 한 줄로 알린다.
         if kind == "evidence":
             self.log.info("근거 목록 표시: %s", msg[:60])
-            self.window.notice("근거 파일을 탐색기에 띄웠습니다")
+            self._ui().notice("근거 파일을 탐색기에 띄웠습니다")
             return
         if kind == "evidence_fail":
             self.log.info("근거 목록 실패: %s", msg)
-            self.window.notice(msg)
+            self._ui().notice(msg)
             return
         self.log.warning("감시 알림(%s): %s", kind, msg)
         self.tray.notify("RAGSearchBox", msg)
+
+    #--------------------------------------------------------------
+    # 지금 답을 보여 줄 화면 고르기
+    #=> 폴더 패널이 떠 있으면 거기로, 아니면 옛 답변 창으로 보낸다.
+    #   두 화면은 같은 이름의 메서드를 갖는다
+    #   (set_status·set_evidence·append_token·finish·show_raw·show_error·notice).
+    #
+    # -in: 없음
+    #
+    # -out: ChatPanel 또는 AnswerWindow
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _ui(self):
+        return self.panel if self.panel.visible else self.window
+
+    #--------------------------------------------------------------
+    # 탐색기가 보고 있는 폴더가 바뀌었다 (§18)
+    #=> 범위 안이면 그 창 옆에 패널을 띄우고, 범위 밖으로 나가면 내린다.
+    #   패널이 붙은 창은 앞에 없어도 계속 지켜보라고 감시 스레드에 알린다.
+    #
+    # -in: hwnd   = 탐색기 창
+    # -in: folder = 지금 폴더(범위 밖이거나 알 수 없으면 None)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_folder(self, hwnd, folder):
+        if not self.s.panel_enabled:
+            return
+        if folder:
+            self.panel.show_for(hwnd, folder)
+            if self.panel.visible and self.panel.target_hwnd == hwnd:
+                self.monitor.watch_window(hwnd)
+                self._answer_hwnd = hwnd
+                # 곧 물어볼 참이다 — 미리 올려 두면 첫 질문이 빨라진다(D7)
+                if self.worker and self.s.start_mode != "lazy":
+                    self.worker.ensure_started()
+        elif self.panel.visible and self.panel.target_hwnd == hwnd:
+            self.panel.hide()
+            self.monitor.watch_window(None)
+
+    #--------------------------------------------------------------
+    # 패널 입력 칸에서 질문을 보냈다 (§18)
+    #=> 검색창에서 온 질문과 같은 길로 흘려보낸다. 다만 ? 접두어는 필요 없다.
+    #
+    # -in: text = 사용자가 쓴 글
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_panel_ask(self, text):
+        question = query_filter.one_line(text)
+        if not question:
+            return
+        self.log.info("패널 질문: %r (폴더 %s)", question[:40], self.panel.folder)
+        if self.worker is None:
+            self.panel.show_error(self.worker_error or "SimpleRAG 를 찾지 못했습니다")
+            return
+        self.worker.ask(question)
 
     #--------------------------------------------------------------
     # "근거 파일 보기" (§16)
@@ -299,7 +370,11 @@ class App:
     # -out: error = 없음 (대상 창을 모르면 창에 한 줄로 알린다)
     #--------------------------------------------------------------
     def _show_evidence(self):
-        docs = [d for d in self.window._docs if d]
+        if self.panel.visible:
+            turn = self.panel.turns[-1] if self.panel.turns else None
+            docs = [d for d in (turn.docs if turn else []) if d]
+        else:
+            docs = [d for d in self.window._docs if d]
         if not self._answer_hwnd or not docs:
             self.window.notice("근거 파일을 알 수 없습니다")
             return
@@ -430,7 +505,8 @@ class App:
         for step, fn in (("감시", self.monitor.stop),
                          ("워커", (self.worker.shutdown if self.worker else lambda: None)),
                          ("트레이", self.tray.stop),
-                         ("창", self.window.close)):
+                         ("창", self.window.close),
+                         ("패널", self.panel.close)):
             try:
                 fn()
             except Exception:

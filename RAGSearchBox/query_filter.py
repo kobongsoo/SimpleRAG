@@ -57,22 +57,34 @@ def to_question(text, prefix="?", min_chars=2):
     if not s:
         return None, "접두어뿐"
 
-    # 워커는 한 줄만 읽는다 — 줄바꿈·탭을 공백으로 바꾸고 연속 공백을 접는다
-    s = " ".join(s.split())
-
-    # chat 의 슬래시 명령으로 읽히지 않게 앞의 '/' 를 뗀다
-    s = s.lstrip("/").strip()
+    s = one_line(s)
     if not s:
-        return None, "슬래시뿐"
-
+        return None, "내용 없음"
     if len(s) < min_chars:
         return None, "{}자 미만".format(min_chars)
+    return s, None
 
-    # 종료어와 똑같으면 워커가 꺼진다 — 뒤에 물음표를 붙여 질문으로 만든다
+
+#------------------------------------------------------------------
+# 워커에 보낼 한 줄로 손질하기
+#=> 검색창에서 온 질문과 패널 입력 칸에서 온 질문이 똑같은 손질을 거치게 모아 둔 것이다.
+#    1) 줄바꿈·탭을 공백으로 바꾸고 연속 공백을 접는다 — 워커는 한 줄씩 읽는다
+#    2) 앞의 '/' 를 뗀다 — chat 이 슬래시 명령으로 읽지 않게
+#    3) 글 전체가 종료어(exit·quit·종료)면 뒤에 물음표를 붙인다 — 워커가 꺼지지 않게
+#
+# -in: text = 사용자가 쓴 글(여러 줄이어도 된다)
+#
+# -out: 손질된 한 줄. 남는 것이 없으면 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def one_line(text):
+    s = " ".join((text or "").split())
+    s = s.lstrip("/").strip()
+    if not s:
+        return None
     if s.lower() in EXIT_WORDS:
         s = s + " ?"
-
-    return s, None
+    return s
 
 
 #------------------------------------------------------------------

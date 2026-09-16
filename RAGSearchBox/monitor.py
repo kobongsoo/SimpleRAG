@@ -147,16 +147,19 @@ class Monitor(threading.Thread):
     # -in: on_query = 질문이 확정되면 부를 함수 fn(text, folders, anchor, hwnd).
     #                 감시 스레드에서 불리므로 받는 쪽은 큐에 넣기만 해야 한다
     # -in: on_note  = 알릴 일이 있을 때 부를 함수 fn(kind, message) (없어도 된다)
+    # -in: on_folder= 탐색기가 보고 있는 폴더가 바뀌면 부를 함수 fn(hwnd, 폴더 또는 None).
+    #                 폴더가 None 이면 "범위 밖이거나 알 수 없음" 이라는 뜻이다 (§18)
     #
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
-    def __init__(self, settings, scope, on_query, on_note=None):
+    def __init__(self, settings, scope, on_query, on_note=None, on_folder=None):
         super().__init__(name="rsb-monitor", daemon=True)
         self.s = settings
         self.scope = scope
         self.on_query = on_query
         self.on_note = on_note or (lambda kind, msg: None)
+        self.on_folder = on_folder or (lambda hwnd, folder: None)
         self.log = rsb_log.get("monitor")
         self.armed = None
         self.status = ""
@@ -174,6 +177,10 @@ class Monitor(threading.Thread):
         # 메인 스레드는 부탁만 넣고 실제 일은 _tick 이 한다.
         self._requests = queue.Queue()
         self.evidence = None
+        # §18 폴더 감시 — 지금 보고 있는 폴더가 범위 안이면 패널을 띄우게 알린다
+        self._folder_seen = {}     # {hwnd: 마지막으로 알린 폴더}
+        self._last_folder_check = 0.0
+        self._watch_hwnd = None    # 패널이 붙어 있는 창(앞에 없어도 계속 지켜본다)
 
     #--------------------------------------------------------------
     # 스레드 본체
@@ -198,7 +205,9 @@ class Monitor(threading.Thread):
             self._locator = ExplorerLocator()
             self.evidence = EvidenceList(self._box)
 
-            if self.s.monitor_mode == 0:
+            if not self.s.searchbox_trigger:
+                self.log.info("검색창 감지는 꺼져 있다(Trigger.SearchBox=0) — 폴더 패널만 동작한다")
+            elif self.s.monitor_mode == 0:
                 self._install_hook()
             else:
                 self.log.info("Monitor Mode=1 — 훅 없이 포커스를 주기적으로 조회한다")
@@ -260,6 +269,14 @@ class Monitor(threading.Thread):
     def _tick(self):
         # 메인 스레드가 부탁한 일(근거 목록 표시·되돌리기)을 먼저 처리한다
         self._serve_requests()
+
+        # §18 폴더 패널 — 지금 보고 있는 폴더를 확인한다
+        if self.s.panel_enabled:
+            self._watch_folders()
+
+        # 아래는 옛 방식(검색창에 ? 입력). 꺼져 있으면 검색창을 찾는 일 자체를 하지 않는다.
+        if not self.s.searchbox_trigger:
+            return
 
         # Enter 의 "눌렸음" 비트는 읽으면 지워진다. 무장 전에 눌린 Enter 가
         # 나중에 뒤늦게 잡히지 않도록 무장 여부와 상관없이 매 주기 한 번 읽어 비운다.
@@ -369,6 +386,76 @@ class Monitor(threading.Thread):
     #--------------------------------------------------------------
     def restore_search(self, hwnd):
         self._requests.put(("restore", hwnd, None))
+
+    #--------------------------------------------------------------
+    # 지금 보고 있는 폴더 확인 (§18)
+    #=> 앞에 있는 탐색기 창과, 패널이 붙어 있는 창을 함께 본다.
+    #   앞에 없어도 붙어 있는 창은 계속 지켜봐야 한다 — 그 창이 다른 폴더로 가면
+    #   패널을 내려야 하기 때문이다.
+    #   폴더가 바뀐 창만 알린다(같은 폴더를 계속 알리면 화면이 깜빡인다).
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (조회 실패는 조용히 넘어간다)
+    #--------------------------------------------------------------
+    def _watch_folders(self):
+        now = time.monotonic()
+        if (now - self._last_folder_check) * 1000 < self.s.folder_poll_ms:
+            return
+        self._last_folder_check = now
+
+        targets = []
+        fg = foreground_explorer()
+        if fg:
+            targets.append(fg)
+        if self._watch_hwnd and self._watch_hwnd not in targets:
+            targets.append(self._watch_hwnd)
+
+        for hwnd in targets:
+            try:
+                paths, why = self._locator.folder_of(hwnd)
+            except Exception:
+                continue
+            known = [p for p in paths if p]
+            # ⚠️ 폴더를 "알 수 없음" 과 "범위 밖" 은 다르게 다룬다.
+            #    IShellWindows 조회가 가끔 빈 결과를 준다(실측: 방금 뜬 창에서 한두 번).
+            #    그것을 "범위 밖" 으로 읽으면 패널이 떴다 사라졌다 깜빡인다.
+            #    모르겠으면 지난 판단을 그대로 둔다.
+            resolved = bool(paths) and len(known) == len(paths)
+            if not resolved:
+                continue
+            ok = all(self.scope.contains(p)[0] for p in known)
+            folder = known[0] if ok else None
+            if self._folder_seen.get(hwnd) == folder:
+                continue
+            self._folder_seen[hwnd] = folder
+            rsb_log.diag(self.log, "폴더 바뀜: hwnd=%s → %s (%s)", hwnd, folder, why)
+            try:
+                self.on_folder(hwnd, folder)
+            except Exception:
+                self.log.exception("폴더 알림에서 예외")
+
+        # 닫힌 창의 기억은 버린다
+        if len(self._folder_seen) > 16:
+            try:
+                import win32gui
+                for h in [h for h in self._folder_seen if not win32gui.IsWindow(h)]:
+                    self._folder_seen.pop(h, None)
+            except Exception:
+                pass
+
+    #--------------------------------------------------------------
+    # 패널이 붙어 있는 창 알려 주기 (§18)
+    #=> 그 창은 앞에 없어도 계속 지켜본다.
+    #
+    # -in: hwnd = 탐색기 창(없으면 None)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def watch_window(self, hwnd):
+        self._watch_hwnd = hwnd
 
     #--------------------------------------------------------------
     # 질문처럼 보이는가 (가벼운 선검사)
