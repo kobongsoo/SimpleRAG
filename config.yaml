@@ -1,0 +1,38 @@
+﻿# SimpleRAG 설정 — 검색·청킹 계수 (REPORT §35)
+#
+# 우선순위: 환경변수 > 이 파일 > 코드 기본값
+# 찾는 위치: SIMPLERAG_CONFIG 로 지정한 파일 → <데이터 폴더>/config.yaml → <프로그램 폴더>/config.yaml
+#            (SIMPLERAG_CONFIG=- 이면 이 파일을 무시하고 코드 기본값을 쓴다)
+# 값을 비워 두거나(키: ) 줄 앞에 # 를 붙이면 코드 기본값을 쓴다.
+# 오타나 범위 밖 값은 무시하지 않고, 시작할 때 무엇이 틀렸는지 알려 주고 멈춘다.
+#
+# 아래 값은 모두 실측으로 정한 현재 기본값이다(근거는 doc/04_구현_명세.md §11).
+#
+# ⚠️ chunk 항목을 바꾸면 전체 재인덱싱이 필요하다:  index --dir <폴더> --rebuild
+#    청크 설정이 인덱스와 다른 채로 증분 index 를 돌리면, 옛 청크와 섞이지 않게 거부한다.
+# ⚠️ bm25_k1 / bm25_b 는 다음 index 실행 때(증분이어도 BM25 는 전체를 다시 만든다) 반영된다.
+#    나머지(retrieval 의 후보 수·rrf_k·dedup, rerank, generation)는 다음 실행부터 바로 반영된다.
+
+chunk:
+  tokens: 128                   # 청크 크기(토큰, e5 토크나이저 기준, [문서명 > 절] 접두 포함). 16~510
+  overlap: 16                   # 긴 절을 안에서 쪼갤 때만 겹치는 토큰 수. 비우면 tokens/8(최소 8)
+  mode: structured              # structured(절 경계를 지켜 자름) | fixed(고정 크기로 자름)
+  min_tokens: 16                # 이보다 짧은 꼬리 조각은 버린다
+  table_header_max_tokens: 64   # 표 조각에 다시 붙이는 머리글 줄의 최대 길이. 넘으면 붙이지 않는다(0 = 안 붙임)
+
+retrieval:
+  dense_top_k: 10               # 코사인(dense) 검색 후보 수
+  bm25_top_k: 10                # BM25 검색 후보 수 (0 이면 BM25 를 쓰지 않고 dense 만)
+  rrf_k: 60                     # RRF 순위 완충 상수 — 점수 = Σ 1 / (rrf_k + 순위)
+  bm25_k1: 1.5                  # BM25 단어 빈도 포화 계수
+  bm25_b: 0.75                  # BM25 문서 길이 정규화 (0~1)
+  dedup: true                   # 내용이 같은 청크(공백 무시)를 근거에서 뺀다
+
+rerank:
+  mode: auto                    # auto(iGPU 로 생성할 때만 켬) | on | off
+  pool: 10                      # 리랭커에 넣는 후보 수 (RRF·사본 제거 후 상위 N). 5→10: 506문항 +16, TTFT +0.36초(REPORT §35.9)
+
+generation:
+  top_k: 3                      # sLLM 에 넣는 근거 청크 수 (리랭킹 후 상위 N)
+  max_tokens: 200               # 답변 토큰 상한. 16~1024
+  prompt: v0                    # 시스템 지시문. v0(채택) | v4(기각 — 506문항 377→358, REPORT §40)

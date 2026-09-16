@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAGSearchBox 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa;
+  --surface: #ffffff;
+  --sunken: #eceff4;
+  --ink: #19212d;
+  --ink-2: #3c4656;
+  --muted: #647083;
+  --rule: #d9dee6;
+  --accent: #2c5aa0;
+  --accent-soft: #e3ebf7;
+  --good: #2a7a57;
+  --good-soft: #e2f1ea;
+  --warn: #a8701a;
+  --warn-soft: #f7ecd8;
+  --bad: #b0463b;
+  --bad-soft: #f6e3e0;
+  --bar-track: #e3e7ee;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c; --bar-track: #26303c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c; --bar-track: #26303c;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 20px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3, h4 { text-wrap: balance; line-height: 1.3; margin: 0; }
+
+.shell { max-width: 1120px; margin: 0 auto; padding-block: 48px 80px; display: grid; grid-template-columns: 1fr; gap: 40px; }
+@media (min-width: 1040px) { .shell { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; } }
+
+.toc { display: none; }
+@media (min-width: 1040px) { .toc { display: block; position: sticky; top: 32px; align-self: start; font-size: 13.5px; } }
+.toc p { margin: 0 0 10px; font-size: 11.5px; letter-spacing: 0.08em; color: var(--muted); }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; border-left: 1px solid var(--rule); }
+.toc a { display: block; padding-left: 14px; color: var(--ink-2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+
+main { min-width: 0; max-width: 840px; display: grid; gap: 56px; }
+
+header.doc { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+.eyebrow { font-size: 12px; letter-spacing: 0.1em; color: var(--accent); font-weight: 600; }
+h1 { font-size: clamp(28px, 4vw, 38px); font-weight: 700; letter-spacing: -0.01em; }
+.lede { margin: 0; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; scroll-margin-top: 24px; }
+section > * { min-width: 0; }
+h2 { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 12px; }
+h2 .sec { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--muted); }
+h3 { font-size: 16.5px; font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+.note { color: var(--muted); font-size: 13.5px; }
+
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; min-width: 0; }
+.twocol { display: grid; gap: 18px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .twocol { grid-template-columns: 1fr 1fr; } }
+.twocol > * { min-width: 0; }
+.panel h3 { margin-bottom: 8px; }
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; color: var(--ink-2); }
+
+/* 확정 사항 띠 */
+.decided { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .decided { grid-template-columns: 1fr 1fr; } }
+.decided > div { background: var(--good-soft); border-radius: 10px; padding: 14px 16px; min-width: 0; font-size: 14px; color: var(--ink-2); }
+.decided b { color: var(--good); display: block; font-size: 13px; margin-bottom: 2px; }
+
+/* 표 */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; background: var(--sunken); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .id, td code.id { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+.wide-table table { min-width: 760px; }
+
+/* 칩 */
+.chip { display: inline-block; font-size: 11.5px; line-height: 1; padding: 5px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+.chip.keep, .chip.done { background: var(--good-soft); color: var(--good); }
+.chip.change { background: var(--warn-soft); color: var(--warn); }
+.chip.drop { background: var(--bad-soft); color: var(--bad); }
+.chip.new { background: var(--accent-soft); color: var(--accent); }
+.chip.wait { background: var(--sunken); color: var(--ink-2); }
+
+/* 흐름도 */
+.flow { display: grid; gap: 0; }
+.lane { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-top: 1px dashed var(--rule); align-items: start; }
+.lane:first-child { border-top: 0; padding-top: 0; }
+.lane .who { font-size: 12.5px; color: var(--muted); padding-top: 8px; }
+.lane .who b { display: block; color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.boxes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.box { background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 11px; font-size: 13px; color: var(--ink-2); }
+.box b { color: var(--ink); font-weight: 600; }
+.box.hot { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.box.hot b { color: var(--accent); }
+.arrow { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+@media (max-width: 560px) { .lane { grid-template-columns: 1fr; gap: 6px; } .lane .who { padding-top: 0; } }
+
+/* 상태 전이 */
+.states { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.state { font-family: var(--mono); font-size: 12.5px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); }
+.state.ok { background: var(--good-soft); border-color: transparent; color: var(--good); }
+.state.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+
+/* 타임라인 */
+.timeline { display: grid; gap: 10px; }
+.tl-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 58px; gap: 12px; align-items: center; font-size: 13.5px; }
+.tl-row .val { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.tl-track { position: relative; height: 12px; background: var(--bar-track); border-radius: 6px; }
+.tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: var(--accent); }
+.tl-seg.warm { background: var(--warn); }
+.tl-seg.ev { background: var(--good); }
+.tl-scale { display: grid; grid-template-columns: 150px minmax(0, 1fr) 58px; gap: 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.tl-scale span.s { display: flex; justify-content: space-between; }
+@media (max-width: 520px) { .tl-row, .tl-scale { grid-template-columns: 96px minmax(0, 1fr) 44px; gap: 8px; } }
+
+/* 단계 */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+.step { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 4px 14px; padding: 16px 18px; border-top: 1px solid var(--rule); }
+.step:first-child { border-top: 0; }
+.step .sid { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent); padding-top: 2px; }
+.step h4 { font-size: 15px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.step .body { display: grid; gap: 8px; min-width: 0; }
+.step dl { margin: 0; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; }
+.step dt { color: var(--muted); }
+.step dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 520px) { .step { grid-template-columns: 1fr; } .step dl { grid-template-columns: 1fr; gap: 0; } .step dt { margin-top: 6px; } }
+
+/* 결정 */
+.decisions { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.decisions li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+.decisions li .body { display: grid; gap: 6px; min-width: 0; }
+.decisions li p { color: var(--ink-2); }
+.decisions .rec { font-size: 13.5px; color: var(--good); }
+
+/* 코드 */
+pre { margin: 0; overflow-x: auto; background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12.8px; line-height: 1.65; color: var(--ink-2); }
+pre .c { color: var(--muted); }
+pre b { color: var(--ink); font-weight: 500; }
+
+/* 창 모형 */
+.mock { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); overflow: hidden; font-size: 13px; max-width: 460px; box-shadow: 0 6px 24px rgba(0,0,0,0.06); }
+.mock .bar { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px; background: var(--sunken); border-bottom: 1px solid var(--rule); font-weight: 600; }
+.mock .bar span { font-weight: 400; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.mock .q { padding: 10px 12px 4px; font-weight: 600; }
+.mock .st { padding: 0 12px 8px; color: var(--muted); font-size: 12px; }
+.mock .ev { margin: 0 12px; border-top: 1px solid var(--rule); padding: 8px 0; display: grid; gap: 6px; }
+.mock .ev div { color: var(--ink-2); }
+.mock .ev small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.mock .ans { margin: 0 12px; border-top: 1px solid var(--rule); padding: 8px 0; color: var(--ink); }
+.mock .ans em { font-style: normal; color: var(--warn); font-size: 11.5px; display: block; margin-bottom: 4px; }
+.mock .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); background: var(--sunken); color: var(--muted); font-size: 12px; }
+.mock .btns { display: flex; gap: 6px; }
+.mock .btns i { font-style: normal; border: 1px solid var(--rule); background: var(--surface); border-radius: 5px; padding: 1px 8px; color: var(--ink-2); }
+
+footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print { .toc { display: none; } .shell { grid-template-columns: 1fr; padding-block: 0; } section { break-inside: avoid-page; } }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<nav class="toc" aria-label="목차">
+  <p>목차</p>
+  <ol>
+    <li><a href="#goal">목표와 범위</a></li>
+    <li><a href="#ref">참고 소스 분석</a></li>
+    <li><a href="#arch">전체 구조</a></li>
+    <li><a href="#detect">검색창 감지</a></li>
+    <li><a href="#trigger">검색어 확정 감지</a></li>
+    <li><a href="#worker">상주 워커</a></li>
+    <li><a href="#ui">답변 창·트레이</a></li>
+    <li><a href="#modules">모듈 구성</a></li>
+    <li><a href="#ini">설정 파일</a></li>
+    <li><a href="#error">오류 처리</a></li>
+    <li><a href="#perf">응답 시간 예산</a></li>
+    <li><a href="#build">빌드·배포</a></li>
+    <li><a href="#poc">위험과 사전 검증</a></li>
+    <li><a href="#decide">결정 사항</a></li>
+    <li><a href="#order">구현 순서</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="doc">
+  <div class="eyebrow">SimpleRAG · 설계서 · Windows 탐색기 연동</div>
+  <h1>RAGSearchBox 설계서</h1>
+  <p class="lede">사용자가 Windows 탐색기 검색창에 <code>?</code> 로 시작하는 질문을 입력하고 Enter 를 누르면, 상주 프로그램 <code>RAGSearchBox.exe</code> 가 이를 알아채
+  미리 모델을 올려 둔 SimpleRAG 워커(<code>simplerag.exe chat</code>)에 질문을 넘기고, 근거와 AI 답변을 작은 창에 띄운다. 검색창 감지 방식은 MDriveSearchBox(C++/MFC)에서 검증된 로직을
+  Python 으로 옮기고, 검색어 확정 감지·워커 관리·답변 표시 부분을 새로 설계한다.</p>
+  <div class="meta">
+    <span><b>작성</b> 2026-09-15</span>
+    <span><b>갱신</b> 2026-09-15 · D1 <code>?</code> 접두어 · D2 모델 상주 · D3 텍스트 해석 · D4 공유 venv · D5 자동 시작 선택 등록 · D6 지정 폴더 · D7 boot+60분 확정 (전 항목 결정 완료)</span>
+    <span><b>위치</b> <code>SimpleRAG/RAGSearchBox/</code> (Python)</span>
+    <span><b>참고</b> <code>C:\svn\SRC_V10.0B20170828\MDriveSearchBox</code></span>
+    <span><b>상태</b> P0 사전 검증 완료(2026-09-15~16, Win11 25H2) — D8(가) 적용·재측정까지 반영. 남은 수동 확인은 §15 S0</span>
+  </div>
+</header>
+
+<!-- 1 -->
+<section id="goal">
+  <h2><span class="sec">1</span>목표와 범위</h2>
+  <div class="decided">
+    <div><b>D1 확정 — <code>?</code> 접두어가 있을 때만 실행</b><code>?연차 이월 기준</code> 은 질문으로 처리하고, <code>보고서</code> 같은 일반 파일 검색에는 반응하지 않는다.</div>
+    <div><b>D2 확정 — 모델을 올려 두는 방식</b>SimpleRAG <code>chat</code> 을 워커로 한 번 띄워 두고 질문마다 재사용한다. 질문당 예열(약 6.6초)이 사라진다.</div>
+    <div><b>D3 확정 — chat 출력 텍스트 해석</b>SimpleRAG 는 수정하지 않는다. 구분선·프롬프트 문구를 상태 기계로 해석하고 샘플 테스트로 지킨다.</div>
+    <div><b>D4 확정 — SimpleRAG <code>.venv</code> 공유</b>기존 <code>.venv</code> 에 <code>comtypes</code> 만 추가한다. 빌드 때 무거운 패키지가 딸려 들어가지 않게 제외 목록을 둔다.</div>
+    <div><b>D6 확정 — 지정한 폴더 안에서만 동작</b>INI <code>[Scope] Folders</code> 에 적은 폴더(하위 폴더 포함)를 보고 있는 탐색기에서만 <code>?</code> 질문을 받는다. 비어 있으면 동작하지 않는다.</div>
+    <div><b>D5 확정 — 로그인 시 자동 시작은 설치 때 선택</b>HKCU <code>Run</code> 에 등록한다. 기본은 등록하지 않으며, 설치 명령 옵션이나 트레이 메뉴로 켜고 끈다(§12).</div>
+    <div><b>D7 확정 — 시작 때 예열, 60분 유휴 시 해제</b><code>StartMode=boot</code> · <code>IdleUnloadMin=60</code>. P0-8 실측 결과로만 조정한다.</div>
+  </div>
+  <div class="twocol">
+    <div class="panel">
+      <h3>하는 것</h3>
+      <ul class="plain">
+        <li>백그라운드에 창 없이 상주하며 탐색기 검색창을 감시한다</li>
+        <li>검색창에서 Enter 로 확정된 검색어가 <code>?</code> 로 시작하고, 그 탐색기가 <b>지정 폴더 안</b>을 보고 있으면 질문으로 받는다</li>
+        <li>SimpleRAG <code>chat</code> 워커 프로세스를 콘솔 없이 띄워 모델을 올려 두고, 표준입력으로 질문을 넘긴다</li>
+        <li>출력을 실시간으로 읽어 <b>근거 → 답변 스트리밍 → 소요 시간</b> 순서로 답변 창에 표시한다</li>
+        <li>워커 수명 관리 — 시작·준비 확인·죽으면 재시작·오래 안 쓰면 내려서 메모리와 인덱스 잠금 해제</li>
+        <li>트레이 아이콘으로 워커 상태 표시, "인덱싱 전 워커 내리기" 메뉴 제공</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>하지 않는 것 (1단계)</h3>
+      <ul class="plain">
+        <li>SimpleRAG 코드 수정 — 기존 <code>chat</code> CLI 를 그대로 워커로 쓰고 출력은 텍스트로 해석한다(D3)</li>
+        <li>검색 대상을 지정 폴더로 좁히기 — 폴더 제한은 <b>실행 조건</b>일 뿐, 검색은 인덱스 전체에서 한다(§5-1)</li>
+        <li>SimpleRAG 를 RAGSearchBox 프로세스 안에 import — 이유는 §6</li>
+        <li>탐색기 파일 검색을 막거나 대체하기 — 탐색기 검색은 원래대로 돈다</li>
+        <li>셸 확장(DLL) 주입, 저수준 키보드 훅(<code>WH_KEYBOARD_LL</code>) 사용</li>
+        <li>탐색기 설정 변경 — MDriveSearchBox 가 켜던 "제목 표시줄에 전체 경로 표시"는 쓰지 않는다</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="ref">
+  <h2><span class="sec">2</span>참고 소스 분석 — MDriveSearchBox</h2>
+  <p>MDriveSearchBox 는 <b>검색창에 포커스가 들어오는 순간</b>을 잡아, 현재 폴더가 M드라이브면 M드라이브 검색 UI 를 소켓으로 요청한다.
+  검색어는 읽지 않는다. 몇 차례 현장 문제(D2~D8)를 겪으며 다듬은 감지 로직이 핵심 자산이다.</p>
+
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>MDriveSearchBox 요소</th><th>하는 일</th><th>RAGSearchBox 에서</th></tr></thead>
+      <tbody>
+        <tr><td><code class="id">IsAppRunning</code> (CreateMutex)</td><td>중복 실행 방지</td><td><span class="chip keep">유지</span> <code>win32event.CreateMutex</code> — 워커가 두 개 뜨면 인덱스 잠금 충돌이라 더 중요</td></tr>
+        <tr><td><code class="id">ExplorerMonitorThreadFunc</code></td><td>감시 스레드. 100ms 대기 + 메시지 펌프, 종료 이벤트</td><td><span class="chip keep">유지</span> 같은 구조를 Python 스레드로</td></tr>
+        <tr><td>WinEvent 모드 (기본, INI Mode=0)</td><td><code>SetWinEventHook(EVENT_OBJECT_FOCUS)</code> 후 전경 창이 탐색기일 때만 UIA 조회</td><td><span class="chip keep">유지</span> 기본 방식</td></tr>
+        <tr><td>UIA 포커스 핸들러 (Mode=1)</td><td><code>AddFocusChangedEventHandler</code> — 시스템 전체 UIA 구독</td><td><span class="chip keep">유지</span> 선택 사항. Excel 등 성능 저하 이유로 기본 아님</td></tr>
+        <tr><td><code class="id">IsInsideFileExplorerSearchBox</code></td><td>Win7/10: AutomationId <code>SearchEditBox</code> · Win11: 부모 최대 4단계에서 <code>FileExplorerSearchBox</code>, <code>CabinetWClass</code> 에서 멈춤</td><td><span class="chip keep">유지</span> 그대로 옮김. 주소창(<code>PART_AutoSuggestBox</code>) 오탐 방지 규칙 포함</td></tr>
+        <tr><td>[D3] 입력 기반 폴링 (<code>GetLastInputInfo</code>)</td><td>WinEvent 가 XAML 포커스를 놓치는 빌드 대비, 최근 입력이 있을 때만 <code>GetFocusedElement</code></td><td><span class="chip keep">유지</span></td></tr>
+        <tr><td>[D8] rising-edge · 복귀 grace · [D2] 1초 중복 제거</td><td>검색 UI 가 닫히며 포커스가 되돌아올 때 재실행되는 것을 막음</td><td><span class="chip change">변경</span> 포커스가 아니라 <b>Enter 확정</b>이 트리거라 필요성이 줄어듦. "무장(armed)" 상태 판정에만 사용</td></tr>
+        <tr><td><code class="id">OnMDriveSearchBoxFocused</code> (IShellWindows)</td><td>탐색기 HWND → <code>LocationURL</code> → DOS 경로, Win11 탭 판별</td><td><span class="chip keep">유지</span> 범위 판정(D6)의 핵심. 검색 결과 화면은 URL 이 비므로 탭별 마지막 폴더를 기억(P0-9)</td></tr>
+        <tr><td>M드라이브 경로 검사 (<code>M:\</code> · <code>\\MDRIVEV10</code> 접두 비교)</td><td>현재 폴더가 M드라이브일 때만 동작</td><td><span class="chip change">변경</span> 같은 자리에서 "지정 폴더 아래인가"를 검사. 접두 비교는 경로 경계까지 맞춘다(§5-1)</td></tr>
+        <tr><td><code class="id">SetExplorerCabinetStateFullPath(TRUE)</code></td><td>사용자 탐색기 설정을 전역으로 바꿈</td><td><span class="chip drop">제외</span> 부작용이 커서 쓰지 않음. 탭 판별은 있는 설정 그대로</td></tr>
+        <tr><td><code class="id">CallMDriveSearch</code> + 공유 메모리</td><td>M드라이브 본체(상주 서버)의 포트를 읽고 TCP 로 검색 요청</td><td><span class="chip change">대체</span> 상주 대상이 SimpleRAG <code>chat</code> 워커로 바뀌고, 통신은 표준입출력 파이프</td></tr>
+        <tr><td>폴더 뷰로 포커스 옮기기 (AttachThreadInput + SetFocus)</td><td>검색 UI 닫힌 뒤 검색창으로 포커스가 돌아와 재실행되는 문제 방지</td><td><span class="chip drop">제외</span> 답변 창이 포커스를 뺏지 않게 해서 필요 없게 함</td></tr>
+        <tr><td>— (없음)</td><td>—</td><td><span class="chip new">신규</span> 검색어 읽기 · <code>?</code> 접두어 · Enter 확정 감지 · 워커 수명 관리 · 출력 해석 · 답변 창 · 트레이</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="arch">
+  <h2><span class="sec">3</span>전체 구조</h2>
+  <p>프로세스는 둘이다 — 가벼운 <b>RAGSearchBox.exe</b>(감시·UI)와 무거운 <b>simplerag.exe chat</b>(모델 상주 워커). RAGSearchBox 안의 UI(tkinter)는 메인 스레드에서만 다루고,
+  다른 스레드는 <b>큐에 이벤트만 넣는다</b>. MFC 판의 <code>PostMessage(WM_MDRIVE_SEARCH_BOX_FOCUSED)</code> 역할을 <code>queue.Queue</code> 가 맡는다.</p>
+
+  <div class="panel flow" role="img" aria-label="스레드와 프로세스별 처리 흐름">
+    <div class="lane">
+      <div class="who"><b>감시 스레드</b>monitor.py</div>
+      <div class="boxes">
+        <span class="box">WinEvent 포커스</span><span class="arrow">→</span>
+        <span class="box">전경=탐색기?</span><span class="arrow">→</span>
+        <span class="box">UIA 검색창 판정</span><span class="arrow">→</span>
+        <span class="box"><b>armed</b></span><span class="arrow">→</span>
+        <span class="box hot"><b>Enter 확정</b> + 검색어 읽기</span><span class="arrow">→</span>
+        <span class="box">큐: <code>query</code></span>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="who"><b>메인 스레드</b>app.py · tkinter</div>
+      <div class="boxes">
+        <span class="box">큐 확인 (50ms)</span><span class="arrow">→</span>
+        <span class="box"><code>?</code> 접두어·중복·범위 검사</span><span class="arrow">→</span>
+        <span class="box hot"><b>답변 창 열기</b></span><span class="arrow">→</span>
+        <span class="box">워커에 질문 요청</span><span class="arrow">→</span>
+        <span class="box">이벤트대로 갱신</span>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="who"><b>워커 관리 스레드</b>rag_worker.py</div>
+      <div class="boxes">
+        <span class="box">워커 상태 기계</span><span class="arrow">→</span>
+        <span class="box">프롬프트 <code>질문&gt;</code> 보이면 stdin 에 한 줄</span><span class="arrow">→</span>
+        <span class="box">stdout 해석</span><span class="arrow">→</span>
+        <span class="box">큐: <code>evidence</code> · <code>token</code> · <code>done</code></span>
+      </div>
+    </div>
+    <div class="lane">
+      <div class="who"><b>워커 프로세스</b>simplerag.exe chat</div>
+      <div class="boxes">
+        <span class="box">시작 시 1회 예열 (약 6.6초)</span><span class="arrow">→</span>
+        <span class="box"><code>질문&gt;</code> 대기</span><span class="arrow">→</span>
+        <span class="box">검색·리랭킹·생성</span><span class="arrow">→</span>
+        <span class="box">다시 <code>질문&gt;</code></span>
+      </div>
+    </div>
+  </div>
+  <p class="note">이벤트 이름을 SimpleRAG <code>pipeline.answer()</code> 의 이벤트(<code>evidence</code> / <code>token</code> / <code>done</code>)와 맞춘다.
+  나중에 워커를 CLI 대신 기계용 서버 모드로 바꾸어도 답변 창 코드는 바뀌지 않는다.</p>
+</section>
+
+<!-- 4 -->
+<section id="detect">
+  <h2><span class="sec">4</span>검색창 감지 — MDriveSearchBox 로직 옮기기</h2>
+  <p>동작 규칙은 원본을 그대로 따른다. Python 에서 달라지는 것은 COM·Win32 호출 수단뿐이다.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>기능</th><th>C++ 원본</th><th>Python 수단</th></tr></thead>
+      <tbody>
+        <tr><td>COM 초기화 (스레드별)</td><td><code>CoInitialize</code></td><td><code>pythoncom.CoInitialize()</code></td></tr>
+        <tr><td>UIA 객체</td><td><code>CoCreateInstance(CLSID_CUIAutomation)</code></td><td><code>comtypes.client.CreateObject</code> + <code>UIAutomationCore.dll</code> 타입 라이브러리 <span class="chip new">의존성 추가</span></td></tr>
+        <tr><td>포커스 WinEvent</td><td><code>SetWinEventHook(…, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)</code></td><td><code>ctypes</code> + <code>WINFUNCTYPE</code> 콜백</td></tr>
+        <tr><td>메시지 펌프 + 종료 대기</td><td><code>MsgWaitForMultipleObjects(100ms)</code> + <code>PeekMessage</code></td><td><code>win32event.MsgWaitForMultipleObjects</code> + <code>win32gui.PumpWaitingMessages</code></td></tr>
+        <tr><td>전경 창 클래스</td><td><code>GetForegroundWindow</code> / <code>GetClassNameW</code></td><td><code>win32gui</code> 같은 함수</td></tr>
+        <tr><td>마지막 입력 시각</td><td><code>GetLastInputInfo</code></td><td><code>win32api.GetLastInputInfo</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="twocol">
+    <div class="panel">
+      <h3>판정 규칙 (원본과 같음)</h3>
+      <ul class="plain">
+        <li>포커스 요소 ControlType 이 Edit 또는 Button 이 아니면 제외</li>
+        <li>AutomationId 가 <code>SearchEditBox</code> / <code>SearchBoxSearchButton</code> 이면 검색창 (Win7/10)</li>
+        <li>아니면 ControlView 부모를 최대 4단계 올라가며 <code>FileExplorerSearchBox</code> 를 찾는다 (Win11)</li>
+        <li><code>CabinetWClass</code> 에 닿으면 멈춘다 — 주소창 오탐 방지</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Python 이라서 조심할 점</h3>
+      <ul class="plain">
+        <li>WinEvent 콜백 객체를 전역 변수에 붙잡아 둔다. 가비지 수집되면 탐색기 이벤트 때 프로세스가 죽는다</li>
+        <li>훅을 건 스레드에서 메시지를 펌프해야 콜백이 온다(<code>OUTOFCONTEXT</code>)</li>
+        <li>콜백 안에서 오래 걸리는 일은 하지 않는다. UIA 조회 뒤 결과만 큐에 넣는다</li>
+        <li>COM 포인터는 만든 스레드 안에서만 쓴다</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="trigger">
+  <h2><span class="sec">5</span>검색어 확정 감지 — 신규</h2>
+  <p>원본은 "포커스가 들어왔다"가 곧 트리거였다. 여기서는 <b><code>?</code> 로 시작하는 질문을 다 쓰고 Enter 를 누른 순간</b>이 트리거다.
+  모델을 올려 두어 한 번 묻는 비용은 작아졌지만, 일반 파일 검색까지 답변 창이 뜨면 탐색기를 쓰기 불편하므로 <code>?</code> 접두어로 의도를 구분한다(D1).</p>
+
+  <ol class="steps">
+    <li class="step">
+      <div class="sid">T1</div>
+      <div class="body">
+        <h4>무장(armed) — 검색창에 포커스가 있음</h4>
+        <p>§4 판정으로 검색창 안이면 armed 로 바꾸고 그 탐색기 HWND 와 검색창 UIA 요소를 기억한다. 포커스가 검색창 밖으로 나가거나 전경 창이 탐색기가 아니면 즉시 해제한다(원본 D8 의 inside 상태 추적과 같은 방식).</p>
+        <p><b>이때 현재 폴더도 함께 구해 둔다(§5-1).</b> Enter 뒤에는 탐색기 위치가 검색 결과 화면(<code>LocationURL</code> 빈 문자열, P0-3·P0-9)으로 바뀌어 원래 폴더를 직접 읽을 수 없기 때문이다. 범위 밖이면 armed 로 만들지 않는다 — 이후 Enter 감시도 하지 않는다.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="sid">T2</div>
+      <div class="body">
+        <h4>확정 — armed 인 동안에만 Enter 확인 <span class="chip new">주 신호</span></h4>
+        <p>감시 루프(100ms)에서 armed 일 때만 <code>GetAsyncKeyState(VK_RETURN)</code> 를 부른다. 키보드 훅이 아니라 상태 조회라 원본 D3 의 "훅 없이" 원칙을 지킨다.
+        <b>누름 비트(0x8000)와 "지난 호출 뒤 눌렸음" 비트(0x1)를 둘 다</b> 본다 — 누름 비트만 보면 짧은 Enter 를 대부분 놓친다(P0-2).</p>
+        <dl>
+          <dt>값 읽기</dt><dd><b>armed 때 붙잡아 둔 검색창 요소</b>를 Enter 감지 약 80ms 뒤 다시 읽는다: ① <code>ValuePattern.CurrentValue</code> → ② <code>LegacyIAccessiblePattern.CurrentValue</code> → ③ 실패 시 확정 취소(로그만).
+          <b>"포커스 요소"를 읽으면 안 된다</b> — Win11 은 Enter 순간 포커스를 파일 목록으로 옮겨 파일 이름이 읽힌다(P0-1)</dd>
+          <dt>조합 중 글자</dt><dd>붙잡아 둔 요소를 Enter 뒤에 읽으면 조합 중이던 마지막 글자까지 들어온다(<code>?연차휴</code>, 유효 13/13). 입력 직후 곧바로 읽은 값은 늦어서(<code>?연ㅊ</code>) 쓰지 않는다</dd>
+          <dt>가벼운 선검사</dt><dd>armed 동안 값 앞글자가 <code>?</code> 가 아니면 Enter 폴링 자체를 건너뛴다 — 일반 파일 검색 때 하는 일이 거의 없다</dd>
+        </dl>
+      </div>
+    </li>
+    <li class="step">
+      <div class="sid">T3</div>
+      <div class="body">
+        <h4>보조 신호 — <s><code>search-ms:</code> 위치 변화</s> <span class="chip drop">P0-3 으로 제외</span></h4>
+        <p>실측(Win11 25H2)에서 검색을 실행해도 <code>LocationURL</code> 은 <code>search-ms:</code> 가 되지 않고 <b>빈 문자열</b>이 되었다(탭 제목은 <code>?범위 - C의 검색 결과</code>). 입력만으로는 바뀌지 않았다.
+        crumb 로 원래 폴더를 알아낼 수도 없으므로 보조 신호로 쓰지 않는다. T2 가 두 비트를 보면 짧은 Enter 도 모두 잡혀(P0-2) 보조 신호가 필요 없다.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="sid">T4</div>
+      <div class="body">
+        <h4>거르기와 정리 — 워커에 넘기기 전</h4>
+        <dl>
+          <dt>접두어</dt><dd>앞 공백을 뗀 값이 <code>?</code> 또는 전각 <code>？</code> 로 시작할 때만 통과. 앞쪽의 물음표와 공백을 모두 떼어 질문으로 쓴다(<code>?? 연차</code> → <code>연차</code>). INI <code>Prefix</code> 로 바꿀 수 있다</dd>
+          <dt>길이</dt><dd>접두어를 뗀 질문이 <code>MinChars</code>(기본 2) 미만이면 무시</dd>
+          <dt>한 줄로</dt><dd>줄바꿈·탭은 공백으로 바꾼다 — 워커는 <code>input()</code> 으로 한 줄씩 읽는다</dd>
+          <dt>chat 명령 회피</dt><dd>질문이 <code>/</code> 로 시작하면 앞의 <code>/</code> 를 뗀다(워커가 슬래시 명령으로 해석). 질문 전체가 <code>exit</code>·<code>quit</code>·<code>종료</code> 이면 뒤에 <code> ?</code> 를 붙여 워커 종료로 읽히지 않게 한다</dd>
+          <dt>중복</dt><dd>같은 질문이 <code>DedupSec</code>(기본 3초) 안에 다시 오면 무시 — 한 번의 Enter 가 두 비트로 두 번 읽히는 경우 포함</dd>
+          <dt>범위</dt><dd>T1 에서 구한 폴더가 지정 폴더 아래인지 <b>한 번 더</b> 확인한다(armed 뒤 같은 창에서 다른 폴더로 이동한 경우 대비). 범위 밖이면 조용히 무시하고 INFO 로그만</dd>
+        </dl>
+        <p class="note">참고: Windows 검색 문법에서 <code>?</code> 는 한 글자 와일드카드라, 탐색기 자체 파일 검색도 함께 돌지만 결과가 거의 없을 뿐 해는 없다.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h3 id="scope">5-1. 범위 판정 — 지정 폴더에서만 동작 (D6)</h3>
+  <p>원본의 "M드라이브 경로면 실행" 자리를 "지정 폴더 아래면 실행"으로 바꾼다. 폴더를 구하는 방법은 원본 <code>OnMDriveSearchBoxFocused</code> 를 그대로 따른다.</p>
+  <ol class="steps">
+    <li class="step"><div class="sid">R1</div><div class="body"><h4>현재 폴더 구하기</h4>
+      <dl>
+        <dt>창 찾기</dt><dd>IShellWindows 를 돌며 <code>HWND</code> 가 armed 탐색기와 같은 항목의 <code>LocationURL</code> 을 읽는다</dd>
+        <dt>경로 변환</dt><dd><code>file:///D:/문서/인사</code> → <code>D:\문서\인사</code>, <code>file://server/share</code> → <code>\\server\share</code> (원본 <code>ConvertURLPathToDosPath</code>)</dd>
+        <dt>이미 검색 결과</dt><dd>검색 결과 화면은 <code>LocationURL</code> 이 빈 문자열이고 crumb 도 없어 폴더를 읽을 수 없다(P0-9). 그래서 <b>탐색기 창·탭별로 마지막으로 본 <code>file:</code> 폴더를 기억</b>해 두고,
+          URL 이 비었으면서 <code>LocationName</code> 이 지금 검색창 값과 같을 때(= 검색 결과 화면)만 그 기억을 쓴다</dd>
+        <dt>가상 폴더</dt><dd>내 PC · 라이브러리 · 바탕화면 등 <code>LocationURL</code> 이 비었는데 검색 결과 화면도 아니면 <b>범위 밖</b> — 내 PC 는 빈 URL·이름 "내 PC" 로 확인(P0-9)</dd>
+      </dl></div></li>
+    <li class="step"><div class="sid">R2</div><div class="body"><h4>Win11 탭 — 활성 탭 가리기</h4>
+      <p>한 탐색기 창에 탭이 여러 개면 IShellWindows 항목도 여러 개가 같은 HWND 를 가진다. 원본 <code>GetExplorerActiveTabTitleIfMultiple</code> 로 활성 탭 제목을 얻어 경로(전체 경로 표시가 켜진 경우) 또는 폴더 이름과 비교한다.
+      원본과 달리 "전체 경로 표시" 설정을 켜지 않으므로, 이름이 같은 폴더가 다른 경로의 탭에 열려 있으면 후보가 여럿 남는다.</p>
+      <dl>
+        <dt>보수 규칙</dt><dd>후보가 여럿이면 <b>모두 범위 안일 때만</b> 범위 안으로 본다. 하나라도 범위 밖이거나 못 가리면 실행하지 않는다 — 원치 않는 폴더에서 뜨는 것보다 안 뜨는 편이 낫다</dd>
+        <dt>실측</dt><dd>첫 번째 <code>ShellTabWindowClass</code> 자식이 항상 활성 탭이었다(Ctrl+Tab 전환 포함). 이 PC 는 전체 경로 표시가 켜져 있어 같은 이름 폴더 두 탭(<code>A\docs</code> · <code>B\docs</code>)도 경로로 정확히 가려졌다. 설정이 꺼진 PC 의 보수 규칙은 미검증</dd>
+      </dl></div></li>
+    <li class="step"><div class="sid">R3</div><div class="body"><h4>포함 비교</h4>
+      <dl>
+        <dt>정규화</dt><dd>양쪽 모두 <code>os.path.normcase(os.path.abspath(…))</code>, 끝의 <code>\</code> 제거. 매핑 드라이브는 그대로 비교(드라이브 문자와 UNC 를 서로 바꾸지 않는다 — 둘 다 쓰면 INI 에 둘 다 적는다)</dd>
+        <dt>경계</dt><dd>같거나, <code>지정폴더 + "\"</code> 로 시작할 때만 포함. <code>D:\문서</code> 가 <code>D:\문서함</code> 을 포함하지 않게 한다</dd>
+        <dt>하위 폴더</dt><dd>포함 (<code>D:\문서</code> 지정 → <code>D:\문서\인사\2025</code> 도 동작)</dd>
+      </dl></div></li>
+    <li class="step"><div class="sid">R4</div><div class="body"><h4>설정이 비었을 때</h4>
+      <p><code>[Scope] Folders</code> 가 비었거나 적힌 폴더가 모두 존재하지 않으면 <b>아무 폴더에서도 동작하지 않는다</b>. 트레이 툴팁에 "범위 폴더 미설정 — RAGSearchBox.ini 의 [Scope] Folders 를 지정하세요" 를 띄우고, 워커도 올리지 않는다(쓸 수 없는 모델에 메모리를 쓰지 않게).
+      존재하지 않는 폴더는 경고 로그만 남기고 목록에서 뺀다(네트워크 드라이브가 늦게 붙는 경우를 위해 5분마다 다시 확인).</p></div></li>
+  </ol>
+  <p class="note">한계: 폴더 제한은 <b>질문을 받을지</b>만 정한다. chat 출력(D3 텍스트 해석)에는 근거의 폴더 정보가 없어 근거를 지정 폴더 것으로 거를 수 없다 — 지정 폴더와 인덱싱 폴더를 맞춰 두는 것이 운영 규칙이다.
+  인덱스에 범위 밖 문서가 섞여 있으면 답변 창 근거에 그 문서가 나올 수 있다.</p>
+</section>
+
+<!-- 6 -->
+<section id="worker">
+  <h2><span class="sec">6</span>상주 워커 — SimpleRAG chat 을 모델 올려 둔 채 재사용</h2>
+
+  <h3>방식 선택</h3>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>방식</th><th>장점</th><th>단점</th><th>판정</th></tr></thead>
+      <tbody>
+        <tr><td><b><code>simplerag.exe chat</code> 을 하위 프로세스로 상주</b></td><td>SimpleRAG 무수정 · 프로세스 분리(llama.cpp 가 죽어도 감시는 산다) · GIL 경합 없음 · RAGSearchBox.exe 가 가벼움</td><td>사람용 출력 문구를 해석해야 함 · 생성 중 취소 신호를 보낼 수 없음(콘솔 없음)</td><td><span class="chip done">채택</span></td></tr>
+        <tr><td>RAGSearchBox 안에서 <code>simplerag.warmup.App</code> 직접 import</td><td>이벤트를 파싱 없이 받음 · 토큰 단위 취소 가능</td><td>exe 에 llama.cpp·onnxruntime·모델 경로가 전부 묶임 · 생성 중 GIL 점유로 UI·감시 스레드가 끊김 · COM 스레드와 네이티브 런타임이 한 프로세스에서 충돌하면 상주 앱 전체가 죽음</td><td><span class="chip drop">제외</span></td></tr>
+        <tr><td>SimpleRAG 에 <code>serve</code>(JSON 줄 입출력) 명령 추가</td><td>파싱이 튼튼 · 근거에 파일 경로까지 전달 가능</td><td>SimpleRAG 수정 필요</td><td><span class="chip drop">제외</span> D3 — 텍스트 해석 확정</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>워커 상태 기계</h3>
+  <div class="panel">
+    <div class="states" role="img" aria-label="워커 상태 전이">
+      <span class="state">STOPPED</span><span class="arrow">→ 시작</span>
+      <span class="state">STARTING</span><span class="arrow">→ 첫 <code>질문&gt;</code></span>
+      <span class="state ok">READY</span><span class="arrow">⇄ 질문 / 프롬프트</span>
+      <span class="state">BUSY</span>
+    </div>
+    <ul class="plain" style="margin-top:12px">
+      <li><b>STOPPED → STARTING</b>: 앱 시작 시(<code>StartMode=boot</code>, 기본) 또는 첫 질문 때(<code>lazy</code>) 워커를 띄운다</li>
+      <li><b>STARTING → READY</b>: stdout 에 첫 프롬프트 <code>질문&gt; </code> 가 보이면 준비 완료. 그 전의 "준비 완료 (…초) — N청크", "생성 iGPU / 리랭킹 켬" 줄은 트레이 상태에 표시. 첫 실행은 CPU/iGPU 측정이 끼어 오래 걸릴 수 있어 <code>StartTimeoutSec</code> 기본 180초</li>
+      <li><b>READY → BUSY</b>: 질문 한 줄을 stdin 에 쓴다. <b>프롬프트가 보인 뒤에만 쓴다</b> — 출력이 어느 질문의 것인지 섞이지 않게</li>
+      <li><b>BUSY → READY</b>: 다음 <code>질문&gt; </code> 가 보이면 그 질문의 <code>done</code> 을 낸다</li>
+      <li><span class="state bad">DEAD</span> 워커가 스스로 끝나면: 대기 중 질문은 오류로 알리고, 5분에 3회까지 자동 재시작. 넘으면 STOPPED 로 두고 트레이에 경고</li>
+      <li><b>READY → STOPPED (유휴 해제)</b>: <code>IdleUnloadMin</code>(기본 60분) 동안 질문이 없으면 stdin 에 <code>exit</code> 를 보내 정상 종료 — 메모리 약 2.5GB 와 인덱스 잠금을 돌려준다(종료 약 1.8초, 직후 <code>status</code> 가 인덱스를 연다 — P0-8). 다음 질문 때 다시 예열</li>
+    </ul>
+  </div>
+
+  <h3>실행</h3>
+<pre><span class="c"># rag_worker.py — 개념 코드 (구현 아님)</span>
+cmd = [<b>simplerag_exe</b>, "chat"]
+if no_stream: cmd.append("--no-stream")
+proc = subprocess.Popen(
+    cmd, cwd=exe_dir,                                  <span class="c"># 데이터 루트 = exe 폴더 (config._data_root)</span>
+    stdin=PIPE, stdout=PIPE, stderr=PIPE, bufsize=0,
+    creationflags=CREATE_NO_WINDOW)                     <span class="c"># 콘솔 창 안 띄움 — 숨긴 콘솔과 동작 차이 없음 (P0-5)</span>
+                                                        <span class="c"># PYTHONUNBUFFERED · PYTHONIOENCODING 은 넣지 않는다: 동결 exe 가 무시한다 (P0-4)</span>
+
+<span class="c"># 질문 보내기 — READY 일 때만. stdin 은 반드시 cp949 (P0-4)</span>
+proc.stdin.write((question + "\n").encode("cp949", errors="replace")); proc.stdin.flush()
+<span class="c"># UTF-8 로 보내면 워커가 cp949 로 풀어 깨진 문자(서로게이트)가 생기고, 토크나이저 TypeError 로 워커 전체가 죽는다</span></pre>
+  <div class="panel">
+    <h3>P0-4 재측정 — D8(가) 적용 후 근거가 먼저 온다 <span class="chip keep">해결</span></h3>
+    <p>동결된 exe 는 파이프로 연결되면 stdout 을 블록 버퍼링하고 <code>PYTHONUNBUFFERED</code> 환경변수도 무시한다. 그래서 <b>빌드 시점에</b> 껐다 —
+    <code>build_exe.py</code> 의 PyInstaller 명령에 <code>--python-option u</code> 를 넣고 다시 빌드했다(2026-09-16). SimpleRAG 코드는 고치지 않았다.</p>
+    <div class="table-wrap" style="margin-top:12px">
+      <table>
+        <thead><tr><th>RAGSearchBox 가 받는 시각</th><th>재빌드 전 (30건)</th><th>재빌드 후 (10건)</th></tr></thead>
+        <tbody>
+          <tr><td>근거</td><td class="n">6.6s — 첫 글자와 한 덩어리</td><td class="n"><b>1.07s</b> (0.74 ~ 1.79)</td></tr>
+          <tr><td>답변 첫 글자</td><td class="n">6.6s</td><td class="n">6.98s (4.63 ~ 9.84)</td></tr>
+          <tr><td>근거가 따로 먼저 도착</td><td class="n">0 / 30</td><td class="n"><b>10 / 10</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px">근거 도착이 SimpleRAG 자체 측정(중앙값 1.07초)과 같아져 2단계 응답이 살아났다.
+    <b>남은 지연</b>: 답변 스트리밍은 <code>StreamWriter</code> 가 끝 90자를 붙들어 두어 CLI 자체 첫 글자(중앙값 2.79초)보다 약 4초 늦게 시작한다. 근거가 먼저 뜨므로 1단계에서는 그대로 두고, 거슬리면 SimpleRAG 쪽 보류 길이를 손봐야 한다.</p>
+  </div>
+  <ul class="plain">
+    <li>stdout 은 <b>줄 단위가 아니라 받은 만큼</b> 읽는다(<code>read1</code>). 프롬프트 <code>질문&gt; </code> 는 줄바꿈 없이 끝나고, 답변 토큰도 줄바꿈 없이 흘러오기 때문이다</li>
+    <li>stderr(준비 안내·llama.cpp 로그)는 별도 스레드로 계속 비운다. 비우지 않으면 파이프가 차서 워커가 멈춘다. 마지막 50줄은 오류 표시용으로 보관</li>
+    <li>SimpleRAG 실행 파일 찾는 순서: INI <code>SimpleRagExe</code> → RAGSearchBox.exe 옆 <code>simplerag.exe</code> → <code>..\dist\simplerag\simplerag.exe</code> → (개발용) <code>.venv\Scripts\python.exe src\simplerag\cli.py</code></li>
+    <li>RAGSearchBox 가 종료되면 stdin 에 <code>exit</code> → 3초 안에 안 끝나면 <code>terminate()</code>. 비정상 종료로 워커만 남지 않게 <b>Job Object</b>(<code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code>)에 워커를 넣는다</li>
+  </ul>
+
+  <h3>출력 해석 — 질문 1건 단위 상태 기계</h3>
+  <p><code>cli.render_answer()</code> 가 찍는 구분선을 기준으로 상태를 바꾼다. 답변 부분은 들어온 글자 그대로 넘겨 스트리밍을 유지한다.</p>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>상태</th><th>들어가는 표시</th><th>그 안의 내용</th><th>큐 이벤트</th></tr></thead>
+      <tbody>
+        <tr><td><code class="id">SENT</code></td><td>stdin 에 질문을 씀</td><td>—</td><td><code>status("검색 중")</code></td></tr>
+        <tr><td><code class="id">EVIDENCE</code></td><td><code>── 근거 N건 (XXXms)</code></td><td><code>  [i] 문서명</code> / <code>      본문 160자…</code></td><td>블록이 끝나면 <code>evidence([{no, doc, snippet}], ms)</code></td></tr>
+        <tr><td><code class="id">ANSWER</code></td><td><code>── 답변 (AI 요약 — …) ──</code></td><td>토큰 조각 (개행 포함)</td><td><code>token(text)</code> — 받은 그대로</td></tr>
+        <tr><td><code class="id">TIMING</code></td><td><code>── 소요 ───</code></td><td><code>검색 …ms</code> / <code>첫 글자 …s / 완료 …s</code> / <code>인용 근거: [1], [3]</code> / (있으면) <code>⚠️ 리랭커 적재 실패 …</code></td><td>—</td></tr>
+        <tr><td><code class="id">(끝)</code></td><td>다음 <code>질문&gt; </code></td><td>—</td><td><code>done({timing, cited, warnings})</code> → READY</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">D3 에 따라 출력 문구에 기대는 방식이므로 CLI 문구가 바뀌면 깨진다. 이를 막는 장치: ① 실제 chat 출력 샘플로 단위 테스트 ② 해석기가 기대한 구분선을 못 찾으면(예: 근거 구분선 없이 프롬프트가 옴) 답변 창에 원문을 그대로 보여 주고 WARN 로그 — 조용히 빈 창이 되지 않게
+  ③ 해석에 쓰는 문구(<code>── 근거</code> · <code>── 답변</code> · <code>── 소요</code> · <code>질문&gt; </code>)를 <code>chat_parser.py</code> 한곳에 상수로 모은다. 답변에는 <code>StreamWriter</code> 가 끝 90자를 붙들어 두므로 마지막 부분은 완료 직전에 한꺼번에 도착한다 — 정상 동작이다.</p>
+
+  <h3>새 질문·취소·시간 초과</h3>
+  <p>콘솔이 없는 워커에는 Ctrl+C 를 보낼 수 없어 <b>생성 도중 멈추게 할 수 없다</b>. 대신 답변 한 건이 짧다(완료 중앙값 약 3초, 최대 200토큰)는 점을 이용해 "버리기"로 처리한다.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>상황</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td>BUSY 중 새 질문</td><td>대기 칸(1개)에 넣는다. 이미 대기 중인 질문이 있으면 <b>새 것으로 교체</b>. 현재 답변 출력은 계속 해석하되 화면에는 버리고, 프롬프트가 오면 대기 질문을 보낸다</td></tr>
+        <tr><td>STARTING 중 질문</td><td>답변 창에 "모델 준비 중 (첫 질문)"과 경과 시간을 띄우고 대기 칸에 넣는다</td></tr>
+        <tr><td>답변 창 닫기 / [중단]</td><td>화면만 닫고 그 답변 출력은 버린다. 워커는 그대로 둔다</td></tr>
+        <tr><td>답변 시간 초과</td><td><code>AnswerTimeoutSec</code>(기본 60초) 동안 프롬프트가 안 오면 워커가 멈춘 것으로 보고 <code>kill()</code> 후 재시작(재예열)</td></tr>
+        <tr><td>워커 종료 코드 2</td><td><code>config.yaml</code> 설정 오류 — stderr 의 "설정 오류: …" 를 표시하고 자동 재시작하지 않음</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="ui">
+  <h2><span class="sec">7</span>답변 창과 트레이 아이콘</h2>
+  <div class="twocol">
+    <div>
+      <div class="mock" role="img" aria-label="답변 창 모형">
+        <div class="bar">RAGSearchBox <span>✕</span></div>
+        <div class="q">연차 휴가는 며칠까지 이월되나요?</div>
+        <div class="st">● 답변 생성 중 · 1.6초</div>
+        <div class="ev">
+          <div>[1] 취업규칙_2025.hwp<small>제24조(연차유급휴가의 이월) 사용하지 못한 연차는 다음 해에 한하여 최대 10일까지…</small></div>
+          <div>[2] 인사규정.docx<small>연차 이월은 부서장 승인을 받아야 하며…</small></div>
+          <div>[3] 복리후생_FAQ.pdf<small>Q. 남은 연차는 어떻게 되나요? …</small></div>
+        </div>
+        <div class="ans"><em>AI 요약 — 위 근거로 확인하세요</em>사용하지 못한 연차는 다음 해에 한해 최대 10일까지 이월할 수 있으며, 부서장 승인이 필요합니다. [1][2]▍</div>
+        <div class="foot"><span>검색 440ms · 첫 글자 1.24s</span><span class="btns"><i>복사</i><i>닫기</i></span></div>
+      </div>
+      <p class="note" style="margin-top:8px">모형이며 문서명·내용은 예시다. 질문 줄에는 <code>?</code> 를 뗀 질문을 보여 준다.</p>
+    </div>
+    <div class="panel">
+      <h3>답변 창</h3>
+      <ul class="plain">
+        <li><b>tkinter</b>(표준 라이브러리)로 만든다 — 의존성이 늘지 않는다</li>
+        <li>검색창 UIA 좌표 바로 아래, 화면 밖으로 나가면 안쪽으로 붙인다. 좌표를 못 얻으면 탐색기 창 오른쪽 위</li>
+        <li>항상 위(topmost). <b>뜰 때 포커스를 뺏지 않는다</b> — 사용자는 탐색기를 계속 쓸 수 있고, 원본이 겪은 "포커스 복귀로 재실행" 문제도 생기지 않는다</li>
+        <li>워커가 준비 중이면 "모델 준비 중 (첫 질문)"과 경과 시간, READY 면 바로 "검색 중"</li>
+        <li>근거는 답보다 먼저 보여 준다. 답변 제목에 "위 근거로 확인하세요"를 유지한다 — 생성 정답률이 약 72% 라 근거 확인이 안전장치다(README)</li>
+        <li>Esc 닫기 · 복사(질문+답변+근거 문서명) · 창 하나만 재사용</li>
+        <li>화면 DPI 인식(<code>SetProcessDpiAwareness</code>) — 고배율 화면에서 좌표가 어긋나지 않게</li>
+      </ul>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>트레이 아이콘 <span class="chip new">D2 로 추가</span></h3>
+    <p>모델을 상주시키면 메모리(작업 집합 약 2.2~2.5GB · 전용 약 2.6~3.0GB, P0-8)와 인덱스 잠금을 계속 쥐고 있게 된다. 사용자가 그 상태를 보고 직접 내릴 수 있어야 해서 추가한다. <code>win32gui.Shell_NotifyIcon</code> 으로 전용 스레드에서 띄운다.</p>
+    <div class="table-wrap" style="margin-top:12px">
+      <table>
+        <thead><tr><th>메뉴 / 표시</th><th>동작</th></tr></thead>
+        <tbody>
+          <tr><td>툴팁</td><td>워커 상태 — "준비됨 · iGPU · 리랭킹 켬" / "준비 중 12초" / "내려감(유휴)" / "오류"</td></tr>
+          <tr><td>모델 내리기 (인덱싱 전에)</td><td>워커를 정상 종료해 인덱스 잠금을 푼다. 다음 <code>?</code> 질문 때 자동으로 다시 올린다</td></tr>
+          <tr><td>모델 다시 올리기</td><td>워커 재시작 — <code>index</code> 로 문서를 갱신한 뒤 새 인덱스를 읽게 할 때</td></tr>
+          <tr><td>로그인 시 자동 시작 ✓</td><td>체크 표시로 현재 등록 상태를 보여 주고, 누르면 등록/해제를 바꾼다(D5, §12)</td></tr>
+          <tr><td>로그 폴더 열기</td><td><code>%LOCALAPPDATA%\RAGSearchBox\log</code></td></tr>
+          <tr><td>종료</td><td>워커 종료 후 RAGSearchBox 종료</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="modules">
+  <h2><span class="sec">8</span>모듈 구성</h2>
+<pre>SimpleRAG/RAGSearchBox/
+├─ main.py              <span class="c">진입점: 중복 실행 방지 · 로그 · 설정 · 스레드 시작 · tk mainloop   ← MDriveSearchBox.cpp</span>
+├─ app.py               <span class="c">메인 스레드 조정자: 큐 처리 · 거르기(T4) · 창 갱신 · 종료 처리    ← CMainFrame</span>
+├─ monitor.py           <span class="c">감시 스레드: WinEvent 훅 · 메시지 펌프 · 입력 기반 폴링 · Enter 확정 ← ExplorerMonitorThreadFunc</span>
+├─ searchbox.py         <span class="c">UIA 판정: 검색창 안인가 · armed 상태 · 검색어 읽기             ← IsInsideFileExplorerSearchBox</span>
+├─ explorer.py          <span class="c">IShellWindows: HWND→위치 URL→DOS 경로 · Win11 활성 탭 · 탭별 마지막 폴더 기억 ← OnMDriveSearchBoxFocused</span>
+├─ scope.py             <span class="c">지정 폴더 목록 · 정규화 · 경계 포함 비교 · 다중 탭 보수 규칙 (§5-1)  ← M드라이브 경로 검사</span>
+├─ query_filter.py      <span class="c">? 접두어 떼기 · 한 줄로 · chat 명령 회피 · 중복 (T4)</span>
+├─ rag_worker.py        <span class="c">워커 프로세스 수명·상태 기계 · 대기 칸 · Job Object · 유휴 해제   ← CallMDriveSearch 자리</span>
+├─ chat_parser.py       <span class="c">chat stdout 해석 상태 기계 (프로세스와 분리해 단독 테스트)</span>
+├─ answer_window.py     <span class="c">tkinter 답변 창</span>
+├─ tray.py              <span class="c">트레이 아이콘 · 메뉴</span>
+├─ autorun.py           <span class="c">HKCU Run 등록·해제·상태 조회 · 경로 바뀜 보정 (D5)</span>
+├─ settings.py          <span class="c">RAGSearchBox.ini 읽기 · 기본값 · 범위 검사                        ← CIniReader</span>
+├─ log.py               <span class="c">회전 로그 · DIAG 단계                                           ← MLogger</span>
+├─ RAGSearchBox.ini     <span class="c">기본 설정 파일</span>
+├─ build_searchbox.py   <span class="c">PyInstaller 빌드 스크립트</span>
+├─ requirements.txt     <span class="c">comtypes — SimpleRAG .venv 에 추가 설치 (D4, pywin32 는 이미 있음)</span>
+└─ tests/
+   ├─ test_query_filter.py    <span class="c">"?연차" "？ 연차" "?/topk 5" "?종료" 등</span>
+   ├─ test_scope.py           <span class="c">경계(D:\문서 vs D:\문서함) · 대소문자 · UNC · 검색 결과(빈 URL)와 가상 폴더 구분 · 다중 탭 후보</span>
+   ├─ test_chat_parser.py     <span class="c">실제 chat 출력 샘플(스트리밍 조각으로 잘라 넣기)로 검증</span>
+   └─ samples/chat_*.txt</pre>
+  <p class="note">모든 <code>.py</code> 함수·클래스·메서드에는 <code>D:\Project\CLAUDE.md</code> 의 한글 헤더 주석 형식(<code>#=&gt;</code>, <code>-in</code>, <code>-out</code>, <code>-out: error</code>)을 단다.</p>
+</section>
+
+<!-- 9 -->
+<section id="ini">
+  <h2><span class="sec">9</span>설정 파일 — RAGSearchBox.ini</h2>
+  <p>원본처럼 exe 옆 INI 를 쓴다. 파일·섹션·키가 없으면 기본값으로 동작한다("없으면 기본값" 원칙은 원본 <code>[Monitor] Mode</code> 와 같다). 범위 밖 값은 기본값으로 바꾸고 로그에 경고를 남긴다.</p>
+<pre>[SimpleRAG]
+SimpleRagExe     =          <span class="c">; 비우면 자동 탐색(§6)</span>
+NoStream         = 0        <span class="c">; 1 이면 chat --no-stream (답변을 한 번에)</span>
+
+[Worker]
+StartMode        = boot     <span class="c">; D7 확정. boot = RAGSearchBox 시작 때 예열 · lazy = 첫 ? 질문 때</span>
+IdleUnloadMin    = 60       <span class="c">; D7 확정. 이 시간 질문 없으면 모델 내림 (0 = 내리지 않음)</span>
+StartTimeoutSec  = 180      <span class="c">; 첫 실행 CPU/iGPU 측정 포함</span>
+AnswerTimeoutSec = 60
+RestartMax       = 3        <span class="c">; 5분 안 자동 재시작 한도</span>
+
+[Monitor]
+Mode             = 0        <span class="c">; 0 = WinEvent(기본) · 1 = UIA 포커스 핸들러</span>
+PollMs           = 100      <span class="c">; 0x8000·0x1 두 비트를 보면 100ms 로 충분 (P0-2)</span>
+InputRecentMs    = 1500     <span class="c">; 원본 INPUT_RECENT_MS</span>
+
+[Trigger]
+Prefix           = ?        <span class="c">; D1 확정. 전각 ？ 도 같은 것으로 본다</span>
+MinChars         = 2
+DedupSec         = 3
+
+[Scope]                     <span class="c">; D6 확정 — 필수</span>
+Folders          = D:\분류함;\\fileserver\공유\규정   <span class="c">; ; 로 구분, 하위 폴더 포함. 비우면 동작 안 함 (예시 값)</span>
+RecheckMin       = 5        <span class="c">; 없는 폴더(늦게 붙는 네트워크 드라이브) 다시 확인 주기</span>
+
+[Window]
+Width            = 460
+MaxHeight        = 560
+FontSize         = 10
+
+[Log]
+Level            = INFO     <span class="c">; DIAG 이면 원본 [DIAG] 수준의 판정 로그 + 워커 stdout 원문</span></pre>
+  <p class="note">로그 위치: <code>%LOCALAPPDATA%\RAGSearchBox\log\RAGSearchBox.log</code> (원본의 <code>%LOCALAPPDATA%\…\Log</code> 규칙과 같음), 5MB × 3개 회전. 워커 stderr 는 <code>worker.log</code> 로 따로 남긴다.</p>
+</section>
+
+<!-- 10 -->
+<section id="error">
+  <h2><span class="sec">10</span>오류 처리</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>상황</th><th>감지</th><th>사용자에게</th><th>프로그램</th></tr></thead>
+      <tbody>
+        <tr><td>이미 실행 중</td><td>뮤텍스 <code>Local\RAGSearchBox</code> 존재</td><td>없음</td><td>로그 남기고 즉시 종료 — 워커를 두 번 띄우지 않는다</td></tr>
+        <tr><td>simplerag.exe 없음</td><td>시작 시 경로 탐색 실패</td><td>트레이 경고, 질문 때 "SimpleRAG 실행 파일을 찾지 못했습니다 — INI 의 SimpleRagExe 를 지정하세요"</td><td>감시는 계속</td></tr>
+        <tr><td>워커 준비 시간 초과</td><td><code>StartTimeoutSec</code> 안에 첫 프롬프트 없음</td><td>"모델을 올리지 못했습니다" + stderr 마지막 줄</td><td>kill, 재시작 한도 안에서 재시도</td></tr>
+        <tr><td>워커가 스스로 종료</td><td>프로세스 종료 감지</td><td>진행 중 답변 창에 "SimpleRAG 가 종료되었습니다 — 다시 올립니다"</td><td>5분에 3회까지 재시작, 넘으면 STOPPED + 트레이 경고</td></tr>
+        <tr><td><b>워커가 인덱스를 잡고 있어 사용자의 <code>index</code> 가 실패</b></td><td>(SimpleRAG 쪽 오류 — Qdrant "already accessed by another instance")</td><td>트레이 메뉴 "모델 내리기 (인덱싱 전에)" 안내를 README/툴팁에 명시</td><td>인덱싱 뒤 "모델 다시 올리기" 또는 다음 질문 때 자동으로 새 인덱스 적재</td></tr>
+        <tr><td>반대로 <code>chat</code>/<code>index</code> 가 이미 돌고 있어 워커가 못 뜸</td><td>워커 stderr 에 같은 Qdrant 잠금 문구, 곧 종료</td><td>"SimpleRAG chat/index 가 실행 중입니다 — 끝낸 뒤 다시 질문하세요"</td><td>자동 재시작하지 않음(반복 실패 방지)</td></tr>
+        <tr><td>설정 오류</td><td>종료 코드 2</td><td>stderr 의 "설정 오류: …" 그대로</td><td>자동 재시작하지 않음</td></tr>
+        <tr><td>답변 시간 초과</td><td><code>AnswerTimeoutSec</code> 동안 프롬프트 없음</td><td>"답변이 멈췄습니다 — 모델을 다시 올립니다"</td><td>kill 후 재시작</td></tr>
+        <tr><td>인덱스 비어 있음</td><td>근거 0건 / "검색된 근거가 없습니다."</td><td>그 문구와 "먼저 index 를 실행하세요" 안내</td><td>정상 처리</td></tr>
+        <tr><td>리랭커 백그라운드 적재 실패</td><td>답변 뒤 <code>⚠️ 리랭커 적재 실패</code> 줄</td><td>트레이 툴팁에 "리랭킹 없이 동작"</td><td>계속 사용</td></tr>
+        <tr><td>UIA 생성 / WinEvent 훅 실패</td><td>comtypes 예외 / 훅 NULL</td><td>트레이 경고</td><td>UIA 실패는 감시 중단(원본과 같음), 훅 실패는 입력 기반 폴링만으로 동작</td></tr>
+        <tr><td>질문에 cp949 밖 문자(이모지 등)</td><td>stdin 인코딩 때 <code>errors="replace"</code></td><td>그 글자만 <code>?</code> 로 바뀐 채 답한다. 답변 창 질문 줄은 원문 그대로</td><td>정상 처리 — 워커 생존 확인(P0-4)</td></tr>
+        <tr><td>워커 내부 예외로 종료 (예: 잘못 인코딩된 입력)</td><td>프로세스 종료 + stderr Traceback</td><td>"SimpleRAG 가 종료되었습니다 — 다시 올립니다"</td><td>Traceback 을 worker.log 에 남기고 재시작 한도 안에서 재시작. 같은 질문은 다시 보내지 않는다(반복 충돌 방지)</td></tr>
+        <tr><td>범위 폴더 미설정 / 모두 없음</td><td>시작 시·5분마다 <code>[Scope] Folders</code> 검사</td><td>트레이 경고 "범위 폴더 미설정 — [Scope] Folders 를 지정하세요"</td><td>감시만 하고 armed 안 함, 워커 올리지 않음</td></tr>
+        <tr><td>범위 밖 폴더에서 <code>?</code> 질문</td><td>R1~R3 판정</td><td>없음</td><td>INFO 로그 (폴더·질문 앞 20자)</td></tr>
+        <tr><td>활성 탭을 가리지 못함 · 가상 폴더</td><td>R1 · R2</td><td>없음</td><td>범위 밖으로 처리, DIAG 로그에 후보 경로</td></tr>
+        <tr><td>검색어를 못 읽음</td><td>ValuePattern·Legacy 둘 다 실패</td><td>없음</td><td>DIAG 로그만 (오작동보다 무반응이 낫다)</td></tr>
+        <tr><td>답변 창·트레이 쪽 예외</td><td>tk / 트레이 콜백 예외</td><td>창 닫힘</td><td>로그 남기고 상주 유지 — 감시와 워커가 죽지 않게</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="perf">
+  <h2><span class="sec">11</span>응답 시간 예산</h2>
+  <div class="panel">
+    <h3>P0 실측 — 워커 READY (재빌드 전 30건 · 재빌드 후 10건, 변형 B 단독 실행)</h3>
+    <p class="note" style="margin-bottom:10px">i5-1340P · Iris Xe(iGPU + 리랭킹 켬) · 운영 인덱스 sample 20건 498청크 · stdin cp949 · CREATE_NO_WINDOW</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>항목</th><th>중앙값</th><th>범위 / p90</th><th>비고</th></tr></thead>
+        <tbody>
+          <tr><td>워커 준비 (첫 <code>질문&gt;</code>)</td><td class="n">—</td><td class="n">4.4 ~ 6.3s</td><td>변형 A·B 단독 실행 기준</td></tr>
+          <tr><td>근거 (CLI 자체 측정)</td><td class="n">0.91s</td><td class="n">0.64 ~ 1.72s</td><td>워커 안에서 검색이 끝난 시각</td></tr>
+          <tr><td>첫 글자 (CLI 자체 측정)</td><td class="n">2.86s</td><td class="n">p90 3.87s</td><td></td></tr>
+          <tr><td>답변 완료</td><td class="n">9.6s</td><td class="n">4.6 ~ 22.3s</td><td>README 평가 코퍼스 값(2.86초)보다 길다 — 원인 미분석</td></tr>
+          <tr><td><b>근거 도착 (RAGSearchBox 가 받는 시각)</b></td><td class="n"><b>1.07s</b></td><td class="n">0.74 ~ 1.79s</td><td>D8(가) 적용 후. 적용 전에는 6.6s 로 답변과 함께 왔다</td></tr>
+          <tr><td>답변 첫 글자 도착</td><td class="n">6.98s</td><td class="n">4.63 ~ 9.84s</td><td>StreamWriter 90자 보류 때문에 CLI 자체 값보다 약 4초 늦다</td></tr>
+          <tr><td>메모리 (준비 직후 → 30건 뒤)</td><td class="n" colspan="2">작업 집합 2.19 → 2.43GB · 전용 2.63 → 3.02GB</td><td>10건 이후 평탄 — 누수 징후 없음</td></tr>
+          <tr><td>유휴 CPU (READY)</td><td class="n" colspan="2">0%</td><td>10초 측정</td></tr>
+          <tr><td><code>exit</code> 정상 종료</td><td class="n" colspan="2">1.75s</td><td>직후 인덱스 잠금 해제 확인</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <p>모델을 올려 두므로 예열은 <b>RAGSearchBox 시작 때 한 번</b>(또는 유휴 해제 뒤 첫 질문 때)만 든다. 아래는 워커가 READY 일 때 질문 1건의 시간이다.
+  README 실측값(i5-1340P, iGPU + 리랭킹, 리랭커 입력 10 기본값의 첫 글자 중앙값 1.76초)에 감지·파이프 비용을 더한 <b>P0 이전 추정</b>이다 — 위 실측과 차이가 커서 비교용으로만 남긴다.</p>
+  <div class="panel">
+    <div class="timeline" role="list" aria-label="Enter 이후 시간 흐름 추정, 워커 준비 상태">
+      <div class="tl-row" role="listitem"><span>Enter 감지 + 전달</span><div class="tl-track"><div class="tl-seg" style="left:0;width:5%"></div></div><span class="val">~0.2s</span></div>
+      <div class="tl-row" role="listitem"><span>근거 표시</span><div class="tl-track"><div class="tl-seg ev" style="left:5%;width:11%"></div></div><span class="val">~0.6s</span></div>
+      <div class="tl-row" role="listitem"><span>첫 글자</span><div class="tl-track"><div class="tl-seg" style="left:16%;width:33%"></div></div><span class="val">~2.0s</span></div>
+      <div class="tl-row" role="listitem"><span>답변 완료</span><div class="tl-track"><div class="tl-seg" style="left:49%;width:36%"></div></div><span class="val">~3.4s</span></div>
+      <div class="tl-scale" aria-hidden="true"><span></span><span class="s"><em>0s</em><em>2s</em><em>4s</em></span><span></span></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>경우</th><th>근거까지</th><th>답변 완료까지</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>워커 READY (보통)</td><td class="n">실측 1.1s</td><td class="n">실측 9.2s</td><td>질문마다 예열 없음. D8(가) 적용 후 10건 중앙값</td></tr>
+        <tr><td>워커가 준비 중이거나 유휴로 내려간 뒤 첫 질문</td><td class="n">~7.2s</td><td class="n">~10s</td><td>예열 약 6.6초가 더해진다</td></tr>
+        <tr><td>(비교) 질문마다 <code>ask</code> 실행</td><td class="n">~7.3s</td><td class="n">~9.8s</td><td>이전 설계안 — D2 로 대체</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">대가: 워커가 떠 있는 동안 메모리를 작업 집합 약 2.2~2.5GB · 전용 약 2.6~3.0GB(생성 모델·임베딩·리랭커·BM25 캐시, P0-8 실측) 쓰고 인덱스를 잡는다. 설계 추정(약 1GB)의 2.5배다. <code>IdleUnloadMin</code> 과 트레이 "모델 내리기"가 이를 관리한다.</p>
+</section>
+
+<!-- 12 -->
+<section id="build">
+  <h2><span class="sec">12</span>빌드·배포</h2>
+  <div class="twocol">
+    <div class="panel">
+      <h3>빌드</h3>
+      <ul class="plain">
+        <li>PyInstaller <b>onefile + <code>--windowed</code></b> (콘솔 없음). llama.cpp 등 무거운 DLL 은 워커(simplerag.exe) 쪽에 있어 RAGSearchBox.exe 는 작다</li>
+        <li>hidden import: <code>comtypes.gen</code> — UIA 타입 라이브러리 래퍼는 빌드 전에 한 번 생성해 함께 묶는다(실행 중 생성하면 쓰기 권한 문제)</li>
+        <li><b>워커 빌드 전제</b>: 함께 쓰는 <code>simplerag.exe</code> 는 <code>--python-option u</code> 로 빌드된 것이어야 한다(D8). 그 옵션 없이 만든 exe 와 쓰면 근거가 답변과 함께 늦게 뜬다</li>
+        <li>아이콘: 원본 <code>res\MDriveSearchBox.ico</code> 대신 새 아이콘(트레이에도 사용)</li>
+        <li><b>SimpleRAG <code>.venv</code> 공유(D4)</b> — <code>.venv\Scripts\python.exe -m pip install comtypes</code> 한 번. 빌드도 같은 파이썬으로 <code>.venv\Scripts\python.exe RAGSearchBox\build_searchbox.py</code></li>
+        <li>공유 venv 라 PyInstaller 가 무거운 패키지를 끌어올 수 있다 → <code>--exclude-module</code> 로 <code>llama_cpp</code> · <code>onnxruntime</code> · <code>qdrant_client</code> · <code>tokenizers</code> · <code>numpy</code> · <code>simplerag</code> 를 뺀다. 빌드 뒤 exe 크기가 약 30MB 를 크게 넘으면 실패로 본다</li>
+        <li>RAGSearchBox 코드는 <code>simplerag</code> 패키지를 import 하지 않는다 — 워커와의 경계는 프로세스뿐</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>배치</h3>
+<pre>dist/simplerag/
+├─ simplerag.exe        <span class="c">기존 — 워커로 실행됨</span>
+├─ <b>RAGSearchBox.exe</b>     <span class="c">신규 — 옆에 두면 자동 탐색</span>
+├─ <b>RAGSearchBox.ini</b>
+├─ models/ qdrant_data/ …</pre>
+      <ul class="plain" style="margin-top:10px">
+        <li>관리자 권한 불필요. 탐색기와 같은 무결성 수준으로 실행해야 UIA 조회가 된다</li>
+      </ul>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>로그인 시 자동 시작 (D5 확정 — 설치 때 선택)</h3>
+    <p>별도 설치 프로그램 없이 exe 명령 옵션으로 등록한다. <b>기본은 등록하지 않는다</b> — 사용자가 설치할 때 고르거나, 나중에 트레이 메뉴로 켠다.</p>
+<pre>RAGSearchBox.exe --autorun on     <span class="c"># 등록 후 종료</span>
+RAGSearchBox.exe --autorun off    <span class="c"># 해제 후 종료</span>
+RAGSearchBox.exe --autorun status <span class="c"># 등록 여부·등록된 경로 출력 (종료 코드 0=등록됨, 1=안 됨)</span>
+
+<span class="c">; 등록 위치 (사용자 단위 — 관리자 권한 불필요, 다른 사용자에게 영향 없음)</span>
+HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run
+  이름 : RAGSearchBox
+  값   : "D:\...\dist\simplerag\RAGSearchBox.exe"     <span class="c">; 따옴표로 감싼 절대 경로, 인자 없음</span></pre>
+    <ul class="plain" style="margin-top:10px">
+      <li>배포 가이드의 설치 절차에 "자동 시작을 원하면 <code>--autorun on</code>" 단계를 선택 항목으로 적는다</li>
+      <li>트레이 메뉴 "로그인 시 자동 시작 ✓" 로 같은 등록/해제를 한다 — 명령 옵션과 한 모듈(<code>autorun.py</code>)을 쓴다</li>
+      <li><b>경로 바뀜 보정</b>: 시작할 때 등록 값이 있는데 경로가 현재 exe 와 다르면(폴더를 옮긴 경우) 현재 경로로 고치고 INFO 로그. 등록 값이 없으면 새로 만들지 않는다 — 사용자가 끈 설정을 되살리지 않게</li>
+      <li>D7 의 <code>StartMode=boot</code> 와 함께 쓰면 로그인 직후 약 6.6초 모델 예열로 CPU 를 쓴다. 단, 범위 폴더가 미설정이면 예열하지 않는다(§5-1 R4)</li>
+      <li>레지스트리 쓰기가 실패하면(그룹 정책 등) 명령은 종료 코드 2 와 오류 문구, 트레이는 알림 풍선으로 알린다. 상주 동작에는 영향 없다</li>
+      <li>제거 시 <code>--autorun off</code> 를 먼저 실행하도록 배포 가이드에 적는다 — 지운 exe 를 가리키는 등록이 남지 않게</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 13 -->
+<section id="poc">
+  <h2><span class="sec">13</span>위험과 사전 검증(P0)</h2>
+  <p>본 구현 전에 작은 스크립트로 확인한다. 하나라도 실패하면 해당 설계를 고친 뒤 진행한다.</p>
+
+  <h3>1차 결과 (2026-09-15)</h3>
+  <p class="note">환경: Windows 11 25H2(빌드 26200) · Microsoft 한국어 IME · i5-1340P / Iris Xe · <code>dist\simplerag\simplerag.exe</code>(2026-09-14 빌드) · 운영 인덱스 498청크.
+  검증 스크립트는 세션 스크래치 폴더에서만 실행했고 RAGSearchBox 구현 코드는 만들지 않았다. 탐색기 검사는 스크립트가 새로 연 창에만 키를 보냈다.</p>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>ID</th><th>결과</th><th>판정</th><th>설계 반영</th></tr></thead>
+      <tbody>
+        <tr><td class="n">P0-1</td><td>검색창: <code>TextBox</code> → 부모 1단계 <code>FileExplorerSearchBox</code> 로 판정 성공. 값: Value·Legacy 모두 정확(전각 <code>？</code> 포함).
+          한글 조합 중 Enter: <b>Enter 순간 포커스가 파일 목록으로 이동</b>해 포커스 요소 읽기는 전부 실패, <b>붙잡아 둔 검색창 요소</b>를 Enter 뒤 읽으면 13/13 <code>?연차휴</code>(조합 중 글자 포함)</td>
+          <td><span class="chip change">조건부 통과</span></td><td>§5 T2 값 읽기 방식 변경</td></tr>
+        <tr><td class="n">P0-2</td><td>폴링 100ms · 누름 비트만: 누름 10ms 0/20 · 30ms 7/20 · 60ms 15/20 · 100ms 20/20.
+          <b>누름+눌렸음 두 비트: 모든 조건 20/20</b>(50ms · 30ms 폴링도 같음)</td>
+          <td><span class="chip keep">통과</span></td><td>§5 T2 두 비트 확인, §9 PollMs 100 유지</td></tr>
+        <tr><td class="n">P0-3</td><td>Enter 시 <code>LocationURL</code> 이 <code>search-ms:</code> 가 아니라 <b>빈 문자열</b>. 입력만으로는 바뀌지 않음</td>
+          <td><span class="chip drop">실패</span></td><td>§5 T3 제외, §9 UseSearchMs 삭제</td></tr>
+        <tr><td class="n">P0-4</td><td>① 첫 프롬프트 <code>질문&gt; </code> 가 줄바꿈 없이 즉시 옴.
+          ② <code>PYTHONUNBUFFERED</code> 무시 — 근거가 첫 답변 글자와 한 덩어리로 중앙값 6.6초에 도착.
+          <b>→ D8(가)로 <code>--python-option u</code> 재빌드 후 근거 중앙값 1.07초, 10/10 이 따로 먼저 도착(2026-09-16 재측정)</b>.
+          ③ <code>PYTHONIOENCODING</code> 무시 — UTF-8 로 보내면 첫 질문에서 워커 종료(<code>TypeError: TextInputSequence must be str</code>, 같은 예외 재현 확인). cp949 로 보내면 근거가 <code>search</code> 결과와 3/3 일치, cp949 밖 문자는 <code>?</code> 로 바뀌고 워커 생존</td>
+          <td><span class="chip keep">① 통과</span> <span class="chip keep">② 재빌드로 해결</span> <span class="chip change">③ cp949</span></td><td>§6 stdin cp949 고정·환경변수 삭제·빌드 옵션, §10 행 추가</td></tr>
+        <tr><td class="n">P0-5</td><td><code>CREATE_NO_WINDOW</code> 와 숨긴 콘솔 모두 iGPU(Vulkan) + 리랭킹 켬으로 선택, 출력 형태·버퍼링 동일</td>
+          <td><span class="chip keep">통과</span></td><td><code>CREATE_NO_WINDOW</code> 유지</td></tr>
+        <tr><td class="n">P0-6</td><td><b>미실시</b> — Excel 큰 파일을 사람이 스크롤하며 체감을 봐야 한다. 참고로 워커 READY 유휴 CPU 는 0%</td>
+          <td><span class="chip wait">보류</span></td><td>S5 에서 수동 확인</td></tr>
+        <tr><td class="n">P0-7</td><td>주소창: <code>PART_AutoSuggestBox</code> → <code>CabinetWClass</code> 경계에서 거부. 이름 바꾸기: <code>UIRenameTextElement</code>(Edit) → 거부</td>
+          <td><span class="chip keep">통과</span></td><td>—</td></tr>
+        <tr><td class="n">P0-8</td><td>준비 직후 작업 집합 2.19GB / 전용 2.63GB, 30건 뒤 2.43 / 3.02GB(10건 이후 평탄). 유휴 CPU 0%. 워커가 떠 있을 때 <code>status</code> 는 Qdrant 잠금 오류, <code>exit</code>(1.75초) 직후 정상</td>
+          <td><span class="chip keep">통과</span></td><td>메모리가 추정의 2.5배 — §6 · §7 · §11 수치 수정</td></tr>
+        <tr><td class="n">P0-9</td><td>첫 <code>ShellTabWindowClass</code> = 활성 탭(Ctrl+Tab 전환 포함). 전체 경로 표시가 켜진 이 PC 에서 같은 이름 폴더 두 탭을 경로로 구분. 검색 결과 탭은 URL 빈 문자열·crumb 없음, 이름 = 검색어. 내 PC 는 URL 빈 문자열.
+          <b>UNC · 매핑 드라이브 · 전체 경로 표시가 꺼진 PC · Win10 은 미검증</b></td>
+          <td><span class="chip change">부분 통과</span></td><td>§5-1 R1 탭별 마지막 폴더 기억, R2 실측 추가</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>계획 (1차 전 작성)</h3>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>ID</th><th>확인할 것</th><th>실패하면</th></tr></thead>
+      <tbody>
+        <tr><td class="n">P0-1</td><td>Win11 / Win10 검색창에서 <code>ValuePattern</code> 으로 검색어가 읽히는가. <b>한글 조합 중 Enter</b> 때 마지막 글자까지 들어오는가(80ms 대기로 충분한가). 전각 <code>？</code> 가 그대로 읽히는가</td><td>Legacy 패턴 · 대기 시간 조정 · T3(search-ms crumb 해석)을 주 신호로</td></tr>
+        <tr><td class="n">P0-2</td><td><code>GetAsyncKeyState</code> 100ms 폴링이 빠른 Enter 를 몇 % 놓치는가 (50회 시도)</td><td>값이 <code>?</code> 로 시작할 때만 폴링 주기 30ms · T3 보조 필수화</td></tr>
+        <tr><td class="n">P0-3</td><td>Win11 탐색기 <code>LocationURL</code> 이 Enter / 자동 검색 때 각각 어떻게 바뀌는가</td><td>T3 제거, T2 만 사용</td></tr>
+        <tr><td class="n">P0-4</td><td><b>chat 파이프 대화</b> — 동결된 <code>simplerag.exe chat</code> 에서 ① 프롬프트 <code>질문&gt; </code> 가 줄바꿈 없이 즉시 stdout 에 오는가 ② <code>PYTHONUNBUFFERED=1</code> 로 근거 줄이 바로 오는가 ③ <code>PYTHONIOENCODING=utf-8</code> 로 한글 질문이 stdin 에서 깨지지 않는가 (PyInstaller exe 가 이 환경변수를 따르는지)</td><td>① 준비 판정을 "준비 완료" 줄로 ② SimpleRAG 빌드에 <code>--python-option u</code> ③ stdin 을 cp949 로 인코딩(cp949 밖 문자는 치환) — SimpleRAG 수정이 필요하면 사용자 확인 후</td></tr>
+        <tr><td class="n">P0-5</td><td><code>CREATE_NO_WINDOW</code> 실행에서 iGPU(Vulkan) 선택·llama.cpp 동작이 콘솔 실행과 같은가</td><td>숨긴 콘솔(<code>STARTUPINFO SW_HIDE</code>)로 실행</td></tr>
+        <tr><td class="n">P0-6</td><td>상주 중 Excel 큰 파일 스크롤·로딩 성능 영향 (원본이 WinEvent 를 기본으로 한 이유). 워커 READY 상태의 유휴 CPU 사용률</td><td>폴링 조건 강화</td></tr>
+        <tr><td class="n">P0-7</td><td>주소창 · 파일 이름 바꾸기 입력칸에서 <code>?</code> 로 시작하는 글을 쓰고 Enter 를 눌러도 실행되지 않는가</td><td>판정 규칙 보강</td></tr>
+        <tr><td class="n">P0-9</td><td><b>범위 판정</b> — ① Win11 다중 탭에서 활성 탭 경로가 맞게 가려지는가(같은 이름 폴더 두 탭 포함) ② 검색 결과 화면에서 다시 검색할 때 <code>search-ms</code> 의 <code>crumb=location:</code> 로 원래 폴더가 나오는가 ③ 매핑 드라이브·UNC 경로의 <code>LocationURL</code> 형태</td><td>① 후보 여럿이면 실행 안 함(보수 규칙 유지) ② 검색 결과 화면에서는 T1 에서 기억한 폴더만 사용 ③ 변환 규칙 보강</td></tr>
+        <tr><td class="n">P0-8</td><td>워커 상주 메모리(작업 집합) · 질문 30건 연속 후 메모리 증가 여부 · 유휴 해제(<code>exit</code>) 뒤 인덱스 잠금이 실제로 풀려 <code>index</code> 가 도는가</td><td><code>IdleUnloadMin</code> 기본값 단축 · N건마다 워커 재시작</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="twocol">
+    <div class="panel">
+      <h3>남는 위험</h3>
+      <ul class="plain">
+        <li>Windows 업데이트로 검색창 UIA 구조(<code>FileExplorerSearchBox</code>)가 바뀌면 감지가 멈춘다 — DIAG 로그로 빠르게 원인 확인</li>
+        <li>CLI 출력 문구(구분선·프롬프트) 변경 시 해석기 깨짐 — 샘플 테스트로 조기 발견, 장기적으로 D3</li>
+        <li>워커가 인덱스를 잡고 있어 <b>인덱싱 전에 모델을 내려야 한다</b>는 사용 규칙이 생긴다 — 트레이 메뉴·안내로 완화</li>
+        <li>생성 중 취소가 안 되어 연달아 질문하면 이전 답변이 끝날 때까지(최대 약 3초) 기다린다</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>보안·개인정보</h3>
+      <ul class="plain">
+        <li>질문은 로컬 워커의 표준입력으로만 넘기고 네트워크로 보내지 않는다</li>
+        <li>로그의 질문 기록은 INFO 에서 앞 20자만, DIAG 에서 전체</li>
+        <li>셸을 거치지 않으며, chat 슬래시 명령·종료어는 T4 에서 걸러 질문이 워커 조작으로 해석되지 않게 한다</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 14 -->
+<section id="decide">
+  <h2><span class="sec">14</span>결정 사항</h2>
+  <ul class="decisions">
+    <li><span class="chip done">D1 확정</span><div class="body"><p><b>실행 대상</b> — 검색어가 <code>?</code>(전각 <code>？</code> 포함)로 시작할 때만. 접두어는 떼고 질문으로 쓴다</p><p class="note">반영: §5 T2·T4, §9 <code>Prefix = ?</code>, §13 P0-7</p></div></li>
+    <li><span class="chip done">D2 확정</span><div class="body"><p><b>실행 방식</b> — 모델을 올려 두는 상주 워커. SimpleRAG <code>chat</code> 을 하위 프로세스로 띄워 표준입출력으로 대화한다</p><p class="note">반영: §3 구조, §6 전체, §7 트레이, §9 <code>[Worker]</code>, §10, §11, §13 P0-4·P0-8</p></div></li>
+    <li><span class="chip done">D3 확정</span><div class="body"><p><b>출력 연동</b> — chat 출력 텍스트 해석. SimpleRAG 는 수정하지 않는다</p><p class="note">반영: §6 방식 표(<code>serve</code> 제외) · 해석 문구 상수화 · 해석 실패 시 원문 표시, §5-1 한계(근거 폴더 필터 불가)</p></div></li>
+    <li><span class="chip done">D4 확정</span><div class="body"><p><b>Python 환경</b> — SimpleRAG <code>.venv</code> 공유, <code>comtypes</code> 만 추가</p><p class="note">반영: §8 requirements, §12 빌드 명령·제외 모듈</p></div></li>
+    <li><span class="chip done">D6 확정</span><div class="body"><p><b>범위</b> — INI <code>[Scope] Folders</code> 에 지정한 폴더(하위 포함) 안에서만 동작. 비어 있으면 동작하지 않는다</p><p class="note">반영: §5 T1·T4, §5-1 범위 판정 신설, §8 <code>scope.py</code>, §9, §10, §13 P0-9</p></div></li>
+    <li><span class="chip done">D7 확정</span><div class="body"><p><b>워커 시작·해제</b> — <code>StartMode=boot</code> · <code>IdleUnloadMin=60</code>. 범위 폴더가 미설정이면 boot 여도 올리지 않는다</p><p class="note">반영: §9 <code>[Worker]</code>, §5-1 R4. P0-8 실측으로만 조정</p></div></li>
+    <li><span class="chip done">D5 확정</span><div class="body"><p><b>로그인 시 자동 시작</b> — HKCU <code>Run</code> 등록을 설치 단계 선택 사항으로. 기본은 등록 안 함, <code>--autorun on|off|status</code> 와 트레이 메뉴로 제어</p><p class="note">반영: §7 트레이 메뉴, §8 <code>autorun.py</code>, §12 자동 시작, §15 S6</p></div></li>
+    <li><span class="chip done">D8 확정</span><div class="body"><p><b>근거를 먼저 보여 주기</b> — (가) 채택: <code>build_exe.py</code> 의 PyInstaller 명령에 <code>--python-option u</code> 를 넣고 재빌드. 2026-09-16 적용·재측정 완료</p>
+      <p class="note">결과: 근거 도착 6.6초 → 1.07초(10/10 이 답변보다 먼저). 답변 스트리밍은 <code>StreamWriter</code> 90자 보류 때문에 CLI 자체 첫 글자보다 약 4초 늦게 시작 — 1단계에서는 그대로 둔다.
+      반영: §6 재측정 패널 · §11 실측표 · §12 빌드 전제 · §13 P0-4</p></div></li>
+  </ul>
+</section>
+
+<!-- 15 -->
+<section id="order">
+  <h2><span class="sec">15</span>구현 순서</h2>
+  <ol class="steps">
+    <li class="step"><div class="sid">S0</div><div class="body"><h4>사전 검증 P0-1 ~ P0-9 <span class="chip change">1차 완료 2026-09-15</span></h4><dl><dt>완료</dt><dd>§13 에 결과 기록, §5 · §5-1 · §6 · §7 · §9 · §10 · §11 · §14 에 반영함</dd><dt>남음</dt><dd>P0-6 Excel 수동 확인 · UNC/매핑 드라이브 · 전체 경로 표시가 꺼진 PC · Win10 (D8 은 확정·재측정 완료)</dd></dl></div></li>
+    <li class="step"><div class="sid">S1</div><div class="body"><h4>골격 — main · settings · log · 중복 실행 방지</h4><dl><dt>완료</dt><dd>두 번째 실행이 바로 종료되고 로그가 남는다</dd></dl></div></li>
+    <li class="step"><div class="sid">S2</div><div class="body"><h4>query_filter + scope + chat_parser (프로세스·탐색기 없이)</h4><dl><dt>완료</dt><dd>접두어·명령 회피 테스트, 범위 경계·UNC·다중 탭 후보 테스트, 샘플 출력을 임의 조각으로 잘라 넣어도 같은 이벤트가 나오는 파서 테스트 통과</dd></dl></div></li>
+    <li class="step"><div class="sid">S3</div><div class="body"><h4>rag_worker — 워커 수명·상태 기계</h4><dl><dt>완료</dt><dd>명령행에서 질문 5건 연속 → 각각 <code>evidence → token… → done</code>, BUSY 중 새 질문 교체, 유휴 해제 뒤 <code>index</code> 실행 가능, 강제 종료 시 자동 재시작, RAGSearchBox 종료 시 워커도 종료(Job Object)</dd></dl></div></li>
+    <li class="step"><div class="sid">S4</div><div class="body"><h4>answer_window + tray</h4><dl><dt>완료</dt><dd>S3 이벤트로 창이 근거 → 스트리밍 → 소요 순서로 그려지고 포커스를 뺏지 않는다. 트레이 상태·메뉴 동작</dd></dl></div></li>
+    <li class="step"><div class="sid">S5</div><div class="body"><h4>monitor · searchbox · explorer — 감지·확정·범위</h4><dl><dt>완료</dt><dd>Win11·Win10 에서 <b>지정 폴더 안</b>의 <code>?</code> 로 시작하는 검색창 Enter 만 잡히고, 범위 밖 폴더·가상 폴더·일반 검색어·주소창·이름 바꾸기는 무시(DIAG 로그로 확인)</dd></dl></div></li>
+    <li class="step"><div class="sid">S6</div><div class="body"><h4>app 통합 · 빌드 · 배포</h4><dl><dt>완료</dt><dd>§10 표의 상황을 하나씩 재현해 기대대로 동작. Python 없는 PC 에서 <code>dist\simplerag\RAGSearchBox.exe</code> 로 끝까지 동작. <code>--autorun on</code> → 로그아웃·로그인 뒤 자동 상주, 폴더 이동 뒤 경로 보정, <code>--autorun off</code> 로 등록 제거 확인. 응답 시간·메모리 실측을 §11 에 기록</dd></dl></div></li>
+  </ol>
+</section>
+
+<footer>
+  <span>근거 자료: MDriveSearchBox <code>MainFrm.cpp</code> · <code>MDriveSearchBox.cpp</code> · <code>MNetDriveShellExtUtility.cpp</code> / SimpleRAG <code>src/simplerag/cli.py</code>(<code>cmd_chat</code> · <code>render_answer</code>) · <code>pipeline.py</code> · <code>config.py</code> · <code>README.md</code> · <code>build_exe.py</code></span>
+  <span>§11 의 시간과 메모리는 README 실측값에서 추정한 값이며, RAGSearchBox 실측으로 교체한다.</span>
+  <span>변경 이력: 2026-09-15 초안(질문마다 ask) → D1 <code>?</code> 접두어 · D2 상주 워커 반영 → D3 텍스트 해석 · D4 공유 venv · D6 지정 폴더(§5-1 신설) · D7 boot+60분 반영 → D5 자동 시작 선택 등록 반영 → P0 1차 결과 반영(T2 두 비트·저장 요소 읽기, T3 제외, stdin cp949, 메모리·응답 실측, D8 신설) → 2026-09-16 D8(가) 적용: SimpleRAG 를 <code>--python-option u</code> 로 재빌드하고 P0-4 재측정 반영.</span>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

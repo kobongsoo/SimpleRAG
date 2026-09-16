@@ -1,0 +1,38 @@
+# ── 대용량 산출물 (저장소에 넣지 않는다) ──────────────
+# models: GGUF·ONNX 모델 약 1.7GB — bench/download_models.py 로 받는다
+# runtime: llama.cpp Vulkan DLL 약 59MB — runtime/llama_vulkan/SOURCE.txt 참고
+models/
+runtime/
+dist/
+build/
+.venv/
+
+# ── 인덱스·상태 (각 PC 에서 생성된다) ────────────────
+qdrant_data/
+bm25_index.npz
+index_state.json
+gen_backend.json
+backup_index_*/
+index_backup_fixed/
+
+# ── 실험 산출물 (인덱스 사본·모델 포함) ──────────────
+exp2/
+exp3/
+exp4/
+exp5_rerank/
+exp6_kiwi/
+exp7_v3cases/
+exp8_igpu/
+exp9_prod/
+exp10_chunkfix/
+
+# ── 사내 문서와 그 원문이 들어간 파일 (공개 금지) ────
+# sample: 실제 규정 문서 / dataset: 골든셋(원문 인용) / results: 측정 로그(청크 원문)
+sample/
+dataset/
+results/
+
+# ── 기타 ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.log

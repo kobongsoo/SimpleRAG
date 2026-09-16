@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimpleRAG 답변 품질 개선 계획</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa;
+  --surface: #ffffff;
+  --sunken: #eceff4;
+  --ink: #19212d;
+  --ink-2: #3c4656;
+  --muted: #647083;
+  --rule: #d9dee6;
+  --accent: #2c5aa0;
+  --accent-soft: #e3ebf7;
+  --good: #2a7a57;
+  --good-soft: #e2f1ea;
+  --warn: #a8701a;
+  --warn-soft: #f7ecd8;
+  --bad: #b0463b;
+  --bad-soft: #f6e3e0;
+  --bar-track: #e3e7ee;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b;
+    --surface: #181e26;
+    --sunken: #1f2630;
+    --ink: #e4e8ee;
+    --ink-2: #c2c9d3;
+    --muted: #8f9aa9;
+    --rule: #2b3441;
+    --accent: #86a9e3;
+    --accent-soft: #1f2c42;
+    --good: #6cc39a;
+    --good-soft: #17322a;
+    --warn: #e0ad5c;
+    --warn-soft: #3a2d17;
+    --bad: #e58a7f;
+    --bad-soft: #3b1f1c;
+    --bar-track: #26303c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b;
+  --surface: #181e26;
+  --sunken: #1f2630;
+  --ink: #e4e8ee;
+  --ink-2: #c2c9d3;
+  --muted: #8f9aa9;
+  --rule: #2b3441;
+  --accent: #86a9e3;
+  --accent-soft: #1f2c42;
+  --good: #6cc39a;
+  --good-soft: #17322a;
+  --warn: #e0ad5c;
+  --warn-soft: #3a2d17;
+  --bad: #e58a7f;
+  --bad-soft: #3b1f1c;
+  --bar-track: #26303c;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  padding-inline: 20px;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15.5px;
+  line-height: 1.7;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { text-wrap: balance; line-height: 1.3; margin: 0; }
+
+.shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-block: 48px 80px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 40px;
+}
+@media (min-width: 1040px) {
+  .shell { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; }
+}
+
+/* 목차 */
+.toc { display: none; }
+@media (min-width: 1040px) {
+  .toc { display: block; position: sticky; top: 32px; align-self: start; font-size: 13.5px; }
+}
+.toc p { margin: 0 0 10px; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; border-left: 1px solid var(--rule); }
+.toc a { display: block; padding-left: 14px; color: var(--ink-2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+
+main { min-width: 0; max-width: 820px; display: grid; gap: 56px; }
+
+/* 머리 */
+header.doc { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+.eyebrow { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+h1 { font-size: clamp(28px, 4vw, 38px); font-weight: 700; letter-spacing: -0.01em; }
+.lede { margin: 0; max-width: 64ch; color: var(--ink-2); font-size: 16.5px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; scroll-margin-top: 24px; }
+.phase, .twocol > *, .baseline > * { min-width: 0; }
+h2 { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 12px; }
+h2 .sec { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--muted); }
+h3 { font-size: 16.5px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.note { color: var(--muted); font-size: 13.5px; }
+
+/* 현재 위치 — 지표 막대 */
+.baseline { display: grid; gap: 22px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .baseline { grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; }
+.bars { display: grid; gap: 14px; }
+.bar-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) 52px; gap: 12px; align-items: center; }
+.bar-row .name { font-size: 14px; }
+.bar-row .name small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+.bar-row .val { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; font-size: 14px; }
+.track { position: relative; height: 10px; background: var(--bar-track); border-radius: 5px; }
+.fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--accent); }
+.fill.focus { background: var(--warn); }
+.target { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); opacity: 0.55; }
+.scale { display: grid; grid-template-columns: 140px minmax(0, 1fr) 52px; gap: 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.scale span { display: flex; justify-content: space-between; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend i.tick { width: 2px; height: 12px; background: var(--ink); opacity: 0.55; border-radius: 0; }
+
+.facts { display: grid; gap: 0; }
+.fact { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.fact:first-child { padding-top: 0; }
+.fact:last-child { border-bottom: 0; padding-bottom: 0; }
+.fact span { font-size: 13.5px; color: var(--ink-2); }
+.fact b { font-family: var(--mono); font-weight: 500; font-variant-numeric: tabular-nums; font-size: 15px; }
+
+/* 진단 */
+.findings { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.findings li { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 14px; padding: 12px 0; border-top: 1px solid var(--rule); }
+.findings li:first-child { border-top: 0; padding-top: 0; }
+.findings .num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 500; color: var(--ink); }
+.findings .num small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+
+/* 표 */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; background: var(--sunken); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .id { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+.wide-table table { min-width: 860px; }
+
+/* 칩 */
+.chip { display: inline-block; font-size: 11.5px; line-height: 1; padding: 5px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+.chip.wait { background: var(--sunken); color: var(--ink-2); }
+.chip.high { background: var(--accent-soft); color: var(--accent); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.chip.good { background: var(--good-soft); color: var(--good); }
+
+/* 진행 순서 */
+.phases { display: grid; gap: 28px; }
+.phase { display: grid; gap: 14px; }
+.phase-head { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; align-items: baseline; }
+.phase-tag { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--surface); background: var(--ink); padding: 3px 8px; border-radius: 5px; }
+.phase-head h3 { font-size: 18px; }
+.phase-head p { grid-column: 2; color: var(--muted); font-size: 14px; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+.step { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 4px 14px; padding: 16px 18px; border-top: 1px solid var(--rule); }
+.step:first-child { border-top: 0; }
+.step .sid { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent); padding-top: 2px; }
+.step h4 { margin: 0; font-size: 15px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.step .body { display: grid; gap: 8px; }
+.step dl { margin: 0; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; }
+.step dt { color: var(--muted); }
+.step dd { margin: 0; color: var(--ink-2); }
+.gate-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); padding: 10px 18px; border-top: 1px dashed var(--rule); background: var(--sunken); border-radius: 0 0 10px 10px; }
+.gate-row b { color: var(--ink); font-weight: 600; }
+@media (max-width: 520px) {
+  .step { grid-template-columns: 1fr; }
+  .step dl { grid-template-columns: 1fr; gap: 0 0; }
+  .step dt { margin-top: 6px; }
+  .bar-row, .scale { grid-template-columns: 96px minmax(0, 1fr) 44px; gap: 8px; }
+  .findings li { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* 코드 */
+pre { margin: 0; overflow-x: auto; background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12.8px; line-height: 1.65; color: var(--ink-2); }
+pre .c { color: var(--muted); }
+
+.twocol { display: grid; gap: 18px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .twocol { grid-template-columns: 1fr 1fr; } }
+.twocol .panel h3 { margin-bottom: 8px; }
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; color: var(--ink-2); }
+
+.decisions { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.decisions li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+.decisions li p { color: var(--ink-2); }
+.decisions li b { color: var(--ink); }
+
+footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+@media print {
+  .toc { display: none; }
+  .shell { grid-template-columns: 1fr; padding-block: 0; }
+  section { break-inside: avoid-page; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<nav class="toc" aria-label="목차">
+  <p>목차</p>
+  <ol>
+    <li><a href="#now">현재 위치</a></li>
+    <li><a href="#why">진단</a></li>
+    <li><a href="#goal">목표와 채택 기준</a></li>
+    <li><a href="#order">진행 순서</a></li>
+    <li><a href="#list">실험 목록</a></li>
+    <li><a href="#measure">측정 방법</a></li>
+    <li><a href="#skip">보류한 것</a></li>
+    <li><a href="#risk">위험과 주의</a></li>
+    <li><a href="#decide">결정이 필요한 것</a></li>
+    <li><a href="#record">기록 규칙</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="doc">
+  <div class="eyebrow">SimpleRAG · 실험 계획서 · Faithfulness / Answer Relevancy</div>
+  <h1>답변 품질 개선 계획</h1>
+  <p class="lede">골든셋 100문항 RAGAS 측정(REPORT §36)에서 검색보다 <b>답변 생성</b>이 약하다는 것이 드러났다.
+  이 계획은 한 번에 한 가지씩 바꾸고, 같은 잣대로 재서, 기준을 넘는 것만 운영에 반영하는 순서를 정한다.</p>
+  <div class="meta">
+    <span><b>작성</b> 2026-09-15</span>
+    <span><b>기준선</b> REPORT §36 (운영 설정, pool 10 · 근거 3 · qwen3-0.6b-q4 · iGPU)</span>
+    <span><b>상태</b> 1단계 끝 · 2-2 1.7B 품질 상승 확정(F +0.100, 506문항 +22 p=0.007) · 속도 불합격 · D7 ②(근거 3→2) 기각 — 1.7B 운용 방식 결정 대기(D8)</span>
+    <span><b>갱신</b> 2026-09-16 · REPORT §37 ~ §43</span>
+  </div>
+</header>
+
+<section id="now">
+  <h2><span class="sec">1</span>현재 위치</h2>
+  <div class="baseline">
+    <div class="panel">
+      <div class="bars" role="list" aria-label="RAGAS 4지표 기준선">
+        <div class="bar-row" role="listitem">
+          <div class="name">Faithfulness<small>답이 근거에 기대는가</small></div>
+          <div class="track"><div class="fill focus" style="width:69.4%"></div><div class="target" style="left:80%"></div></div>
+          <div class="val">0.694</div>
+        </div>
+        <div class="bar-row" role="listitem">
+          <div class="name">Answer Relevancy<small>질문에 맞게 답했나</small></div>
+          <div class="track"><div class="fill focus" style="width:67%"></div></div>
+          <div class="val">0.670</div>
+        </div>
+        <div class="bar-row" role="listitem">
+          <div class="name">Context Precision<small>쓸모 있는 근거가 위에</small></div>
+          <div class="track"><div class="fill" style="width:82%"></div></div>
+          <div class="val">0.820</div>
+        </div>
+        <div class="bar-row" role="listitem">
+          <div class="name">Context Recall<small>필요한 내용이 근거에</small></div>
+          <div class="track"><div class="fill" style="width:86%"></div><div class="target" style="left:90%"></div></div>
+          <div class="val">0.860</div>
+        </div>
+        <div class="scale" aria-hidden="true"><span></span><span><em>0</em><em>0.5</em><em>1.0</em></span><span></span></div>
+      </div>
+      <div class="legend"><span><i style="background:var(--warn)"></i>이번 계획의 대상</span><span><i class="tick"></i>제안 목표(결정 대기)</span></div>
+    </div>
+    <div class="panel facts">
+      <div class="fact"><span>4지표 평균</span><b>0.761</b></div>
+      <div class="fact"><span>정답 문서가 근거 3건에 든 문항</span><b>100 / 100</b></div>
+      <div class="fact"><span>핵심어(must) 모두 맞힌 답</span><b>38 / 100</b></div>
+      <div class="fact"><span>506문항 핵심어 정답률</span><b>74.9 %</b></div>
+      <div class="fact"><span>TTFT 중앙값 · 최대</span><b>1.58 · 2.57 s</b></div>
+      <div class="fact"><span>3초 목표까지 남은 여유(중앙값)</span><b>≈ 1.4 s</b></div>
+    </div>
+  </div>
+  <p class="note">Answer Relevancy 는 ragas 가 역질문을 영어로 만들어 절대값이 눌려 있다(좋은 답도 0.7 안팎). 목표는 절대값이 아니라 기준선 대비 상승으로 잡는다.</p>
+</section>
+
+<section id="why">
+  <h2><span class="sec">2</span>진단 — 왜 F·AR 이 낮은가</h2>
+  <p>근거가 완벽한 문항도 답이 흔들린다. 병목은 생성 쪽이고, 그다음이 사본·표 같은 근거 구성이다.</p>
+  <ul class="findings">
+    <li><div class="num">0.722<small>F, CR = 1.0 인 82문항</small></div><div>필요한 내용이 근거에 다 있어도 Faithfulness 가 0.72 에 머문다. 검색을 더 고쳐도 F 의 대부분은 남는다.</div></li>
+    <li><div class="num">0.868 / 0.593<small>F, 핵심어 적중 / 미적중</small></div><div>틀린 답이 곧 근거 없는 주장이다. 답의 정확도를 올리는 실험이 F 를 올린다.</div></li>
+    <li><div class="num">0.622 / 0.719<small>F, 150자 초과 / 이하</small></div><div>"3~5문장으로 요약" 지시가 문장을 늘리고, 늘어난 문장이 근거 없는 주장이 된다.</div></li>
+    <li><div class="num">0.637 / 0.683<small>AR, "[1] 문서명 &gt;" 로 시작 / 그 외</small></div><div>근거 머리를 옮겨 적으며 시작하는 답은 질문에 바로 답하지 않는다.</div></li>
+    <li><div class="num">0.50 / 0.887<small>CR, 사본 중복 7문항 / 나머지</small></div><div>제목 접두 때문에 사본 제거가 안 걸려 같은 본문이 근거 3칸 중 2칸을 차지한다(§36.6).</div></li>
+    <li><div class="num">5 유형<small>0.6B 실패 사례</small></div><div>지시문 되뱉기(g004·g034) · 표 열 혼동(g048, 15,000→25,000) · 짧은 사실 바꿔 쓰기(g063) · 없는 조항 번호(g029 "[13조]") · 사본 섞기(g017).</div></li>
+  </ul>
+</section>
+
+<section id="goal">
+  <h2><span class="sec">3</span>목표와 채택 기준</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>구분</th><th>기준</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td>목표 (제안)</td><td>Faithfulness ≥ <b>0.80</b> · Context Recall ≥ <b>0.90</b> · Answer Relevancy 기준선 대비 상승</td><td>결정 대기 D1</td></tr>
+        <tr><td>채택 조건 ①</td><td>F 또는 AR 이 <b>판정 잡음 폭</b>보다 크게 오른다 — F <b>≥ +0.03</b> · AR <b>≥ +0.01</b> · (검색 실험) CR <b>≥ +0.02</b></td><td>0-1 실측 잡음 폭 F ±0.028 · AR ±0.006 · CR ±0.020. 경계선이면 재채점으로 방향 확인</td></tr>
+        <tr><td>채택 조건 ②</td><td>506문항 핵심어 정답률이 <b>내려가지 않는다</b> (McNemar 로 잃음 ≤ 얻음 확인)</td><td>100문항만으로는 몇 %p 를 판정할 수 없다</td></tr>
+        <tr><td>채택 조건 ③</td><td>TTFT 중앙값 ≤ <b>3.0초</b>, 3초 이내 비율 ≥ <b>90%</b></td><td>현재 1.58초 · 100%</td></tr>
+        <tr><td>기각</td><td>①~③ 중 하나라도 어긋나면 되돌리고 기록만 남긴다</td><td>"효과 없음" 도 결과로 기록</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="order">
+  <h2><span class="sec">4</span>진행 순서</h2>
+  <p>뒤 단계의 판단이 앞 단계 결과에 기대므로 순서를 지킨다. 같은 단계 안에서는 <b>하나씩 누적</b>으로 바꾸고, 채택된 변경 위에 다음 실험을 얹는다.</p>
+
+  <div class="phases">
+
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">0단계</span><h3>측정 기반 만들기</h3><p>실험을 비교할 잣대부터 고정한다. 코드·설정은 바꾸지 않는다.</p></div>
+      <ol class="steps">
+        <li class="step"><div class="sid">0-1</div><div class="body">
+          <h4>판정 잡음 폭 재기 <span class="chip good">완료</span></h4>
+          <dl><dt>무엇</dt><dd>§36 의 같은 답변(<code>responses.json</code>)을 F·AR·CR 로 한 번 더 채점해 문항별·평균 차이를 봤다.</dd>
+          <dt>왜</dt><dd>g094 처럼 판정 LLM 이 틀리는 경우가 있다. 잡음보다 작은 차이를 개선으로 읽지 않기 위해.</dd>
+          <dt>결과</dt><dd>잡음 폭(짝 95%) — <b>F ±0.028 · AR ±0.006 · CR ±0.020</b>. 같은 설정 재수집 답변은 100/100 동일(생성은 결정적) · TTFT 중앙값은 0.2초 흔들림. REPORT §37</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">0-2</div><div class="body">
+          <h4>실험별 결과 폴더 지원 <span class="chip good">완료</span></h4>
+          <dl><dt>무엇</dt><dd><code>bench/ragas_golden.py</code> 에 <code>--exp &lt;ID&gt;</code> 를 넣어 <code>results/ragas_golden/&lt;ID&gt;/</code> 에 답변·점수를 따로 둔다. 506문항 평가(<code>eval_large.py</code>)도 같은 ID 로 저장.</dd>
+          <dt>왜</dt><dd>결과 경로가 하나라 실험끼리 덮어썼다. 문항별 짝 비교가 가능해야 한다.</dd>
+          <dt>결과</dt><dd><code>--exp</code>·<code>--responses</code> 추가, 짝 비교 도구 <code>bench/ragas_compare.py</code> 신규(잡음 폭 자동 판정)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">0-3</div><div class="body">
+          <h4>Answer Relevancy 한국어 보정 <span class="chip warn">보류 · D2</span></h4>
+          <dl><dt>무엇</dt><dd>ragas 역질문 프롬프트를 한국어로 바꾼 채점을 기준선에 한 번 돌려 영어판과 비교한다.</dd>
+          <dt>왜</dt><dd>절대값을 보고서에 쓰려면 필요하다. 상대 비교만 한다면 건너뛰어도 된다(결정 대기 D2).</dd></dl>
+        </div></li>
+      </ol>
+      <div class="gate-row"><span class="chip good">통과</span><span>잡음 폭 저장(<code>noise_band.json</code>), 실험별 폴더·짝 비교 준비 완료 — 1단계는 D4(1-1 착수 승인) 뒤 시작</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">1단계</span><h3>싼 실험 — 코드 몇 줄·설정 한 줄</h3><p>재인덱싱 없이 되돌리기 쉬운 것부터. 한 실험 = 수집 약 3분 + F·AR 채점 약 15분 + 506문항 약 30분.</p></div>
+      <ol class="steps">
+        <li class="step"><div class="sid">1-1</div><div class="body">
+          <h4>사본 제거가 제목 접두를 무시하게 <span class="chip good">유지 · 결함 수정</span></h4>
+          <dl><dt>바꾼 곳</dt><dd><code>retrieve/hybrid.py</code> <code>dedup_key()</code> 파일명 접두 무시 + 리랭킹 뒤 재제거 <code>pick_unique()</code> (풀이 사본으로 채워지면 같은 점수의 사본이 옆에 붙었다)</dd>
+          <dt>노림</dt><dd>CR·F (사본 쌍 문서 d04·d13). 운영 코퍼스 전반의 사본에도 이득</dd>
+          <dt>결과</dt><dd>근거 사본 7 → <b>0</b>. 골든셋 F −0.011 · AR +0.000 · CR +0.010 — 모두 잡음 이내. 506문항 379 → 377(잃음 7/얻음 5, p=0.774). TTFT 1.91초 · 97.2%. → 조건 ① 미달, ②·③ 통과. 품질 효과는 없고 결함 수정으로서 <b>유지 권장</b>(REPORT §38)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">1-2</div><div class="body">
+          <h4>답변 길이 상한 200 → 120 토큰 <span class="chip bad">기각</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>config.yaml</code> <code>generation.max_tokens</code>(새로 노출) · 환경변수 <code>SIMPLERAG_GEN_MAX_TOKENS</code> — 실험은 환경변수로, 기준선은 <code>e11_dedup</code></dd>
+          <dt>노림</dt><dd>F — 덧붙인 문장 감소</dd>
+          <dt>위험</dt><dd>절차형 답이 잘린다 — procedural 21문항 점수를 따로 본다</dd>
+          <dt>결과</dt><dd>F −0.009 · AR −0.004(잡음 이내), 잘린 21문항 F 0.676→0.685. 506문항 377→377(0/0). 문장 중간 끊김 6→<b>20</b>, 전체 응답 −0.2초. → 기본값 200 유지, <code>generation.max_tokens</code> 노출만 남김(REPORT §39)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">1-3</div><div class="body">
+          <h4>프롬프트 V4 — "첫 문장에 바로 답, 1~2문장" <span class="chip bad">기각</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>generate/prompts.py</code> <code>SYSTEM_PROMPT_V4</code> — "3~5문장으로 요약" 한 곳만 "첫 문장에 바로 쓰고, 1~2문장으로 요약" 으로. 추측 금지·인용 표기 문구는 v0 그대로(되뱉기 제거 패턴 유지). <code>config.yaml generation.prompt</code>(기본 v0) · 실험은 <code>SIMPLERAG_PROMPT=v4</code></dd>
+          <dt>노림</dt><dd>F·AR 동시</dd>
+          <dt>위험</dt><dd>V3 프롬프트가 실문서에서 83% → 50% 로 뒤집힌 전례(§13.5). 506문항 정답률을 반드시 함께 본다</dd>
+          <dt>결과</dt><dd>F +0.001 · AR −0.005(잡음 이내), 핵심어 39→32. <b>506문항 377→358(잃음 30/얻음 11, p=0.004) — 유의한 하락.</b> 짧아지며 맞는 두 번째 사실이 빠졌다. v0 유지(REPORT §40)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">1-4</div><div class="body">
+          <h4>되뱉기 후처리 패턴 보강 <span class="chip warn">표시 품질</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>prompts.py</code> <code>_ECHO_PATTERNS</code> — "근거에 없는 내용은 추측하지 않습니다", "근거 번호 표기", 마크다운 <code>**</code></dd>
+          <dt>주의</dt><dd>§18 의 교훈 — 되뱉기가 있던 답은 내용도 틀린 경우가 많았다. 점수 개선이 목적이 아니라 화면 품질 정리다</dd></dl>
+        </div></li>
+      </ol>
+      <div class="gate-row"><span class="chip warn">정리</span><span>1-1 유지 · 1-2 기각 · 1-3 기각 — 형식 손잡이(사본·길이·지시)로는 F·AR 이 움직이지 않았다(REPORT §40.5). 병목은 모델의 근거 사용 능력 → 2단계로. 1-4(화면 품질)는 모델 결정 뒤에</span></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">2단계</span><h3>큰 레버 — 답변 모델 교체</h3><p>F·AR 에 가장 큰 효과가 기대되지만 속도를 먼저 통과해야 한다. TTFT 관문을 넘지 못하면 품질은 재지 않는다.</p></div>
+      <ol class="steps">
+        <li class="step"><div class="sid">2-1</div><div class="body">
+          <h4>qwen3-1.7b-q4 iGPU TTFT 관문 <span class="chip bad">불합격</span></h4>
+          <dl><dt>무엇</dt><dd>이미 보유한 1.7B 로 골든셋 20문항 TTFT 만 잰다(<code>SIMPLERAG_GEN_BACKEND=auto</code>).</dd>
+          <dt>왜</dt><dd>CPU 전용일 때 TTFT 14.7초로 탈락했다(§30). iGPU 에서 LLM 구간이 2.25 → 0.8초가 됐으므로 다시 볼 만하다. 0.6B 는 짧은 사실을 바꿔 쓰는 실수가 더 많았다(§14.5).</dd>
+          <dt>관문</dt><dd>중앙값 ≤ 3.0초, 3초 이내 ≥ 90%</dd>
+          <dt>결과</dt><dd>20문항 TTFT p50 <b>3.54초</b> · 3초 이내 <b>6/20</b> — 불합격. iGPU prefill 291 t/s(0.6B 766). 전체 응답 p50 10.2초. 대신 핵심어 8→12(사실상 5 얻음/0 잃음). 다음 경로는 D6(REPORT §41)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">2-2</div><div class="body">
+          <h4>1.7B 품질 측정 <span class="chip good">품질 상승 확정</span> <span class="chip bad">속도 불합격</span></h4>
+          <dl><dt>무엇</dt><dd>1단계 채택분 위에서 F·AR·CR(골든셋) + 506문항 정답률 + TTFT 전 분포</dd>
+          <dt>결과</dt><dd>F <b>0.689→0.789(+0.100)</b> · AR +0.024 — 둘 다 잡음 폭 초과. 핵심어 39→59. <b>506문항 377→399(잃음 20/얻음 42, p=0.007)</b>, 생성 실패 105→82. 대신 TTFT p50 3.38초(골든셋)·2.67초(506), 3초 이내 36%·71.5%, 전체 응답 p50 6~11초. REPORT §42</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">2-3</div><div class="body">
+          <h4>한국어 특화 2~4B 후보 <span class="chip warn">라이선스 확인</span></h4>
+          <dl><dt>무엇</dt><dd>EXAONE 3.5 2.4B, Kanana 등 GGUF 가 있는 후보를 같은 절차(관문 → 품질)로 잰다.</dd>
+          <dt>먼저</dt><dd>사내 배포 라이선스·GGUF 양자화본 존재·llama.cpp 채팅 템플릿 호환을 확인한다(결정 대기 D3)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">2-4</div><div class="body">
+          <h4>모델 결정 <span class="chip bad">사용자 결정</span></h4>
+          <dl><dt>무엇</dt><dd>속도(TTFT)·품질(F·AR·정답률)·배포 크기(exe 용량)를 한 표로 놓고 기본 모델을 고른다. 0.6B 는 "빠른 모드" 로 남길 수 있다.</dd></dl>
+        </div></li>
+      </ol>
+      <div class="gate-row"><b>다음 단계로</b> 기본 모델이 정해지면 — 3단계의 값은 모델마다 최적점이 달라 모델 결정 뒤에 잰다</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">3단계</span><h3>선택한 모델 기준 재조정</h3><p>작은 모델에서는 손해였던 설정이 큰 모델에서는 이득일 수 있다. 재인덱싱이 필요한 것은 뒤에 둔다.</p></div>
+      <ol class="steps">
+        <li class="step"><div class="sid">3-1</div><div class="body">
+          <h4>근거 수 3 → 4 → 5 <span class="chip wait">대기</span> <span class="chip bad">3→2 는 기각(§43)</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>config.yaml</code> <code>generation.top_k</code></dd>
+          <dt>노림</dt><dd>CR↑. 방해 근거가 늘어 F 는 내려갈 수 있다 — 두 지표를 함께 본다</dd>
+          <dt>비용</dt><dd>프롬프트 +128~256 토큰, TTFT +0.2~0.4초(추정)</dd>
+          <dt>반대 방향 측정</dt><dd>1.7B 를 3초에 맞추려 <b>3 → 2</b> 로 줄여 봤다: LLM 첫 토큰 −0.72초지만 CR 0.86→0.79 · 506문항 399→377(p=0.001) — 이득이 전부 사라졌다. 3초 이내도 71%(506)로 그대로(REPORT §43)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">3-2</div><div class="body">
+          <h4>청크 접두 괄호 모양 변경 <span class="chip warn">재인덱싱</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>chunk.py</code> 접두 <code>[문서명 &gt; 절]</code> → <code>《문서명 › 절》</code> 등 인용 표기와 다른 모양</dd>
+          <dt>노림</dt><dd>F — 가짜 인용·조항 번호(<code>[12]</code>, <code>[13조]</code>) 감소(§24)</dd>
+          <dt>비용</dt><dd>sample 20건 재인덱싱은 짧다. 1-1 의 접두 제거 규칙도 새 모양에 맞춘다</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">3-3</div><div class="body">
+          <h4>표를 "머리글: 값" 행 단위 평문으로 <span class="chip warn">재인덱싱</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>extract.py</code> 표 정규화 또는 <code>chunk.py</code> 표 분할</dd>
+          <dt>노림</dt><dd>표 문항 F — 열 혼동(§22.5, g048). 출장여비 규정 F 0.612</dd>
+          <dt>위험</dt><dd>청크 수·토큰이 늘어 검색·TTFT 가 달라진다 — 검색 지표도 다시 본다</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">3-4</div><div class="body">
+          <h4>검색 후보 수 dense·BM25 10 → 20 <span class="chip wait">CR 이 남으면</span></h4>
+          <dl><dt>바꿀 곳</dt><dd><code>config.yaml</code> <code>retrieval.dense_top_k</code> · <code>bm25_top_k</code></dd>
+          <dt>조건</dt><dd>3-1~3-3 뒤에도 CR &lt; 0.90 일 때만. 문서 도달은 이미 100% 라 기대 효과가 작다</dd></dl>
+        </div></li>
+      </ol>
+      <div class="gate-row"><b>다음 단계로</b> 채택분이 모두 누적되면</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head"><span class="phase-tag">4단계</span><h3>마감 — 운영 반영</h3><p>최종 조합을 전 지표로 한 번 재고 배포물까지 맞춘다.</p></div>
+      <ol class="steps">
+        <li class="step"><div class="sid">4-1</div><div class="body">
+          <h4>최종 4지표 측정 <span class="chip wait">대기</span></h4>
+          <dl><dt>무엇</dt><dd>F·AR·CR(thinking 끔) + CP(thinking 켬) 전체 측정, 506문항 정답률, TTFT 분포. §36 과 나란히 비교</dd>
+          <dt>소요</dt><dd>약 1시간 30분(CP 채점이 대부분)</dd></dl>
+        </div></li>
+        <li class="step"><div class="sid">4-2</div><div class="body">
+          <h4>기본값·배포물 반영 <span class="chip wait">대기</span></h4>
+          <dl><dt>무엇</dt><dd><code>config.yaml</code>(저장소·exe 폴더)·코드 기본값, 회귀 테스트, exe 재빌드, README·doc/03·doc/04 갱신</dd></dl>
+        </div></li>
+      </ol>
+    </div>
+
+  </div>
+</section>
+
+<section id="list">
+  <h2><span class="sec">5</span>실험 목록 한눈에</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>ID</th><th>변경</th><th>노리는 지표</th><th>재인덱싱</th><th>되돌리기</th><th>근거</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td><span class="id">0-1</span></td><td>판정 잡음 폭 측정</td><td>—</td><td>없음</td><td>—</td><td>g094 오판 → §37.3</td><td><span class="chip good">완료</span></td></tr>
+        <tr><td><span class="id">0-2</span></td><td>실험별 결과 폴더</td><td>—</td><td>없음</td><td>—</td><td>결과 경로 단일 → §37.1</td><td><span class="chip good">완료</span></td></tr>
+        <tr><td><span class="id">0-3</span></td><td>AR 한국어 프롬프트</td><td>AR(측정 보정)</td><td>없음</td><td>—</td><td>§36.5</td><td><span class="chip warn">보류 · D2</span></td></tr>
+        <tr><td><span class="id">1-1</span></td><td>사본 제거 접두 무시</td><td>CR · F</td><td>없음</td><td>코드</td><td>§38 — 사본 7→0, 지표 잡음 이내, 506 p=0.774</td><td><span class="chip good">유지</span></td></tr>
+        <tr><td><span class="id">1-2</span></td><td>max_tokens 200 → 120</td><td>F</td><td>없음</td><td>설정</td><td>§39 — 지표 잡음 이내, 506 0/0, 끊긴 답 6→20</td><td><span class="chip bad">기각</span></td></tr>
+        <tr><td><span class="id">1-3</span></td><td>프롬프트 V4</td><td>F · AR</td><td>없음</td><td>코드</td><td>§40 — 506 377→358, p=0.004</td><td><span class="chip bad">기각</span></td></tr>
+        <tr><td><span class="id">1-4</span></td><td>되뱉기 후처리 보강</td><td>표시 품질</td><td>없음</td><td>코드</td><td>g004 · g034, §18</td><td><span class="chip wait">대기</span></td></tr>
+        <tr><td><span class="id">2-1</span></td><td>1.7B iGPU TTFT 관문</td><td>TTFT</td><td>없음</td><td>설정</td><td>§41 — p50 3.54초, 3초 이내 6/20</td><td><span class="chip bad">불합격</span></td></tr>
+        <tr><td><span class="id">2-2</span></td><td>1.7B 품질</td><td>F · AR · 정답률</td><td>없음</td><td>설정</td><td>§42 — F +0.100, 506 +22(p=0.007), 3초 이내 36~72%</td><td><span class="chip good">품질 확정</span></td></tr>
+        <tr><td><span class="id">2-3</span></td><td>한국어 2~4B 후보</td><td>F · AR · 정답률</td><td>없음</td><td>모델 파일</td><td>라이선스 확인 필요</td><td><span class="chip wait">대기</span></td></tr>
+        <tr><td><span class="id">3-1</span></td><td>근거 수 3 → 4 → 5</td><td>CR (F 는 주의)</td><td>없음</td><td>설정</td><td>§2 (0.6B 기준 3 최적)</td><td><span class="chip wait">대기</span></td></tr>
+        <tr><td><span class="id">3-2</span></td><td>접두 괄호 모양</td><td>F</td><td>필요</td><td>재인덱싱</td><td>§24 가짜 인용</td><td><span class="chip wait">대기</span></td></tr>
+        <tr><td><span class="id">3-3</span></td><td>표 행 단위 평문화</td><td>F(표)</td><td>필요</td><td>재인덱싱</td><td>§22.5 열 혼동</td><td><span class="chip wait">대기</span></td></tr>
+        <tr><td><span class="id">3-4</span></td><td>검색 후보 10 → 20</td><td>CR</td><td>없음</td><td>설정</td><td>문서 도달 100%</td><td><span class="chip wait">조건부</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="measure">
+  <h2><span class="sec">6</span>측정 방법</h2>
+  <div class="twocol">
+    <div class="panel">
+      <h3>한 실험의 절차</h3>
+      <ul class="plain">
+        <li>변경은 <b>하나만</b>. 설정은 <code>config.yaml</code> 로, 코드는 한 커밋 단위로.</li>
+        <li>답변 수집 → F·AR 채점(thinking 끔, NaN 재채점) → 검색을 건드렸으면 CR 추가.</li>
+        <li>506문항 핵심어 정답률을 같은 설정으로 돌려 McNemar 로 짝 비교.</li>
+        <li>CP(thinking 켬, 약 1시간)는 4-1 최종 측정에만.</li>
+        <li>TTFT 는 수집 로그의 중앙값·p90·3초 이내 비율.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>판정 설정 (§36 과 동일)</h3>
+      <ul class="plain">
+        <li>판정 LLM <code>qwen3.6-35b-a3b</code> @ 10.10.19.50:18001, temperature 0</li>
+        <li>임베딩 <code>qwen3-embedding:8b</code> @ :18002 (AR 전용)</li>
+        <li>ragas 0.4.3 — 수집은 <code>.venv</code>, 채점은 시스템 python</li>
+        <li>두 채점을 동시에 돌리지 않는다 — 동시 부하에서 NaN 이 늘었다</li>
+      </ul>
+    </div>
+  </div>
+<pre><span class="c"># 수집 (프로젝트 가상환경) — 실험 ID 폴더에 저장</span>
+.venv\Scripts\python bench\ragas_golden.py collect --exp e11_dedup
+<span class="c"># F · AR · CR 채점, 빈 칸만 재채점하며 이어하기</span>
+python bench\ragas_golden.py score --exp e11_dedup --no-think --metrics f,ar,cr --resume
+<span class="c"># 기준선과 짝 비교 — 잡음 폭(noise_band.json) 기준 상승/하락/잡음 이내 판정</span>
+python bench\ragas_compare.py baseline e11_dedup
+<span class="c"># 506문항 핵심어 정답률 (같은 실험 폴더에 저장)</span>
+.venv\Scripts\python bench\eval_large.py --cases eval_cases_v3 --stage answer --exp e11_dedup
+<span class="c"># 최종 측정에서만 — Context Precision (thinking 켬)</span>
+python bench\ragas_golden.py score --exp final --metrics cp --workers 12</pre>
+</section>
+
+<section id="skip">
+  <h2><span class="sec">7</span>보류한 것</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>후보</th><th>보류 이유</th><th>다시 볼 때</th></tr></thead>
+      <tbody>
+        <tr><td>청크 크기 128 → 192 / 256</td><td>§17 에서 정답률이 평평했다. 0.6B 에는 긴 근거가 방해가 된다</td><td>2단계에서 모델이 바뀐 뒤</td></tr>
+        <tr><td>문서 파서 교체</td><td>§15 · §22 의 추출 수정은 구조를 바로잡았지만 정답률은 그대로였다. 현재 실패는 파싱이 아니라 생성·근거 구성</td><td>표 행 평문화(3-3)로도 표 문항이 안 오를 때</td></tr>
+        <tr><td>답변 자기검증·재생성</td><td>생성을 두 번 하면 TTFT 3초를 지키기 어렵다</td><td>모델·프롬프트로 F 가 목표에 못 미칠 때</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="risk">
+  <h2><span class="sec">8</span>위험과 주의</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>위험</th><th>무엇이 일어나나</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td>프롬프트 역전</td><td>합성·소표본에서 좋았던 프롬프트가 실문서에서 무너진다(§13.5)</td><td>골든셋 + 506문항 둘 다 통과해야 채택</td></tr>
+        <tr><td>상관을 원인으로 읽기</td><td>§18 · §19 · §22 세 번 모두 "관측은 사실이나 원인이 아니었다"</td><td>고치기 전에 "이걸 고치면 무엇이 달라지는가" 를 측정 항목으로 먼저 적는다</td></tr>
+        <tr><td>판정 잡음</td><td>같은 답에 판정이 흔들리거나 틀린다(g094)</td><td>0-1 의 잡음 폭보다 큰 차이만 인정</td></tr>
+        <tr><td>표본 크기</td><td>100문항 · 문서당 2~11문항 — 문서별 점수는 흔들린다</td><td>문서별 표는 방향 확인용, 판정은 전체·506문항으로</td></tr>
+        <tr><td>판정 서버 시간</td><td>CP(thinking) 는 100문항 약 1시간, 4지표 전부 thinking 이면 약 4시간</td><td>실험 중에는 F·AR 만, CP 는 최종에만</td></tr>
+        <tr><td>모델 교체의 배포 비용</td><td>exe 용량 증가, 저사양·iGPU 없는 PC 에서 TTFT 초과</td><td>0.6B 를 빠른 모드로 유지, 백엔드 자동 선택(§32)과 함께 판단</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="decide">
+  <h2><span class="sec">9</span>결정이 필요한 것</h2>
+  <ul class="decisions">
+    <li><span class="chip bad">D1</span><p><b>목표치 확정</b> — 제안: Faithfulness ≥ 0.80, Context Recall ≥ 0.90, TTFT 중앙값 ≤ 3초 · 3초 이내 ≥ 90%.</p></li>
+    <li><span class="chip bad">D2</span><p><b>Answer Relevancy 한국어 보정(0-3) 여부</b> — 상대 비교만이면 생략, 보고서에 절대값을 쓸 거면 수행.</p></li>
+    <li><span class="chip bad">D3</span><p><b>2-3 후보 모델 범위</b> — 사내 배포가 가능한 라이선스인지, exe 용량 상한은 얼마인지.</p></li>
+    <li><span class="chip good">D4</span><p><b>1-1 착수 승인</b> — 승인됨(2026-09-15), 측정 완료.</p></li>
+    <li><span class="chip bad">D8</span><p><b>1.7B 운용 방식</b> — ③ 정밀 모드 분리(권장: 기본 0.6B 유지 + 선택 시 1.7B, 399/506) · 1.7B 기본 + "3초 이내 90%" 기준 완화 · 0.6B 유지하고 2-3(한국어 소형 모델)로. 근거 축약 길은 §43 에서 닫혔다</p></li>
+    <li><span class="chip good">D7</span><p><b>②(근거 3→2)로 3초 맞추기</b> — 측정 후 <b>기각</b>(2026-09-16). 속도는 못 맞추고 품질만 잃었다(REPORT §43.3)</p></li>
+    <li><span class="chip good">D6</span><p><b>2-1 불합격 뒤 경로</b> — <b>① 1.7B 품질부터 확정</b>(2026-09-15, 사용자 결정). 결과에 따라 ② 근거·접두 축약으로 3초 맞추기 또는 ③ 정밀 모드 분리를 정한다(REPORT §41.5)</p></li>
+    <li><span class="chip good">D5</span><p><b>1-1 유지 또는 되돌림</b> — <b>유지</b>(2026-09-15, 사용자 결정). 결함 수정으로 두고 기준선을 <code>e11_dedup</code>(골든셋)·<code>e11_dedup/large_answer</code>(506문항, 377)로 옮김.</p></li>
+  </ul>
+</section>
+
+<section id="record">
+  <h2><span class="sec">10</span>기록 규칙과 산출물</h2>
+  <div class="twocol">
+    <div class="panel">
+      <h3>기록</h3>
+      <ul class="plain">
+        <li>실험마다 <code>results/REPORT.md</code> 에 §37 부터 한 절씩 — 가설, 바꾼 것, 수치, 채택/기각, 이유.</li>
+        <li>기각도 기록한다. "효과 없음" 은 다음 실험을 고르는 근거다.</li>
+        <li>기준선이 바뀌면(채택 누적) 그 사실과 새 기준선 수치를 절 머리에 적는다.</li>
+        <li>이 계획서의 상태 칩은 단계가 끝날 때마다 갱신한다.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>산출물 위치</h3>
+      <ul class="plain">
+        <li>골든셋 <code>dataset/golden_dataset.jsonl</code></li>
+        <li>실험 결과 <code>results/ragas_golden/&lt;실험 ID&gt;/</code></li>
+        <li>기준선 <code>results/ragas_golden/final_summary.json</code> (§36)</li>
+        <li>506문항 결과 <code>results/ragas_golden/&lt;실험 ID&gt;/large_answer_*.json</code></li>
+        <li>판정 잡음 폭 <code>results/ragas_golden/noise_band.json</code> (§37)</li>
+        <li>스크립트 <code>bench/ragas_golden.py</code> · <code>ragas_compare.py</code> · <code>ragas_golden_report.py</code></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div>근거 문서 — <code>results/REPORT.md</code> §13.5 · §14.5 · §17 · §18 · §22 · §24 · §30 · §31 · §36, <code>dataset/README.md</code></div>
+  <div>시간 추정(수집·채점·506문항)은 §36 실측에서 나온 값이며 판정 서버 부하에 따라 달라진다.</div>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

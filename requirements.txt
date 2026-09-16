@@ -1,0 +1,28 @@
+# === 런타임 의존성 ===
+llama-cpp-python>=0.3.35   # GGUF 생성 (Windows CPU 프리빌트 휠)
+onnxruntime>=1.29          # 임베딩 추론 (int8 — fp32 대비 2.5배)
+tokenizers>=0.23           # 경량 토크나이저 (Rust 백엔드)
+numpy>=2.0                 # 벡터 연산/풀링
+qdrant-client>=1.12        # 벡터DB (local 모드 — 서버 프로세스 불필요)
+# rank-bm25 는 제거했다 — 43K청크에서 질의당 264ms(검색의 69%)를 먹어
+#   numpy 역색인으로 자체 구현했다(0.9ms). REPORT §16 참조.
+
+# --- 텍스트 추출: CSOClassify extract 모듈을 경로로 재사용(복사 안 함) ---
+#   SIMPLERAG_CSO_SRC 환경변수로 경로 지정. 기본 D:\Project\CSOClassify\src
+#   그 모듈이 요구하는 파서 의존성:
+olefile>=0.47              # OLE/CFB — hwp5, 레거시 doc/ppt
+pypdfium2>=4.0             # PDF 텍스트층
+xlrd>=2.0                  # 레거시 xls(BIFF)
+PyYAML>=6.0                # CSOClassify 설정 로드
+
+# === 설치 (CPU 프리빌트 휠 인덱스 지정 필수) ===
+#   pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+#   pip install -r requirements.txt
+#
+# === 모델 (별도 수급, 저장소에 포함하지 않음) ===
+#   models/Qwen3-0.6B-Q4_K_M.gguf   378MB  ← bench/download_models.py
+#   models/Qwen3-1.7B-Q4_K_M.gguf   1.1GB  (정밀 모드, 선택)
+#   임베딩 모델은 CSOClassify resources/models/e5-small-ko/ 를 그대로 참조
+#
+# CSOClassify 와 달리 이 프로젝트는 Windows 전용이라
+# CentOS7/glibc2.17 호환 제약을 상속하지 않는다(설계서 결정1).
