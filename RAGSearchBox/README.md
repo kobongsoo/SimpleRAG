@@ -1,0 +1,158 @@
+# RAGSearchBox
+
+Windows 탐색기 검색창에 `?` 로 시작하는 질문을 쓰고 Enter 를 누르면,
+SimpleRAG 가 사내 문서에서 근거를 찾아 답을 띄워 주는 상주 프로그램입니다.
+
+```
+탐색기 검색창:  ?연차 이월 기준은 어떻게 되나요   ⏎
+      ↓
+      근거 3건 (취업규칙 제29·30·31조) → AI 요약
+```
+
+`?` 가 없는 평소 파일 검색은 그대로 동작합니다. 지정한 폴더 안에서만 반응합니다.
+
+설계 문서: [`plan/RAGSearchBox_설계서.html`](../plan/RAGSearchBox_설계서.html)
+
+---
+
+## 1. 설치
+
+### 필요한 것
+
+* Windows 10 이상 (Windows 11 에서 실측 검증)
+* 이미 빌드된 SimpleRAG 배포 폴더 (`dist\simplerag`) 와 인덱싱된 문서
+* 관리자 권한은 **필요 없습니다**
+
+### 배치
+
+`RAGSearchBox.exe` 를 `simplerag.exe` 와 **같은 폴더**에 둡니다. 그러면 워커를 자동으로 찾습니다.
+
+```
+dist\simplerag\
+├─ simplerag.exe          ← 워커(모델). --python-option u 로 빌드된 것이어야 합니다
+├─ RAGSearchBox.exe       ← 이 프로그램
+├─ RAGSearchBox.ini       ← 설정 (필수: [Scope] Folders)
+├─ models\  qdrant_data\  runtime\  …
+```
+
+> ⚠️ 함께 쓰는 `simplerag.exe` 는 `--python-option u` 로 빌드된 것이어야 합니다.
+> 그 옵션이 없으면 근거가 답변과 함께 늦게 뜹니다(설계서 D8). `build_exe.py` 는 이미 이 옵션을 씁니다.
+
+### 설정 — 이것만 하면 됩니다
+
+`RAGSearchBox.ini` 의 `[Scope] Folders` 에 **동작할 폴더**를 적습니다. 여러 개면 `;` 로 나눕니다.
+
+```ini
+[Scope]
+Folders = D:\분류함;\\fileserver\공유\규정
+```
+
+**비워 두면 아무 데서도 동작하지 않습니다.** (모델도 올리지 않습니다.)
+지정한 폴더의 하위 폴더까지 포함합니다.
+
+> 폴더 제한은 **질문을 받을지**만 정합니다. 검색 자체는 인덱스 전체에서 하므로,
+> 지정 폴더와 인덱싱한 폴더를 맞춰 두는 것이 운영 규칙입니다.
+
+---
+
+## 2. 사용
+
+1. `RAGSearchBox.exe` 실행 → 트레이에 상주합니다 (창은 뜨지 않습니다)
+2. 지정한 폴더를 탐색기에서 연 뒤, 검색창에 `?질문` 을 쓰고 **Enter**
+3. 검색창 아래에 답변 창이 뜹니다. 근거가 먼저, 그다음 답변이 흘러나옵니다
+4. 답변 창은 **포커스를 뺏지 않습니다** — 탐색기에서 계속 작업할 수 있습니다. `Esc` 또는 `닫기` 로 닫습니다
+
+### 트레이 메뉴 (아이콘 오른쪽 클릭)
+
+| 항목 | 설명 |
+|---|---|
+| 모델 내리기 | 메모리(약 2.5GB)와 **인덱스 잠금**을 돌려줍니다. `simplerag index` 를 돌리기 전에 누르세요 |
+| 모델 다시 올리기 | 인덱싱이 끝난 뒤 다시 올립니다 (다음 질문 때 자동으로 올라오기도 합니다) |
+| 로그인 시 자동 시작 | 켜고 끕니다 (아래 참고) |
+| 로그 폴더 열기 | `%LOCALAPPDATA%\RAGSearchBox\log` |
+| 종료 | 워커까지 함께 내려갑니다 |
+
+트레이 아이콘에 마우스를 올리면 지금 상태(준비됨 / 답변 중 / 내려감)가 보입니다.
+
+---
+
+## 3. 로그인할 때 자동 시작
+
+기본은 **등록하지 않습니다**. 원하면 한 번만 실행하세요.
+
+```bat
+RAGSearchBox.exe --autorun on       :: 등록
+RAGSearchBox.exe --autorun off      :: 해제
+RAGSearchBox.exe --autorun status   :: 확인 (종료 코드 0=등록됨, 1=안 됨)
+```
+
+* 등록 위치는 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 입니다(사용자 단위, 관리자 권한 불필요)
+* 프로그램 폴더를 옮기면 다음 실행 때 경로를 알아서 고칩니다
+* **프로그램을 지우기 전에 `--autorun off` 를 먼저 실행하세요** — 없는 exe 를 가리키는 등록이 남지 않게
+* 창이 없는 프로그램이라 결과는 명령을 친 콘솔에 나옵니다. 콘솔 없이 실행했으면 로그에 남고, `on`/`off` 는 알림 창으로도 알려 줍니다
+
+`StartMode = boot`(기본) 와 함께 쓰면 로그인 직후 모델을 미리 올립니다(약 10초 CPU 사용).
+범위 폴더가 비어 있으면 올리지 않습니다.
+
+---
+
+## 4. 설정 항목
+
+| 섹션 | 키 | 기본 | 설명 |
+|---|---|---|---|
+| SimpleRAG | `SimpleRagExe` | (자동) | 비우면 exe 옆 → `..\dist\simplerag` 순서로 찾습니다 |
+| | `NoStream` | 0 | 1 이면 답변을 한 번에 받습니다 |
+| Worker | `StartMode` | boot | `boot`=시작 때 예열 / `lazy`=첫 질문 때 |
+| | `IdleUnloadMin` | 60 | 이 시간(분) 질문이 없으면 모델을 내립니다 (0=유지) |
+| | `AnswerTimeoutSec` | 60 | 답변이 멈추면 워커를 다시 올립니다 |
+| Monitor | `Mode` | 0 | 0=포커스 이벤트(기본) / 1=주기 조회 |
+| Trigger | `Prefix` | ? | 질문으로 볼 접두어. 기본값일 때는 전각 `？` 도 인정합니다 |
+| | `MinChars` | 2 | 접두어를 뗀 질문의 최소 길이 |
+| Scope | `Folders` | (없음) | **필수.** `;` 로 나눈 폴더 목록 |
+| Window | `Width` / `MaxHeight` / `FontSize` | 460 / 560 / 10 | 답변 창 모양 |
+| Log | `Level` | INFO | `DIAG` 로 바꾸면 검색창 판정까지 자세히 남습니다 |
+
+값이 범위를 벗어나면 기본값으로 되돌리고 트레이 알림과 로그로 알려 줍니다(프로그램은 계속 돕니다).
+
+---
+
+## 5. 잘 안 될 때
+
+로그부터 보세요: 트레이 메뉴 → **로그 폴더 열기** (`%LOCALAPPDATA%\RAGSearchBox\log`)
+
+| 증상 | 확인할 것 |
+|---|---|
+| 답변 창이 안 뜬다 | `[Scope] Folders` 에 지금 폴더가 들어 있는가. 로그에 `범위 밖` 이 찍힙니다 |
+| 아무 반응이 없다 | `Level = DIAG` 로 바꾸고 다시 시도 — `무장됨` / `질문 확정` 이 찍히는지 봅니다 |
+| "SimpleRAG 를 찾지 못했습니다" | `RAGSearchBox.exe` 가 `simplerag.exe` 옆에 있는지, 아니면 INI 의 `SimpleRagExe` 를 지정 |
+| `simplerag index` 가 잠금 오류 | 트레이 → **모델 내리기** 후 인덱싱, 끝나면 **모델 다시 올리기** |
+| "SimpleRAG chat/index 가 실행 중입니다" | 다른 곳에서 chat/index 를 쓰는 중입니다. 끝낸 뒤 다시 질문하세요 |
+| 두 번 실행해도 하나만 뜬다 | 정상입니다. 중복 실행을 막습니다(모델이 둘이 되지 않게) |
+
+---
+
+## 6. 개발자용
+
+```bat
+:: 의존성 (SimpleRAG 의 .venv 를 공유합니다)
+.venv\Scripts\python.exe -m pip install -r RAGSearchBox\requirements.txt
+
+:: 소스로 실행
+.venv\Scripts\python.exe RAGSearchBox\main.py
+
+:: 단위 시험 (탐색기·모델 없이 도는 것들)
+cd RAGSearchBox\tests && ..\..\.venv\Scripts\python.exe -m unittest discover -p "test_*.py"
+
+:: 아이콘 다시 그리기
+.venv\Scripts\python.exe RAGSearchBox\make_icon.py
+
+:: exe 빌드 (+ dist\simplerag 로 배포)
+.venv\Scripts\python.exe RAGSearchBox\build_searchbox.py --deploy
+```
+
+눈으로 보는 확인 스크립트도 있습니다.
+
+* `tests\manual_ui.py` — 답변 창·트레이를 가짜 워커로 띄워 봅니다
+* `tests\manual_app.py` — 감시를 빼고 app 전체 흐름을 확인합니다
+
+모든 `.py` 함수·클래스·메서드에는 `D:\Project\CLAUDE.md` 형식의 한글 주석 헤더를 답니다.

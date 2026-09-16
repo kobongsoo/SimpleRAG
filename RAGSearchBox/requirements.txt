@@ -1,0 +1,6 @@
+# RAGSearchBox 추가 패키지 — SimpleRAG 의 .venv 를 공유해 설치한다 (설계서 D4)
+#   .venv\Scripts\python.exe -m pip install -r RAGSearchBox\requirements.txt
+#
+# pywin32 와 pyinstaller 는 SimpleRAG 쪽에 이미 들어 있다.
+# tkinter 는 파이썬 표준 라이브러리라 따로 받지 않는다.
+comtypes>=1.4
