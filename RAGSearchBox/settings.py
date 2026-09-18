@@ -42,6 +42,12 @@ INI_NAME = "RAGSearchBox.ini"
 # -필드: searchbox_trigger = 옛 방식(검색창에 ? 입력 → 답변 창). 기본은 끔
 # -필드: dock            = "off"(검색창 아래 뜨는 창) | "right"(탐색기 오른쪽에 붙어 따라다님)
 # -필드: win_width / win_max_height / font_size = 답변 창 모양
+# -필드: autoindex_enabled   = 문서가 바뀌면 자동으로 인덱스에 반영할지(자동 인덱싱 설계서 A2 — 기본 켬)
+# -필드: autoindex_folders   = 지켜볼 폴더(비면 scope_folders 와 같다 — 결정 A5)
+# -필드: autoindex_quiet_s   = 마지막 변경 알림 뒤 이만큼 조용해야 처리한다(초)
+# -필드: autoindex_rescan_min= 알림을 놓쳤을 때를 대비한 대조 순찰 주기(분, 0=시작 때만)
+# -필드: autoindex_ask_above = 새 문서가 이보다 많으면 바로 넣지 않고 트레이에서 허락을 받는다
+# -필드: autoindex_bm25_idle_s = 키워드 색인(BM25)은 질문이 이만큼 없을 때 다시 만든다(초)
 # -필드: log_level        = 로그 단계
 # -필드: warnings         = 잘못된 값 안내 목록(트레이·로그로 알린다)
 # -필드: ini_path         = 실제로 읽은 INI 경로
@@ -80,6 +86,12 @@ class Settings:
         self.win_width = 460
         self.win_max_height = 560
         self.font_size = 10
+        self.autoindex_enabled = True
+        self.autoindex_folders = []
+        self.autoindex_quiet_s = 5
+        self.autoindex_rescan_min = 10
+        self.autoindex_ask_above = 50
+        self.autoindex_bm25_idle_s = 10
         self.log_level = "INFO"
         self.warnings = []
         self.ini_path = None
@@ -211,8 +223,30 @@ def load(path=None):
     s.win_max_height = _int(cp, "Window", "MaxHeight", 560, 200, 2000, w)
     s.font_size = _int(cp, "Window", "FontSize", 10, 7, 20, w)
 
+    # 자동 인덱싱 (plan/자동인덱싱_설계서.html §11)
+    s.autoindex_enabled = _bool(cp, "AutoIndex", "Enabled", True, w)
+    ai_folders = cp.get("AutoIndex", "Folders", fallback="")
+    s.autoindex_folders = [p.strip() for p in ai_folders.split(";") if p.strip()]
+    s.autoindex_quiet_s = _int(cp, "AutoIndex", "QuietSec", 5, 1, 300, w)
+    s.autoindex_rescan_min = _int(cp, "AutoIndex", "RescanMin", 10, 0, 1440, w)
+    s.autoindex_ask_above = _int(cp, "AutoIndex", "AskAboveDocs", 50, 0, 100000, w)
+    s.autoindex_bm25_idle_s = _int(cp, "AutoIndex", "Bm25IdleSec", 10, 0, 3600, w)
+
     s.log_level = cp.get("Log", "Level", fallback="INFO").strip() or "INFO"
     return s
+
+
+#------------------------------------------------------------------
+# 자동 인덱싱이 지켜볼 폴더
+#=> [AutoIndex] Folders 가 비면 패널이 뜨는 폴더([Scope] Folders)와 같게 본다(결정 A5).
+#
+# -in: s = Settings
+#
+# -out: 폴더 목록
+# -out: error = 없음
+#------------------------------------------------------------------
+def autoindex_roots(s):
+    return list(s.autoindex_folders or s.scope_folders)
 
 
 #------------------------------------------------------------------
@@ -270,12 +304,69 @@ def find_worker_cmd(s):
 
 
 #------------------------------------------------------------------
-# 창 너비를 INI 에 되쓰기 (§18 — 사용자가 패널 너비를 바꿨을 때)
+# INI 의 값 하나만 되쓰기 (주석을 지키면서)
 #=> configparser 로 다시 쓰면 파일의 주석이 모두 날아간다. 이 INI 는 설명 주석이
-#   본문만큼 중요하므로, [Window] 의 Width 줄만 찾아 값을 바꾼다.
-#    1) [Window] 구역을 찾는다
-#    2) 그 안의 Width 줄을 찾아 값만 갈아 끼운다(앞뒤 여백·주석은 그대로 둔다)
+#   본문만큼 중요하므로, 그 구역의 그 키 줄만 찾아 값을 바꾼다.
+#    1) [section] 구역을 찾는다
+#    2) 그 안의 key 줄을 찾아 값만 갈아 끼운다(앞뒤 여백·주석은 그대로 둔다)
 #    3) 구역이나 키가 없으면 만들어 붙인다
+#
+# -in: path    = INI 경로(없으면 아무것도 하지 않는다)
+# -in: section = 구역 이름(대소문자 무시)
+# -in: key     = 키 이름(대소문자 무시)
+# -in: value   = 쓸 값(글자로 바꿔 쓴다)
+#
+# -out: (True, value) 또는 (False, 사유)
+# -out: error = 없음 (쓰기 실패도 사유 문자열로 돌려준다)
+#------------------------------------------------------------------
+def save_ini_value(path, section, key, value):
+    if not path or not os.path.isfile(path):
+        return False, "설정 파일이 없어 저장하지 않습니다: {}".format(path)
+    try:
+        with io.open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception as e:
+        return False, "설정 파일을 읽지 못했습니다: {}".format(e)
+
+    want = "[{}]".format(section.lower())
+    in_sec = False
+    done = False
+    sec_at = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if in_sec and not done:
+                break                       # 구역이 끝났는데 키가 없었다
+            in_sec = stripped.lower() == want
+            if in_sec:
+                sec_at = i
+            continue
+        if not in_sec or stripped.startswith(";") or stripped.startswith("#"):
+            continue
+        if "=" in stripped and stripped.split("=", 1)[0].strip().lower() == key.lower():
+            head = line.split("=", 1)[0]    # 원래 들여쓰기·정렬을 그대로 쓴다
+            lines[i] = "{}= {}".format(head, value)
+            done = True
+            break
+
+    if not done:
+        entry = "{:<17}= {}".format(key, value)
+        if sec_at >= 0:
+            lines.insert(sec_at + 1, entry)
+        else:
+            lines += ["", "[{}]".format(section), entry]
+
+    try:
+        with io.open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        return False, "설정 파일에 쓰지 못했습니다: {}".format(e)
+    return True, value
+
+
+#------------------------------------------------------------------
+# 창 너비를 INI 에 되쓰기 (§18 — 사용자가 패널 너비를 바꿨을 때)
+#=> 값을 확인한 뒤 save_ini_value 로 [Window] Width 줄만 바꾼다.
 #
 # -in: path  = INI 경로(없으면 아무것도 하지 않는다)
 # -in: width = 저장할 너비(픽셀)
@@ -292,42 +383,4 @@ def save_window_width(path, width):
         return False, "너비가 숫자가 아닙니다"
     if not (300 <= width <= 1200):
         return False, "허용 범위(300~1200) 밖이라 저장하지 않습니다: {}".format(width)
-
-    try:
-        with io.open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except Exception as e:
-        return False, "설정 파일을 읽지 못했습니다: {}".format(e)
-
-    in_window = False
-    done = False
-    window_at = -1
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("["):
-            if in_window and not done:
-                break                       # [Window] 가 끝났는데 Width 가 없었다
-            in_window = stripped.lower() == "[window]"
-            if in_window:
-                window_at = i
-            continue
-        if not in_window or stripped.startswith(";") or stripped.startswith("#"):
-            continue
-        if "=" in stripped and stripped.split("=", 1)[0].strip().lower() == "width":
-            key = line.split("=", 1)[0]     # 원래 들여쓰기·정렬을 그대로 쓴다
-            lines[i] = "{}= {}".format(key, width)
-            done = True
-            break
-
-    if not done:
-        if window_at >= 0:
-            lines.insert(window_at + 1, "Width            = {}".format(width))
-        else:
-            lines += ["", "[Window]", "Width            = {}".format(width)]
-
-    try:
-        with io.open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception as e:
-        return False, "설정 파일에 쓰지 못했습니다: {}".format(e)
-    return True, width
+    return save_ini_value(path, "Window", "Width", width)

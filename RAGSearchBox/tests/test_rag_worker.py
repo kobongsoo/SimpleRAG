@@ -303,5 +303,113 @@ class TestFailures(WorkerTestBase):
         self.assertTrue(wait_for(lambda: w.state == STOPPED, timeout=10), "내려가지 않았다")
 
 
+class TestIndexCommands(WorkerTestBase):
+    #--------------------------------------------------------------
+    # 결과를 콜백으로 준다
+    #=> 다른 스레드에서 불리므로 목록에 모은다.
+    #--------------------------------------------------------------
+    def results(self):
+        got = []
+        return got, got.append
+
+    #--------------------------------------------------------------
+    # 명령 → "@index" 결과 → 다시 READY. 결과 줄이 답변으로 새지 않는다
+    #--------------------------------------------------------------
+    def test_command_roundtrip(self):
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        got, cb = self.results()
+        w.command('/index-doc {"path": "D:\\\\a\\\\\\uaddc\\uc815.docx"}', cb)
+        self.assertTrue(wait_for(lambda: got), "결과가 오지 않았다")
+        self.assertTrue(got[0]["ok"])
+        self.assertEqual(got[0]["path"], "D:\\a\\규정.docx")
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        self.assertFalse(col.of("token") or col.of("raw") or col.of("done"), col.events)
+
+    #--------------------------------------------------------------
+    # 질문이 인덱싱보다 먼저다
+    #=> 명령을 여러 개 쌓아 두고 질문을 넣으면, 지금 처리 중인 명령 하나가 끝난 뒤
+    #   질문이 먼저 나가고 나머지 명령은 그 뒤에 나간다.
+    #--------------------------------------------------------------
+    def test_question_first(self):
+        os.environ["FAKE_CMD_DELAY"] = "0.4"
+        self.addCleanup(os.environ.pop, "FAKE_CMD_DELAY", None)
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        order = []
+        for i in range(4):
+            w.command('/index-doc {"path": "d%d"}' % i, lambda r: order.append(r["path"]))
+        self.assertTrue(wait_for(lambda: w.state == rag_worker.INDEXING))
+        w.ask("급한 질문")
+        col_done = lambda: col.of("done")            # noqa: E731
+        self.assertTrue(wait_for(col_done, timeout=10))
+        done_at = len(order)
+        self.assertTrue(wait_for(lambda: len(order) == 4, timeout=10))
+        # 질문은 처음 명령 하나(많아야 둘)가 끝난 뒤 곧바로 답해졌다
+        self.assertLessEqual(done_at, 2, order)
+
+    #--------------------------------------------------------------
+    # 옛 워커(명령을 모름)면 unknown 으로 알린다
+    #--------------------------------------------------------------
+    def test_old_worker_unknown(self):
+        os.environ["FAKE_OLD_WORKER"] = "1"
+        self.addCleanup(os.environ.pop, "FAKE_OLD_WORKER", None)
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        got, cb = self.results()
+        w.command("/bm25", cb)
+        self.assertTrue(wait_for(lambda: got))
+        self.assertFalse(got[0]["ok"])
+        self.assertTrue(got[0].get("unknown"))
+        self.assertFalse(col.of("raw"), "알 수 없는 명령 안내가 답변으로 샜다")
+
+    #--------------------------------------------------------------
+    # 워커가 내려가면 기다리던 명령은 stopped 로 끝난다
+    #--------------------------------------------------------------
+    def test_unload_fails_pending(self):
+        os.environ["FAKE_CMD_DELAY"] = "1.0"
+        self.addCleanup(os.environ.pop, "FAKE_CMD_DELAY", None)
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        got, cb = self.results()
+        for i in range(3):
+            w.command("/index-doc d%d" % i, cb)
+        self.assertTrue(wait_for(lambda: w.state == rag_worker.INDEXING))
+        w.unload("시험")
+        self.assertTrue(wait_for(lambda: len(got) == 3, timeout=10), got)
+        self.assertTrue(all(r.get("stopped") and not r["ok"] for r in got), got)
+        self.assertEqual(w.availability(), "down")
+
+    #--------------------------------------------------------------
+    # 명령만으로는 워커를 띄우지 않는다
+    #=> 쉬어서 내려간 워커를 인덱싱 때문에 다시 올리지 않는다(메모리를 돌려준 뜻이 없어진다).
+    #--------------------------------------------------------------
+    def test_command_does_not_launch(self):
+        w, col = self.make()
+        got, cb = self.results()
+        w.command("/bm25", cb)
+        time.sleep(1.0)
+        self.assertEqual(w.state, STOPPED)
+        self.assertFalse(got)
+
+    #--------------------------------------------------------------
+    # hold 동안에는 질문이 와도 띄우지 않고, 풀리면 띄워서 답한다
+    #--------------------------------------------------------------
+    def test_hold(self):
+        w, col = self.make()
+        w.hold("index 명령 실행 중")
+        w.ask("기다리는 질문")
+        time.sleep(1.0)
+        self.assertEqual(w.state, STOPPED)
+        self.assertTrue(any("인덱스 갱신 중" in (e[2] if len(e) > 2 else "")
+                            for e in col.of("state")), col.of("state"))
+        w.hold(None)
+        self.assertTrue(wait_for(lambda: col.of("done"), timeout=15), "풀린 뒤 답하지 않았다")
+
+
 if __name__ == "__main__":
     unittest.main()

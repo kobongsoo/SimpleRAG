@@ -16,10 +16,38 @@
 #    FAKE_EXIT_CODE    : 시작하자마자 이 코드로 끝난다(설정 오류 시험)
 #    FAKE_LOCK         : 인덱스가 잠겨 있을 때처럼 stderr 에 알리고 죽는다(잠금 충돌 시험)
 #    FAKE_NO_EVIDENCE  : 근거를 못 찾은 답변을 낸다(인덱스가 비었을 때)
+#    FAKE_CMD_DELAY    : 인덱싱 명령(/index-…) 하나에 걸리는 시간(초)
+#    FAKE_OLD_WORKER   : 인덱싱 명령을 모르는 옛 워커처럼 "알 수 없는 명령" 을 낸다
 #------------------------------------------------------------------
+import json
 import os
 import sys
 import time
+
+
+#------------------------------------------------------------------
+# 인덱싱 명령 흉내 (자동 인덱싱 §9)
+#=> 진짜 워커처럼 "@index {json}" 한 줄을 내고 프롬프트로 돌아간다. 받은 명령과 경로를
+#   그대로 돌려줘 시험이 차례를 확인할 수 있게 한다.
+#
+# -in: q = 받은 줄("/index-doc {...}")
+#
+# -out: 없음
+# -out: error = 없음
+#------------------------------------------------------------------
+def index_command(q):
+    time.sleep(float(os.environ.get("FAKE_CMD_DELAY", "0")))
+    if os.environ.get("FAKE_OLD_WORKER"):
+        out("  알 수 없는 명령입니다. /help 를 입력하세요.\n\n")
+        out("질문> ")
+        return
+    cmd, _, arg = q.partition(" ")
+    path = ""
+    if arg.strip().startswith("{"):
+        path = json.loads(arg).get("path", "")
+    res = {"op": cmd.lstrip("/"), "ok": True, "path": path, "result": "added", "ms": 1}
+    out("@index " + json.dumps(res, ensure_ascii=True) + "\n")
+    out("질문> ")
 
 
 #------------------------------------------------------------------
@@ -113,6 +141,9 @@ def main():
         if hang_on and q == hang_on:
             while True:
                 time.sleep(1)       # 답하지 않고 버틴다
+        if q.startswith("/index-") or q == "/bm25":
+            index_command(q)
+            continue
         answer(q)
     return 0
 

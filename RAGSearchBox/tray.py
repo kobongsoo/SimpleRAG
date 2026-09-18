@@ -26,6 +26,11 @@ MENU = [
     (1006, "open", "창 열기"),
     (1001, "unload", "모델 내리기 (인덱싱 전에)"),
     (1002, "reload", "모델 다시 올리기"),
+    (0, None, None),                                   # 구분선
+    (1007, "index_now", "지금 인덱싱"),
+    (1008, "rescan", "전체 다시 확인"),
+    (1009, "autoindex", "자동 인덱싱"),
+    (0, None, None),
     (1003, "autorun", "로그인 시 자동 시작"),
     (1004, "logs", "로그 폴더 열기"),
     (1005, "exit", "종료"),
@@ -45,14 +50,17 @@ class Tray(threading.Thread):
     # -in: on_action    = 메뉴를 고르면 부를 함수 fn(name). 트레이 스레드에서 불린다
     # -in: autorun_flag = 자동 시작이 켜져 있는지 알려 주는 함수 fn() -> bool
     # -in: icon_path    = .ico 경로(없으면 기본 아이콘)
+    # -in: flags        = 메뉴 이름별 체크 표시 함수 {이름: fn() -> bool} (예: 자동 인덱싱)
     #
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
-    def __init__(self, on_action, autorun_flag=None, icon_path=None):
+    def __init__(self, on_action, autorun_flag=None, icon_path=None, flags=None):
         super().__init__(name="rsb-tray", daemon=True)
         self.on_action = on_action
         self.autorun_flag = autorun_flag or (lambda: False)
+        self.flags = dict(flags or {})
+        self.flags.setdefault("autorun", self.autorun_flag)
         self.icon_path = icon_path
         self.log = rsb_log.get("tray")
         self.tooltip = "RAGSearchBox"
@@ -199,9 +207,15 @@ class Tray(threading.Thread):
                             self.tooltip[:80])
         win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
         for ident, name, label in MENU:
+            if name is None:
+                win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+                continue
             flags = win32con.MF_STRING
-            if name == "autorun" and self.autorun_flag():
-                flags |= win32con.MF_CHECKED
+            try:
+                if name in self.flags and self.flags[name]():
+                    flags |= win32con.MF_CHECKED
+            except Exception:
+                pass                     # 체크 표시를 못 구해도 메뉴는 띄운다
             win32gui.AppendMenu(menu, flags, ident, label)
 
         pos = win32gui.GetCursorPos()
@@ -237,7 +251,7 @@ class Tray(threading.Thread):
         if msg == win32con.WM_COMMAND:
             ident = win32api.LOWORD(wparam)
             for mid, name, _label in MENU:
-                if mid == ident:
+                if mid and mid == ident:          # 0 은 구분선이다
                     try:
                         self.on_action(name)
                     except Exception:

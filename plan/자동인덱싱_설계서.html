@@ -221,7 +221,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
   이때 "지우는 순간과 넣는 순간 사이" 에 문서가 사라지거나 두 벌이 섞이지 않게 하는 것이 이 설계의 중심이다.</p>
   <div class="meta">
     <span><b>작성</b> 2026-09-18</span>
-    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1·AI2·AI3 구현·검증 완료</b> — AI4 남음</span>
+    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1~AI4 구현·검증·배포 완료</b> (2026-09-18) — AI5(규모)는 필요할 때만</span>
     <span><b>관련</b> <code>src/simplerag/index/indexer.py</code> · <code>store.py</code> · <code>bm25.py</code> · <code>retrieve/hybrid.py</code> · <code>cli.py</code> · <code>RAGSearchBox/</code></span>
   </div>
 </header>
@@ -582,11 +582,11 @@ QuietSec         = 5
 RescanMin        = 10
 <span class="c">; 새로 추가할 문서가 이보다 많으면 바로 시작하지 않고 묻는다</span>
 AskAboveDocs     = 50
-<span class="c">; 한 번에 사라진 문서가 이 비율(%) 이상이면 지우지 않고 묻는다</span>
-DeleteGuardPct   = 30
 <span class="c">; BM25 는 질문이 이만큼 없을 때 다시 만든다(초)</span>
 Bm25IdleSec      = 10</pre>
   <p class="note">청크 크기 등 인덱스의 모양은 지금처럼 SimpleRAG 의 <code>config.yaml</code> 이 정한다. 여기에는 "언제·무엇을" 만 둔다.</p>
+  <p class="note"><b>[AI4 에서 바꿈]</b> 처음 적은 <code>DeleteGuardPct</code> 는 뺐다. 대량 삭제 멈춤 판단은 simplerag 의 <code>delete_guard</code>(30%·5건 이상 또는 50건 이상) 한곳에서 하고,
+  RAGSearchBox 는 그 결과(<code>delete_blocked</code>)만 받아 사람에게 묻는다 — 한도가 두 군데 있으면 언젠가 어긋난다.</p>
 </section>
 
 <!-- 12 -->
@@ -679,9 +679,18 @@ Bm25IdleSec      = 10</pre>
       실제 프로그램 17/17: Word·Excel·PowerPoint 새로 저장·다시 저장, 큰 파일(32MB)을 6.4초에 걸쳐 쓰는 동안 알리지 않고 다 쓴 뒤 한 번, 독점 잠금 동안 기다렸다 풀리면 알림, 3,000개 한꺼번에, 폴더 통째로 옮겨 넣기 → 전체 대조, 폴더를 옮겼다 되돌리기 → 옛 경로로 알리지 않고 돌아오면 전체 대조.
       저장부터 알림까지 <b>3.0~3.5초</b>(조용히 2초로 시험). 기본값 5초면 약 6~7초 — 여기에 문서 반영(AI2 실측 0.1초 안팎 + 추출)이 더해진다.
       시험 중 잡은 것: 폴더 핸들이 옮겨 간 폴더를 따라가 옛 경로로 알리던 문제(§4 에 적음)</dd></dl></div></li>
-    <li class="step"><span class="sid">AI4</span><div class="body"><h4>대기열과 연결 — RAGSearchBox</h4>
+    <li class="step"><span class="sid">AI4</span><div class="body"><h4>대기열과 연결 — RAGSearchBox <span class="chip done">완료·배포 2026-09-18</span></h4>
       <dl><dt>할 일</dt><dd>질문 우선 대기열 · 워커 내려감일 때 index 명령 · 트레이·패널 표시 · INI</dd>
-      <dt>확인</dt><dd>인덱싱 중 질문했을 때 기다림이 문서 하나 처리 시간 안쪽인가(실측) / 워커가 쉬어 내려간 뒤 저장 → 반영되고 워커는 안 깨는가 / 배포 exe 로 끝까지</dd></dl></div></li>
+      <dt>확인</dt><dd>인덱싱 중 질문했을 때 기다림이 문서 하나 처리 시간 안쪽인가(실측) / 워커가 쉬어 내려간 뒤 저장 → 반영되고 워커는 안 깨는가 / 배포 exe 로 끝까지</dd>
+      <dt>만든 것</dt><dd>
+        <code>rag_worker.py</code> — 명령 대기열(<code>command()</code>), 새 상태 <code>INDEXING</code>, 명령 출력은 답변 해석기에 넣지 않고 다음 프롬프트까지 따로 모음, <b>READY 이고 기다리는 질문이 없을 때만</b> 명령을 보냄, 워커가 끝나면 기다리던 명령을 <code>stopped</code> 로 끝냄, 옛 워커("알 수 없는 명령")는 <code>unknown</code>, <code>hold()</code> 로 index 명령이 인덱스를 쥔 동안 워커를 띄우지 않음(질문은 끝난 뒤 답함), 명령만으로는 워커를 띄우지 않음.<br>
+        <code>index_jobs.py</code>(신규) — 감시 묶음 → <code>/index-plan</code> → 문서마다 <code>/index-doc</code>·<code>/remove-doc</code> 하나씩 → 질문이 <code>Bm25IdleSec</code> 동안 없으면 <code>/bm25</code>. 감시가 알린 경로는 "어디를 볼지" 로만 쓰고 판정은 늘 대조 결과로 한다. 워커가 내려가 있으면 <code>simplerag index --dir … --max-add N</code>(허락했으면 <code>--allow-delete</code>)을 따로 돌리고 결과는 새 <code>@index-summary</code> 줄에서 읽는다. 워커가 다시 뜨면 한 번 대조해 키워드 색인을 맞춘다.<br>
+        트레이 메뉴 <b>지금 인덱싱 · 전체 다시 확인 · 자동 인덱싱</b>(체크), 툴팁에 "인덱스 갱신 중 2/5" 등, 한두 건 반영은 패널 상태 줄에만, 여러 건·실패·허락 대기는 트레이 알림. 설정 되쓰기는 <code>save_ini_value()</code> 로 일반화(주석 보존).</dd>
+      <dt>결과</dt><dd>
+        단위 시험: <code>test_rag_worker</code> 명령 6건(질문 우선·옛 워커·내려가면 실패로 끝남·hold 등) · <code>test_index_jobs</code> 13건(가짜 워커, 워커 내려감은 가짜 index 를 진짜 하위 프로세스로) — RAGSearchBox 144건 통과. SimpleRAG <code>bench/test_auto_index.py</code> 57/57.<br>
+        <b>새로 빌드한 두 exe 로 끝까지 26/26</b>(운영 폴더·인덱스를 건드리지 않게 따로 차린 폴더, 모델은 환경변수로 원래 자리): 새 문서 저장 → <b>4.2초 뒤 반영</b>(조용히 2초) · 수정 · Word 로 저장(열어 둔 채로, 4.0초) · <code>~$</code> 제외 · 삭제 · 새 문서 5건 &gt; 한도 3 → 기다렸다가 "지금 인덱싱" 으로 5건 · 끄면 INI 에 적히고 반영 안 함 · 켜면 따라잡음 · 모델을 내린 뒤 고치면 <b>index 명령으로 반영하고 워커는 깨우지 않음</b> · 마지막에 같은 인덱스로 검색해 새 내용은 나오고 지운 옛 내용은 안 나옴.<br>
+        시험 중 알게 된 것: 한두 줄짜리 아주 짧은 문서는 청크가 만들어지지 않아 "추출 텍스트 없음" 으로 실패한다(예전부터 그랬다 — README 에 적음). 알림 글이 "0건 반영 · 실패 1건" 으로 어색해 "반영하지 못했습니다" 로 고쳤다.</dd>
+      <dt>배포</dt><dd><code>simplerag.exe</code> 는 <b>커밋된 코드만 담은 git worktree 에서 빌드</b>해 <code>simplerag.exe</code>·<code>_internal</code> 만 바꿨다 — 작업 중인 코드와 배포 <code>config.yaml</code>(사용자가 고른 모델)은 건드리지 않았다(빌드 스크립트는 config.yaml 을 덮어쓰므로 그대로 쓰지 않았다). 옛 파일은 <code>dist\backup_before_autoindex_20260918</code> 에 두었다. 파일 목록 742개가 옛 빌드와 같음을 확인. 배포 INI 에 <code>[AutoIndex]</code>(기본값) 구역을 더했다. 켜자마자 <code>sample</code> 을 대조해 바뀐 것 없음을 확인</dd></dl></div></li>
     <li class="step"><span class="sid">AI5</span><div class="body"><h4>규모 — 필요할 때만</h4>
       <dl><dt>할 일</dt><dd>BM25 백그라운드 재구축 · 이름 변경 벡터 재사용</dd>
       <dt>언제</dt><dd>청크 수만 개에서 BM25 재구축이 질문을 눈에 띄게 막는다는 실측이 나오면</dd></dl></div></li>

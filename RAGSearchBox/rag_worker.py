@@ -18,6 +18,8 @@
 #------------------------------------------------------------------
 
 import codecs
+import collections
+import json
 import os
 import subprocess
 import re
@@ -25,13 +27,19 @@ import threading
 import time
 
 import log as rsb_log
-from chat_parser import ChatParser
+from chat_parser import PROMPT, ChatParser
 
 # 상태 이름 (트레이 툴팁에도 그대로 쓴다)
 STOPPED = "stopped"      # 워커가 없다
 STARTING = "starting"    # 모델 적재 중
 READY = "ready"          # 질문을 받을 수 있다
 BUSY = "busy"            # 답변을 만드는 중
+INDEXING = "indexing"    # 인덱싱 명령 하나를 처리하는 중(자동 인덱싱 §8)
+
+# 인덱싱 명령 결과 줄의 머리(simplerag/index/commands.py 와 같아야 한다)
+INDEX_PREFIX = "@index "
+# 인덱싱 명령 한 건을 기다리는 한도(초) — 큰 문서는 추출에 시간이 걸린다
+CMD_TIMEOUT_S = 300
 
 # stdin 인코딩 — 동결 exe 가 환경변수를 무시하므로 코드에 박는다(P0-4)
 STDIN_ENCODING = "cp949"
@@ -165,6 +173,12 @@ class RagWorker:
         self._stderr_tail = []
         self._want_running = False
 
+        # 자동 인덱싱 명령 (설계서 §8) — 질문이 언제나 먼저다
+        self._cmds = collections.deque()   # 보낼 명령들 [(줄, 콜백)]
+        self._cmd = None                   # 보내 놓고 결과를 기다리는 명령 (줄, 콜백)
+        self._cmd_buf = ""                 # 그 명령의 출력(프롬프트가 올 때까지 모은다)
+        self._hold = None                  # 워커를 띄우지 말아야 할 이유(index 명령이 인덱스를 쥔 동안)
+
     # ── 바깥에서 부르는 것들 ───────────────────────────
 
     #--------------------------------------------------------------
@@ -218,6 +232,69 @@ class RagWorker:
             self._emit(("state", STARTING, "모델 준비 중 (첫 질문)"))
 
     #--------------------------------------------------------------
+    # 인덱싱 명령 보내기 (자동 인덱싱 §8·§9)
+    #=> 대기열에 넣기만 한다. 워커가 준비됐고(READY) 기다리는 질문이 없을 때 하나씩 보낸다
+    #   — 질문이 언제나 먼저이고, 답변을 만드는 동안에는 보내지 않는다(CPU 를 다툰다).
+    #   결과는 callback(dict) 로 온다. 워커가 없거나 도중에 끝나면 {"ok": False, "stopped": True}.
+    #   ⚠️ 워커를 띄우지는 않는다 — 쉬어서 내려간 워커를 인덱싱 때문에 다시 올리면
+    #      "안 쓰면 메모리를 돌려준다" 가 무너진다. 내려가 있으면 부르는 쪽이 index 명령을 쓴다.
+    #
+    # -in: line     = "/index-doc {...}" 같은 한 줄
+    # -in: callback = 결과를 받을 함수 fn(dict). 워커의 다른 스레드에서 불린다
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def command(self, line, callback):
+        with self._lock:
+            self._cmds.append((line, callback))
+
+    #--------------------------------------------------------------
+    # 인덱싱 명령을 받을 수 있는가
+    #=> 워커가 떠 있고 모델까지 올라가 있으면 True. 준비 중이면 곧 받을 수 있으므로 True.
+    #
+    # -in: 없음
+    #
+    # -out: "up"(떠 있음) | "starting"(곧 뜸) | "down"(내려감)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def availability(self):
+        with self._lock:
+            if self._proc is not None and self.state in (READY, BUSY, INDEXING):
+                return "up"
+            if self.state == STARTING:
+                return "starting"
+            return "down"
+
+    #--------------------------------------------------------------
+    # 워커 띄우기를 잠시 막기
+    #=> index 명령(별도 프로세스)이 인덱스 폴더를 쥔 동안 워커가 뜨면 잠금 충돌로 죽는다.
+    #   그동안 질문이 오면 기다렸다가, 풀리면 띄워서 답한다.
+    #
+    # -in: reason = 막는 이유(None 이면 푼다)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def hold(self, reason):
+        with self._lock:
+            self._hold = reason
+        self.log.info("워커 띄우기 %s", "막음: " + reason if reason else "막음 풀림")
+
+    #--------------------------------------------------------------
+    # 마지막 질문 뒤 지난 시간(초)
+    #=> 키워드 색인을 "한가할 때" 다시 만드는 데 쓴다.
+    #
+    # -in: 없음
+    #
+    # -out: 초
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def seconds_since_ask(self):
+        with self._lock:
+            return time.monotonic() - self._t_last_ask
+
+    #--------------------------------------------------------------
     # 모델 내리기 (트레이 메뉴·유휴 해제)
     #=> stdin 에 exit 를 보내 정상 종료시킨다. 인덱스 잠금이 풀려 index 명령을 쓸 수 있다.
     #
@@ -268,7 +345,8 @@ class RagWorker:
     #--------------------------------------------------------------
     def status_text(self):
         with self._lock:
-            name = {STOPPED: "내려감", STARTING: "준비 중", READY: "준비됨", BUSY: "답변 중"}[self.state]
+            name = {STOPPED: "내려감", STARTING: "준비 중", READY: "준비됨", BUSY: "답변 중",
+                    INDEXING: "인덱스 갱신 중"}[self.state]
             extra = self.backend or self.detail
             model = self.model
             if self.state == STARTING:
@@ -401,6 +479,20 @@ class RagWorker:
                         m = MODEL_RE.search(ln)
                         self.model = m.group(1) if m else ""
                         self.ready_line = ln.strip()
+            # 인덱싱 명령의 출력은 답변 해석기에 넣지 않는다 — 다음 프롬프트까지 따로 모은다.
+            # (넣으면 "@index {...}" 줄이 답변으로 화면에 뜬다.)
+            with self._lock:
+                in_cmd = self._cmd is not None
+            if in_cmd:
+                self._cmd_buf += text
+                i = self._cmd_buf.find(PROMPT)
+                if i < 0:
+                    continue
+                out, text = self._cmd_buf[:i], self._cmd_buf[i + len(PROMPT):]
+                self._cmd_buf = ""
+                self._finish_cmd(out)
+                if not text:
+                    continue
             for ev in parser.feed(text):
                 self._on_parsed(ev)
 
@@ -497,6 +589,101 @@ class RagWorker:
         return True
 
     #--------------------------------------------------------------
+    # 대기 중인 인덱싱 명령 하나 보내기
+    #=> READY 이고 기다리는 질문이 없을 때만 부른다. 결과는 다음 프롬프트까지 모아
+    #   _finish_cmd 가 콜백으로 넘긴다.
+    #
+    # -in: 없음
+    #
+    # -out: True = 보냈다
+    # -out: error = 파이프가 끊겼으면 콜백에 실패를 넘기고 False
+    #--------------------------------------------------------------
+    def _send_cmd(self):
+        with self._lock:
+            if not self._cmds or not self._proc or self._cmd is not None:
+                return False
+            line, cb = self._cmds.popleft()
+            proc = self._proc
+            # 출력을 읽는 스레드가 곧바로 알아보도록, 쓰기 전에 표시해 둔다
+            self._cmd = (line, cb)
+            self._cmd_buf = ""
+        try:
+            proc.stdin.write((line + "\n").encode(STDIN_ENCODING, errors="replace"))
+            proc.stdin.flush()
+        except Exception as e:
+            self.log.warning("인덱싱 명령 전송 실패: %s", e)
+            with self._lock:
+                self._cmd = None
+            self._call(cb, {"ok": False, "stopped": True, "why": "워커에 보내지 못함"})
+            return False
+        self._set_state(INDEXING, line.split(" ", 1)[0])
+        return True
+
+    #--------------------------------------------------------------
+    # 인덱싱 명령 결과 넘기기
+    #=> 프롬프트 앞까지의 출력에서 "@index {json}" 줄을 찾는다. 없으면 옛 simplerag.exe 라
+    #   명령을 모르는 것이다("알 수 없는 명령입니다") — unknown 으로 알려 자동 인덱싱을 멈추게 한다.
+    #
+    # -in: out = 명령을 보낸 뒤 프롬프트 전까지의 출력
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _finish_cmd(self, out):
+        with self._lock:
+            cmd = self._cmd
+            self._cmd = None
+        if cmd is None:
+            return
+        res = None
+        for ln in out.splitlines():
+            if ln.startswith(INDEX_PREFIX):
+                try:
+                    res = json.loads(ln[len(INDEX_PREFIX):])
+                except ValueError:
+                    res = None
+        if res is None:
+            res = {"ok": False, "unknown": True,
+                   "why": "워커가 인덱싱 명령을 모릅니다 — simplerag.exe 를 새로 빌드하세요",
+                   "raw": out.strip()[:200]}
+        self._set_state(READY, self.backend or "준비됨")
+        self._call(cmd[1], res)
+
+    #--------------------------------------------------------------
+    # 기다리던·대기 중인 인덱싱 명령을 모두 실패로 끝내기
+    #=> 워커가 끝나거나 내려갈 때 부른다. 부르는 쪽(자동 인덱싱)은 stopped 를 보고
+    #   그 폴더를 다시 볼 목록에 넣는다(워커가 없으면 index 명령으로 처리한다).
+    #
+    # -in: why = 이유
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _fail_cmds(self, why):
+        with self._lock:
+            pending = ([self._cmd] if self._cmd else []) + list(self._cmds)
+            self._cmd = None
+            self._cmd_buf = ""
+            self._cmds.clear()
+        for _line, cb in pending:
+            self._call(cb, {"ok": False, "stopped": True, "why": why})
+
+    #--------------------------------------------------------------
+    # 명령 콜백 부르기 (예외가 워커를 멈추지 않게)
+    #
+    # -in: cb  = 콜백
+    # -in: res = 결과 dict
+    #
+    # -out: 없음
+    # -out: error = 없음 (콜백 예외는 로그만)
+    #--------------------------------------------------------------
+    def _call(self, cb, res):
+        try:
+            cb(res)
+        except Exception:
+            self.log.exception("인덱싱 명령 콜백에서 예외")
+
+    #--------------------------------------------------------------
     # 워커 정리
     #=> 정상 종료는 stdin 에 exit 를 넣고 기다린다. 안 끝나면 강제로 죽인다.
     #
@@ -511,6 +698,8 @@ class RagWorker:
             proc = self._proc
             self._proc = None
             self._current = None
+        # 워커가 사라지면 기다리던 인덱싱 명령도 끝난다 — 부르는 쪽이 다시 처리하게 알린다
+        self._fail_cmds("워커 종료({})".format(reason))
         if not proc:
             return
         try:
@@ -572,6 +761,8 @@ class RagWorker:
             self._proc = None
             if current:
                 self._pending = None      # 죽게 만든 질문은 다시 보내지 않는다
+
+        self._fail_cmds("워커가 종료됨(code={})".format(code))
 
         # 스스로 끝난 경우에도 파이프는 우리가 닫아야 한다(안 닫으면 핸들이 샌다)
         if proc is not None:
@@ -637,6 +828,8 @@ class RagWorker:
             blocked = self._blocked
             t_state = self._t_state
             t_last = self._t_last_ask
+            hold = self._hold
+            has_cmd = bool(self._cmds) and self._cmd is None
 
         # 2) 죽었는지 먼저 본다
         if proc is not None and proc.poll() is not None:
@@ -646,6 +839,11 @@ class RagWorker:
         # 1) 필요한데 없으면 띄운다
         if proc is None and want and state == STOPPED:
             if blocked:
+                return
+            if hold:
+                # index 명령이 인덱스를 쥐고 있다 — 끝나면 띄워서 답한다
+                if pending:
+                    self._set_state(STOPPED, "인덱스 갱신 중 — 끝나면 답합니다")
                 return
             if not self._can_restart(now):
                 self._set_state(STOPPED, "재시작 한도 초과 — 트레이에서 다시 올리세요")
@@ -669,9 +867,19 @@ class RagWorker:
             self._set_state(STOPPED, "답변 시간 초과")
             return
 
-        # 4) 보낼 질문이 있으면 보낸다
+        if state == INDEXING and now - t_state > CMD_TIMEOUT_S:
+            # 명령이 멈췄다 — 출력이 어긋났을 수 있어 워커를 다시 띄운다(명령은 실패로 알린다)
+            self._emit(("note", "index", "인덱싱 명령이 멈춰 모델을 다시 올립니다"))
+            self._terminate(graceful=False, reason="인덱싱 시간 초과")
+            self._set_state(STOPPED, "인덱싱 시간 초과")
+            return
+
+        # 4) 보낼 질문이 있으면 보낸다 — 질문이 인덱싱보다 먼저다
         if state == READY and pending:
             self._send_pending()
+            return
+        if state == READY and has_cmd:
+            self._send_cmd()
             return
 
         # 5) 오래 안 쓰면 내린다 (메모리 2.5GB 와 인덱스 잠금을 돌려준다)
