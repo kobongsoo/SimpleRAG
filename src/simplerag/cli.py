@@ -260,7 +260,7 @@ class StreamWriter:
 #------------------------------------------------------------------
 def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                   stream=True, folder=None):
-    from simplerag.pipeline import NO_DOCS_IN_FOLDER
+    from simplerag.pipeline import NO_DOCS_IN_FOLDER, NO_RELEVANT
     writer = StreamWriter()
     parts = []
     # 근거 개수. evidence 이벤트에서 정해지고, 마무리 정리 때 쓰인다 —
@@ -283,6 +283,10 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                     # 폴더에 인덱싱된 문서가 없다 — 근거 머리 없이 안내만 낸다.
                     # (RAGSearchBox 는 근거 머리가 없는 출력을 그대로 패널에 보여 준다)
                     print("\n" + NO_DOCS_IN_FOLDER + "\n")
+                    return True
+                if timing.get("no_relevant"):
+                    # 관련 근거가 없다 — 근거도 보이지 않고 답할 수 없다고만 알린다
+                    print("\n" + NO_RELEVANT + "\n")
                     return True
                 # 폴더 한정이면 머리에 범위를 덧붙인다 — 나중에 보아도 어느 범위의 답인지 안다
                 scope = ""

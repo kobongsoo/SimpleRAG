@@ -297,10 +297,31 @@ def test_rerank_search():
     check("리랭커 예외 → 죽지 않고 RRF 순서 [0, 1, 2]", [c["id"] for c in chunks] == [0, 1, 2])
     check("리랭커 예외 → rerank_error 기록", "모델 손상" in t.get("rerank_error", ""), t)
 
+    # 관련도 문턱을 끄면(예전 동작) 후보가 적을 때 리랭커를 부르지 않는다
+    os.environ["SIMPLERAG_RELEVANCE_MIN"] = "off"
     fake = FakeReranker([1.0, 2.0])
     r, _ = make_retriever(2, fake)
     chunks, t = r.search("q", top_k=3)
-    check("후보가 top_k 이하 → 리랭커 호출 안 함", fake.calls == [] and len(chunks) == 2)
+    check("문턱 끔 + 후보가 top_k 이하 → 리랭커 호출 안 함", fake.calls == [] and len(chunks) == 2)
+
+    # 문턱을 켜면 후보가 적어도 점수를 매긴다 — 작은 폴더에서 문턱이 빠지지 않게
+    os.environ["SIMPLERAG_RELEVANCE_MIN"] = "-5"
+    fake = FakeReranker([1.0, 2.0])
+    r, _ = make_retriever(2, fake)
+    chunks, t = r.search("q", top_k=3)
+    check("문턱 켬 + 후보가 적어도 → 점수를 매긴다", len(fake.calls) == 1 and len(chunks) == 2, t)
+    check("관련도 최고 점수를 남긴다", t.get("rerank_top") == 2.0, t)
+
+    # 가장 관련 있는 후보도 문턱 아래 → 근거 없이 no_relevant
+    fake = FakeReranker([-7.0, -6.0, -8.0, -9.0, -6.5])
+    r, _ = make_retriever(10, fake)
+    chunks, t = r.search("q", top_k=3)
+    check("모든 후보가 -5 아래 → 근거 없음(no_relevant)", chunks == [] and t.get("no_relevant"), t)
+    fake = FakeReranker([-7.0, -4.0, -8.0, -9.0, -6.5])
+    r, _ = make_retriever(10, fake)
+    chunks, t = r.search("q", top_k=3)
+    check("하나라도 문턱 위면 근거를 낸다", len(chunks) == 3 and not t.get("no_relevant"), t)
+    os.environ.pop("SIMPLERAG_RELEVANCE_MIN", None)
     config.RERANK_POOL = saved_pool
 
 

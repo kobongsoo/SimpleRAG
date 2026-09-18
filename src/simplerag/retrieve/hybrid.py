@@ -104,6 +104,31 @@ def rrf(ranked_lists, k=None):
     return sorted(scores.items(), key=lambda x: -x[1])
 
 
+#------------------------------------------------------------------
+# 관련도 문턱 (리랭커 점수)
+#=> 리랭커(크로스인코더)의 가장 높은 점수가 이보다 낮으면 "질문에 대한 내용이 없다" 로 본다.
+#   골든 질문 40개 실측(2026-09-18): 관련 없는 글과의 최고 점수는 -10.2~-0.2,
+#   정답 근거와의 점수는 -6.0~+7.3 으로 겹친다. -5 는 관련 있는 것을 거의 막지 않으면서
+#   (40개 중 2개 — 짧은 발췌문 기준이라 실제 청크는 더 높다) 뚜렷이 엉뚱한 것을 막는 값이다.
+#   환경변수 SIMPLERAG_RELEVANCE_MIN 으로 바꾼다("off" 면 끈다). RAGSearchBox 는 INI 값을 넘긴다.
+#   리랭커가 꺼져 있으면(CPU 백엔드 등) 문턱도 쓰지 않는다.
+#   (config.yaml 로 옮기는 것은 config.py 정리 뒤로 미뤘다)
+#
+# -in: 없음
+#
+# -out: 문턱 float 또는 None(끔)
+# -out: error = 없음 (잘못된 값이면 기본 -5)
+#------------------------------------------------------------------
+def relevance_min():
+    raw = os.environ.get("SIMPLERAG_RELEVANCE_MIN", "-5").strip().lower()
+    if raw in ("", "off", "none"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return -5.0
+
+
 class HybridRetriever:
     #------------------------------------------------------------------
     # 생성자 — 구성요소 주입
@@ -156,7 +181,9 @@ class HybridRetriever:
         # 재정렬할 여지가 있어야 하므로 top_k 보다 넉넉히 뽑는다
         pool = max(top_k, config.RERANK_POOL)
         chunks, timing = self._search(query, pool, first_stage, **extra)
-        if len(chunks) <= top_k:
+        gate = relevance_min()
+        # 관련도 문턱을 쓰면 후보가 적어도 점수를 매겨야 한다 — 작은 폴더에서 문턱이 빠지지 않게
+        if not chunks or (len(chunks) <= top_k and gate is None):
             return chunks, timing
 
         timing = dict(timing)
@@ -171,6 +198,13 @@ class HybridRetriever:
         order = sorted(range(len(chunks)), key=lambda i: -scores[i])
         timing["rerank_ms"] = ms
         timing["total_ms"] = round(timing["total_ms"] + ms, 1)
+        top = float(scores[order[0]])
+        timing["rerank_top"] = round(top, 2)
+        # ⚠️ 가장 관련 있는 후보조차 질문과 동떨어졌으면 근거를 내지 않는다 — 억지로 붙인 근거로
+        #    모델이 엉뚱한 답을 지어낸다(실측: 비트코인 글만 있는 폴더에서 "숙박비" → -5.94)
+        if gate is not None and top < gate:
+            timing["no_relevant"] = True
+            return [], timing
         ranked = [chunks[i] for i in order]
         # 사본은 점수가 원본과 같아 나란히 올라온다 — 설정이 켜져 있으면 고유한 것부터 채운다
         picked = pick_unique(ranked, top_k) if config.DEDUP_EVIDENCE else ranked[:top_k]

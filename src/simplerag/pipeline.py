@@ -22,6 +22,8 @@ from .generate.prompts import parse_answer
 # 폴더 한정 검색에서 그 폴더에 인덱싱된 문서가 없을 때 알리는 글
 NO_DOCS_IN_FOLDER = ("이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다. "
                      "범위를 '지정 폴더 전체' 로 넓히거나, 문서가 인덱싱될 때까지 기다려 주세요.")
+# 문서에서 질문과 관련된 내용을 찾지 못했을 때(리랭커 관련도 문턱 아래) 알리는 글
+NO_RELEVANT = "질문에 대한 내용이 문서에 없습니다. 답변할 수 없습니다."
 
 
 class RagPipeline:
@@ -55,6 +57,12 @@ class RagPipeline:
         chunks, timing = self.retriever.search(query, top_k=top_k, folder=folder)
         yield ("evidence", chunks, timing)
 
+        if not chunks and timing.get("no_relevant"):
+            # 가장 가까운 근거도 질문과 동떨어졌다 — 모델을 부르지 않는다(지어낸 답을 막으려고)
+            yield ("done", {"answer": NO_RELEVANT, "cited": [],
+                            "ttft_s": 0.0, "total_s": round(time.perf_counter() - t0, 2),
+                            "timing": timing})
+            return
         if not chunks and timing.get("scope_docs") == 0:
             yield ("done", {"answer": NO_DOCS_IN_FOLDER, "cited": [],
                             "ttft_s": 0.0, "total_s": round(time.perf_counter() - t0, 2),
