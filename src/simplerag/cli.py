@@ -78,6 +78,7 @@ def _log(msg):
 #=> 폴더의 변경된 문서만 다시 인덱싱한다. --rebuild 면 전부 다시.
 #------------------------------------------------------------------
 def cmd_index(args):
+    from simplerag.index import commands as index_commands
     app = App()
     try:
         # 인덱싱에는 생성 모델도 리랭커도 필요 없다 — 괜히 올리지 않는다.
@@ -86,11 +87,18 @@ def cmd_index(args):
             summary = index_folder(args.dir, app.embedder, app.store, app.bm25,
                                    rebuild=args.rebuild, on_log=print,
                                    recursive=not args.no_recursive,
-                                   allow_delete=args.allow_delete)
+                                   allow_delete=args.allow_delete, max_add=args.max_add)
         except RuntimeError as e:
             # 폴더 없음·청킹 설정 불일치 — 사용자가 고칠 수 있는 오류라 스택 없이 알린다
             print("\n❌ {}".format(e), file=sys.stderr)
+            print(index_commands.format_result({"op": "index", "ok": False, "why": str(e)[:200]},
+                                               prefix="@index-summary "))
             return 1
+        # 자동 인덱싱(RAGSearchBox)이 결과를 읽을 한 줄 — 사람이 읽는 요약은 아래에 따로 있다
+        print(index_commands.format_result(dict(
+            {k: v for k, v in summary.items() if k != "failed"},
+            op="index", ok=True, failed=len(summary.get("failed") or [])),
+            prefix="@index-summary "))
         print("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 삭제 {}건 / 청크 {:,}개 / {:.1f}s"
               .format(summary["files"], summary["added"], summary["modified"], summary["same"],
                       summary["removed"], summary["chunks"], summary["sec"]))
@@ -749,6 +757,8 @@ def main(argv=None):
     pi.add_argument("--no-recursive", action="store_true", help="하위 폴더 제외")
     pi.add_argument("--allow-delete", action="store_true",
                     help="사라진 문서가 많아도(30%% 또는 50건 이상) 인덱스에서 뺀다")
+    pi.add_argument("--max-add", type=int, default=None,
+                    help="새 문서가 이보다 많으면 새 문서는 넣지 않고 미룬다(자동 인덱싱용)")
     pi.set_defaults(func=cmd_index)
 
     pa = sub.add_parser("ask", help="질의 (질문 생략 시 대화형)")

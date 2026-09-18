@@ -394,6 +394,24 @@ def main():
         check("index-doc: 없는 파일은 ok=false", r["ok"] is False, r)
         line = commands.format_result({"op": "x", "ok": True, "path": "한글"})
         check("결과 줄은 @index + ASCII JSON", line.startswith("@index ") and line.isascii(), line)
+        check("index-plan: allow_delete 인자 읽기",
+              commands.parse_flag('{"path": "x", "allow_delete": true}', "allow_delete")
+              and not commands.parse_flag("D:\\x", "allow_delete"))
+
+        # ── 14. 새 문서가 많으면 미룬다 (AI4 — 처음 켠 폴더) ──
+        print("\n[14. max_add — 새 문서가 한도를 넘으면 미루고, 수정은 한다]")
+        new_docs = [os.path.join(root, "new", "n%02d.txt" % i) for i in range(4)]
+        for i, p in enumerate(new_docs):
+            write_doc(p, "신규%d" % i)
+        write_doc(C2, "체리수정")
+        bump(C2, 60)
+        s = run(root, emb, store, bm25, max_add=3)
+        by = points_by_doc(store)
+        check("새 문서 4건 > 한도 3 → 넣지 않음", s["held_new"] == 4 and s["added"] == 0
+              and not any(os.path.abspath(p) in by for p in new_docs), s)
+        check("그래도 수정은 반영", s["modified"] == 1, s)
+        s = run(root, emb, store, bm25, max_add=10)
+        check("한도 안이면 넣는다", s["added"] == 4 and s["held_new"] == 0, s)
 
     finally:
         store.close()

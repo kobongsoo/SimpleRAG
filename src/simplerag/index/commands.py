@@ -57,12 +57,33 @@ def parse_path(arg):
 #   ensure_ascii 라 cp949 콘솔에서도 깨지지 않는다.
 #
 # -in: result = dict
+# -in: prefix = 줄 머리(기본 "@index "). index 명령의 요약은 "@index-summary "
 #
 # -out: 한 줄 문자열
 # -out: error = 없음
 #------------------------------------------------------------------
-def format_result(result):
-    return PREFIX + json.dumps(result, ensure_ascii=True, separators=(",", ":"))
+def format_result(result, prefix=PREFIX):
+    return prefix + json.dumps(result, ensure_ascii=True, separators=(",", ":"))
+
+
+#------------------------------------------------------------------
+# 명령 인자에서 켜고 끄는 값 꺼내기
+#=> {"path": …, "allow_delete": true} 처럼 JSON 으로 온 추가 값을 읽는다.
+#
+# -in: arg = 명령 뒤의 글자
+# -in: key = 읽을 이름
+#
+# -out: bool (JSON 이 아니거나 없으면 False)
+# -out: error = 없음
+#------------------------------------------------------------------
+def parse_flag(arg, key):
+    arg = (arg or "").strip()
+    if not arg.startswith("{"):
+        return False
+    try:
+        return bool(json.loads(arg).get(key))
+    except (ValueError, AttributeError):
+        return False
 
 
 #------------------------------------------------------------------
@@ -107,7 +128,7 @@ class IndexCommands:
             elif cmd == "/bm25":
                 res = self.rebuild_bm25()
             elif cmd == "/index-plan":
-                res = self.plan(parse_path(arg))
+                res = self.plan(parse_path(arg), allow_delete=parse_flag(arg, "allow_delete"))
             else:
                 res = {"ok": False, "why": "알 수 없는 명령"}
         except Exception as e:
@@ -222,17 +243,18 @@ class IndexCommands:
     #=> RAGSearchBox 가 "무엇을 보낼지" 정하는 데 쓴다. 대조 규칙은 index 명령과 같다
     #   (indexer.plan_changes). 폴더가 안 보이면 삭제 후보를 만들지 않는다.
     #
-    # -in: folder = 지정 폴더
+    # -in: folder       = 지정 폴더
+    # -in: allow_delete = True 면 대량 삭제 멈춤을 건너뛴다(사용자가 트레이에서 허락했을 때)
     #
     # -out: {ok, add:[경로], modify:[경로], remove:[키], delete_blocked, retry_skip, bm25_stale}
     # -out: error = 없음 (폴더가 없으면 ok=False)
     #--------------------------------------------------------------
-    def plan(self, folder):
+    def plan(self, folder, allow_delete=False):
         if not folder or not os.path.isdir(folder):
             # 드라이브가 빠졌을 수 있다 — "전부 사라졌다" 로 보고하면 안 된다
             return {"ok": False, "folder": folder, "why": "폴더가 보이지 않습니다"}
         state = self._state()
-        p = indexer.plan_changes(folder, state)
+        p = indexer.plan_changes(folder, state, allow_delete=allow_delete)
         add = [path for path, _ in p["todo"] if os.path.abspath(path) not in state["docs"]]
         modify = [path for path, _ in p["todo"] if os.path.abspath(path) in state["docs"]]
         return {"ok": True, "folder": os.path.abspath(folder), "files": len(p["files"]),

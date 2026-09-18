@@ -527,13 +527,16 @@ def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=Fal
 # -in: on_log       = 진행 메시지 콜백 fn(str)
 # -in: recursive    = 하위 폴더까지 (기본 True)
 # -in: allow_delete = True 면 대량 삭제 안전 확인을 건너뛴다(사람이 확인했을 때만)
+# -in: max_add      = 새 문서가 이보다 많으면 새 문서는 넣지 않고 미룬다(수정·삭제는 한다).
+#                     None 이면 제한 없음. 자동 인덱싱이 처음 켠 폴더를 묻지 않고 통째로
+#                     인덱싱하지 않게 한다(설계서 §8 — 371건에 19분 걸렸다)
 #
 # -out: dict = 처리 요약 {files, changed, added, modified, same, removed,
-#                         delete_blocked, chunks, failed, sec}
+#                         delete_blocked, held_new, chunks, failed, sec}
 # -out: error = 폴더 없음·청킹 설정 불일치는 RuntimeError
 #------------------------------------------------------------------
 def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
-                 recursive=True, allow_delete=False):
+                 recursive=True, allow_delete=False, max_add=None):
     log = on_log or (lambda m: None)
 
     # ⚠️ 폴더가 안 보이면 여기서 멈춘다 — 계속하면 "전부 사라졌다" 로 보여 다 지운다
@@ -557,6 +560,15 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     if delete_blocked:
         log("  ⚠️ {} — 지우지 않았습니다. 정말 지운 것이면 --allow-delete 로 다시 실행하세요."
             .format(delete_blocked))
+
+    # 새 문서가 너무 많으면 이번에는 넣지 않는다 — 사람이 "지금 인덱싱" 으로 허락해야 한다
+    held_new = 0
+    if max_add is not None:
+        adds = [t for t in todo if os.path.abspath(t[0]) not in state["docs"]]
+        if len(adds) > max_add:
+            held_new = len(adds)
+            todo = [t for t in todo if os.path.abspath(t[0]) in state["docs"]]
+            log("  새 문서 {}건은 한도({}건)를 넘어 이번에는 넣지 않았습니다".format(held_new, max_add))
 
     log("문서 {}건 중 {}건 처리 대상, 사라진 문서 {}건".format(len(files), len(todo), len(removed)))
     if plan["retry_skip"]:
@@ -611,7 +623,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     return {"files": len(files), "changed": len(todo) + n_removed,
             "added": counts["added"], "modified": counts["modified"], "same": counts["same"],
-            "removed": n_removed, "delete_blocked": delete_blocked,
+            "removed": n_removed, "delete_blocked": delete_blocked, "held_new": held_new,
             "chunks": total_chunks, "failed": failed,
             "sec": round(time.perf_counter() - t_start, 1)}
 
