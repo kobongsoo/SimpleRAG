@@ -1,5 +1,5 @@
 #------------------------------------------------------------------
-# 자동 인덱싱 AI1 회귀 테스트 (plan/자동인덱싱_설계서.html §5·§6·§7)
+# 자동 인덱싱 AI1·AI2 회귀 테스트 (plan/자동인덱싱_설계서.html §5·§6·§7·§9)
 #=> 폴더와 상태 파일을 대조해 추가·수정·삭제를 반영하는 index_folder 를 확인한다.
 #   특히 "수정 문서는 옛 청크를 지우고 새 청크를 넣는다" 가 어느 단계에서 끊겨도
 #   두 벌이 남거나 문서가 사라지지 않는지 본다.
@@ -11,6 +11,7 @@
 #------------------------------------------------------------------
 
 import hashlib
+import json
 import os
 import shutil
 import sys
@@ -356,6 +357,43 @@ def main():
         check("다음 실행이 바뀐 게 없어도 BM25 를 다시 만든다",
               any("BM25 인덱스" in l and "구축" in l for l in s["_log"])
               and not indexer.bm25_stale(indexer.load_state()))
+
+        # ── 13. 워커 명령 (AI2) ────────────────────────
+        print("\n[13. 워커 인덱싱 명령]")
+        import types
+        from simplerag.index import commands
+        app = types.SimpleNamespace(embedder=emb, store=store, bm25=bm25)
+        ic = commands.IndexCommands(app)
+        E = os.path.join(root, "worker.txt")
+        write_doc(E, "포도")
+        check("경로 해석: JSON", commands.parse_path('{"path": "D:\\\\a b\\\\c.txt"}') == "D:\\a b\\c.txt")
+        check("경로 해석: 따옴표·평문", commands.parse_path('"D:\\a b\\c.txt"') == "D:\\a b\\c.txt")
+        r = ic.run("/index-plan", json.dumps({"path": root}))
+        check("index-plan: 새 문서를 추가 후보로", r["ok"] and E in r["add"], r)
+        r = ic.run("/index-doc", json.dumps({"path": E}))
+        check("index-doc: 추가", r["ok"] and r["result"] == "added" and "ms" in r, r)
+        r = ic.run("/index-doc", E)
+        check("index-doc: 안 바뀌면 unchanged", r["ok"] and r["result"] == "unchanged", r)
+        write_doc(E, "청포도")
+        bump(E, 50)
+        r = ic.run("/index-doc", E)
+        pts = points_by_doc(store).get(os.path.abspath(E), [])
+        check("index-doc: 수정 — 새 내용 한 벌만", r["result"] == "modified"
+              and pts and all("청포도" in pl["text"] for _, pl in pts), r)
+        r = ic.run("/remove-doc", E)
+        check("remove-doc: 파일이 있으면 거절", r["ok"] is False, r)
+        os.remove(E)
+        r = ic.run("/remove-doc", E.upper())
+        check("remove-doc: 대소문자 달라도 삭제", r["ok"] and r["result"] == "removed", r)
+        check("remove-doc: 점이 사라졌다", os.path.abspath(E) not in points_by_doc(store))
+        r = ic.run("/bm25", "")
+        check("bm25: 다시 만들고 stale 해제", r["ok"] and not indexer.bm25_stale(indexer.load_state()), r)
+        r = ic.run("/index-plan", root + "_없음")
+        check("index-plan: 없는 폴더는 ok=false, 삭제 후보 없음", r["ok"] is False and "remove" not in r, r)
+        r = ic.run("/index-doc", os.path.join(root, "~$x.txt"))
+        check("index-doc: 없는 파일은 ok=false", r["ok"] is False, r)
+        line = commands.format_result({"op": "x", "ok": True, "path": "한글"})
+        check("결과 줄은 @index + ASCII JSON", line.startswith("@index ") and line.isascii(), line)
 
     finally:
         store.close()

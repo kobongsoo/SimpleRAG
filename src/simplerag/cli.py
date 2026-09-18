@@ -330,6 +330,8 @@ def cmd_chat(args):
     app = App(model)
     top_k = args.top_k
     rr_warned = False        # 백그라운드 리랭커 적재 실패를 한 번만 알리기 위한 표시
+    from simplerag.index import commands as index_commands
+    indexer_cmds = None      # 인덱싱 명령 처리기 — 처음 쓸 때 만든다(추출기 적재가 무겁다)
 
     try:
         print("모델 적재 중...")
@@ -365,6 +367,10 @@ def cmd_chat(args):
                     print("  /topk N     근거 개수 변경 (현재 {})".format(
                         top_k or config.TOP_K))
                     print("  /status     인덱스 상태")
+                    print("  /index-doc <경로>    문서 한 건 반영(추가·수정)")
+                    print("  /remove-doc <경로>   지운 문서를 인덱스에서 빼기")
+                    print("  /bm25                키워드 색인 다시 만들기")
+                    print("  /index-plan <폴더>   폴더와 인덱스 비교(바꾸지 않음)")
                     print("  exit        종료\n")
                 elif cmd == "/topk" and len(parts) > 1 and parts[1].isdigit():
                     top_k = int(parts[1])
@@ -372,6 +378,13 @@ def cmd_chat(args):
                 elif cmd == "/status":
                     s = app.store.stats()
                     print("  {:,}청크 / {:.1f}MB\n".format(s["count"], s["disk_mb"]))
+                elif cmd in index_commands.COMMANDS:
+                    # 자동 인덱싱(설계서 §9) — 결과는 "@index {json}" 한 줄.
+                    # 인덱스를 쥔 이 워커가 직접 반영하므로 `index` 를 따로 돌릴 필요가 없다.
+                    if indexer_cmds is None:
+                        indexer_cmds = index_commands.IndexCommands(app)
+                    arg = query[len(parts[0]):].strip()
+                    print(index_commands.format_result(indexer_cmds.run(cmd, arg)), flush=True)
                 else:
                     print("  알 수 없는 명령입니다. /help 를 입력하세요.\n")
                 continue

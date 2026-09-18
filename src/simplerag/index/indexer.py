@@ -458,6 +458,58 @@ def delete_guard(n_removed, n_known, limit_pct=30, limit_n=50):
 
 
 #------------------------------------------------------------------
+# 폴더와 상태 파일 대조 — 무엇을 추가·수정·삭제할지 (자동 인덱싱 설계서 §4·§6)
+#=> 인덱스는 건드리지 않고 "할 일 목록" 만 만든다. index 명령과 워커의 /index-plan
+#   명령이 같은 판단을 쓰도록 한곳에 둔다(두 벌이면 언젠가 어긋난다).
+#    1) 폴더를 훑어 지문이 상태 파일과 다른 문서 → 추가·수정 후보
+#       (지난번에 실패했고 그 뒤로 안 바뀐 문서는 뺀다)
+#    2) 상태 파일에는 있는데 폴더에 없는 문서 → 삭제 후보
+#    3) 삭제 후보가 너무 많으면 비우고 이유를 적는다(allow_delete 면 그대로)
+#
+# -in: doc_dir      = 대상 폴더 (있는지는 부르는 쪽이 먼저 확인한다)
+# -in: state        = 상태 dict
+# -in: recursive    = 하위 폴더까지
+# -in: allow_delete = True 면 대량 삭제 안전 확인을 건너뛴다
+# -in: rebuild      = True 면 삭제 후보를 만들지 않는다(어차피 전부 새로 만든다)
+#
+# -out: dict = {files, skipped, todo:[(path, fp)], removed:[key], delete_blocked, retry_skip}
+# -out: error = 폴더를 못 읽으면 OSError 전파
+#------------------------------------------------------------------
+def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=False):
+    files, skipped = list_files(doc_dir, recursive=recursive)
+
+    # ── 추가·수정 후보 ───────────────────────────────
+    failed_before = state.get("failed", {})
+    todo, n_retry_skip = [], 0
+    for path in files:
+        fp = file_fingerprint(path)
+        key = os.path.abspath(path)
+        prev = state["docs"].get(key)
+        if prev and prev.get("fingerprint") == fp:
+            continue                  # 안 바뀐 문서는 건너뛴다
+        f = failed_before.get(key)
+        if f and f.get("fingerprint") == fp:
+            n_retry_skip += 1         # 지난번에 실패했고 그 뒤로 안 바뀌었다
+            continue
+        todo.append((path, fp))
+
+    # ── 삭제 후보 ────────────────────────────────────
+    present = {norm_path(p) for p in files}
+    removed = [] if rebuild else find_removed(state, doc_dir, present, recursive)
+    base = norm_path(doc_dir).rstrip("\\/") + os.sep
+    n_known = sum(1 for k in state["docs"] if norm_path(k).startswith(base))
+    delete_blocked = ""
+    if removed and not allow_delete:
+        ok, why = delete_guard(len(removed), n_known)
+        if not ok:
+            delete_blocked = why
+            removed = []
+
+    return {"files": files, "skipped": skipped, "todo": todo, "removed": removed,
+            "delete_blocked": delete_blocked, "retry_skip": n_retry_skip}
+
+
+#------------------------------------------------------------------
 # 폴더 인덱싱 (핵심)
 #=> 폴더와 상태 파일을 대조해 추가·수정·삭제를 반영한다. 문서 단위로
 #   체크포인트를 남겨 중단 시 이어서 할 수 있다.
@@ -496,42 +548,19 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     check_chunk_params(state, rebuild, log)
     store.ensure_collection(recreate=rebuild)
 
-    files, skipped = list_files(doc_dir, recursive=recursive)
-    if skipped:
-        log("제외 {}건(확장자·임시 파일 등)".format(skipped))
-
-    # ── 추가·수정 후보 ───────────────────────────────
-    failed_before = state.get("failed", {})
-    todo, n_retry_skip = [], 0
-    for path in files:
-        fp = file_fingerprint(path)
-        key = os.path.abspath(path)
-        prev = state["docs"].get(key)
-        if prev and prev.get("fingerprint") == fp:
-            continue                  # 안 바뀐 문서는 건너뛴다
-        f = failed_before.get(key)
-        if f and f.get("fingerprint") == fp:
-            n_retry_skip += 1         # 지난번에 실패했고 그 뒤로 안 바뀌었다
-            continue
-        todo.append((path, fp))
-
-    # ── 삭제 후보 ────────────────────────────────────
-    present = {norm_path(p) for p in files}
-    removed = [] if rebuild else find_removed(state, doc_dir, present, recursive)
-    base = norm_path(doc_dir).rstrip("\\/") + os.sep
-    n_known = sum(1 for k in state["docs"] if norm_path(k).startswith(base))
-    delete_blocked = ""
-    if removed and not allow_delete:
-        ok, why = delete_guard(len(removed), n_known)
-        if not ok:
-            delete_blocked = why
-            log("  ⚠️ {} — 지우지 않았습니다. 정말 지운 것이면 --allow-delete 로 다시 실행하세요."
-                .format(why))
-            removed = []
+    plan = plan_changes(doc_dir, state, recursive=recursive, allow_delete=allow_delete,
+                        rebuild=rebuild)
+    files, todo, removed = plan["files"], plan["todo"], plan["removed"]
+    delete_blocked = plan["delete_blocked"]
+    if plan["skipped"]:
+        log("제외 {}건(확장자·임시 파일 등)".format(plan["skipped"]))
+    if delete_blocked:
+        log("  ⚠️ {} — 지우지 않았습니다. 정말 지운 것이면 --allow-delete 로 다시 실행하세요."
+            .format(delete_blocked))
 
     log("문서 {}건 중 {}건 처리 대상, 사라진 문서 {}건".format(len(files), len(todo), len(removed)))
-    if n_retry_skip:
-        log("  지난번 실패 뒤 바뀌지 않아 건너뛴 문서 {}건".format(n_retry_skip))
+    if plan["retry_skip"]:
+        log("  지난번 실패 뒤 바뀌지 않아 건너뛴 문서 {}건".format(plan["retry_skip"]))
 
     t_start = time.perf_counter()
     prog = Progress(max(1, len(todo)))

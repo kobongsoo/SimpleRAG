@@ -221,7 +221,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
   이때 "지우는 순간과 넣는 순간 사이" 에 문서가 사라지거나 두 벌이 섞이지 않게 하는 것이 이 설계의 중심이다.</p>
   <div class="meta">
     <span><b>작성</b> 2026-09-18</span>
-    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1 구현·검증 완료</b> — AI2 부터 남음</span>
+    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1·AI2 구현·검증 완료</b> — AI3 부터 남음</span>
     <span><b>관련</b> <code>src/simplerag/index/indexer.py</code> · <code>store.py</code> · <code>bm25.py</code> · <code>retrieve/hybrid.py</code> · <code>cli.py</code> · <code>RAGSearchBox/</code></span>
   </div>
 </header>
@@ -470,7 +470,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
         <tr><td>만들기 전 BM25 가 <b>지워진 점 id</b> 를 돌려준다</td><td><code>hybrid.py</code>: payload 를 못 찾은 id 는 <b>버린다</b>(지금은 빈 근거가 된다). 이것은 자동 인덱싱과 상관없이 먼저 고칠 버그다</td></tr>
         <tr><td>만들기 전 <b>새 청크</b>는 BM25 에 없다</td><td>그동안은 벡터 검색으로만 찾힌다. 수 초~수 분의 일이라 허용한다</td></tr>
         <tr><td>워커 안에서 만들면 그동안 질문이 기다린다</td><td>1단계: 한가할 때만 만들므로 대개 문제없다. 2단계(청크 수만 개 이상): 점 읽기는 워커 스레드에서, 계산은 별도 스레드에서 하고 다 되면 바꿔 끼운다</td></tr>
-        <tr><td>워커가 들고 있는 BM25 는 메모리에 있다</td><td>새로 만든 뒤 <b>워커의 <code>Bm25Index</code> 를 교체</b>한다(파일만 바꾸면 워커는 옛것을 계속 쓴다)</td></tr>
+        <tr><td>워커가 들고 있는 BM25 는 메모리에 있다</td><td><code>Bm25Index.build()</code> 가 <b>같은 객체의 내용을 바꾸므로</b>, 워커의 검색기가 들고 있는 그 객체가 곧바로 새 BM25 가 된다 — 따로 바꿔 끼울 것이 없다(AI2 에서 확인)</td></tr>
         <tr><td>BM25 파일이 상태 파일보다 오래됐다(§5 의 5·6 사이에서 끊김)</td><td>상태 파일에 <code>bm25_built_at</code> 과 <code>index_changed_at</code> 을 적는다. 시작할 때 앞이 뒤보다 이르면 다시 만든다</td></tr>
       </tbody>
     </table>
@@ -521,17 +521,20 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
   <p>지금 워커 입력 루프(<code>cli.cmd_chat</code>)에는 <code>/help</code>·<code>/topk</code>·<code>/status</code> 같은 <b>슬래시 명령</b>이 이미 있다. 같은 자리에 넣는다.
   결과는 <b>한 줄짜리 JSON</b>으로 내보내, RAGSearchBox 가 답변 출력과 헷갈리지 않게 한다.</p>
 <pre><span class="c"># RAGSearchBox → 워커</span>
-<b>/index-doc</b> D:\분류함\규정\출장여비규정.docx      <span class="c"># 추가·수정(§5 교체)</span>
-<b>/remove-doc</b> D:\분류함\규정\옛규정.docx           <span class="c"># 삭제</span>
-<b>/bm25</b>                                            <span class="c"># BM25 다시 만들고 바꿔 끼우기</span>
-<b>/index-state</b>                                     <span class="c"># 상태 파일 요약(지문 대조용, 시작 때)</span>
+<b>/index-doc</b> {"path": "D:\\분류함\\규정.docx"}   <span class="c"># 추가·수정(§5 교체). 경로만 써도 된다</span>
+<b>/remove-doc</b> {"path": "…"}                  <span class="c"># 삭제 — 파일이 실제로 없을 때만</span>
+<b>/bm25</b>                                       <span class="c"># BM25 다시 만들기 + 고아 청소</span>
+<b>/index-plan</b> {"path": "D:\\분류함"}          <span class="c"># 폴더와 인덱스 대조 — 할 일 목록(바꾸지 않음)</span>
 
 <span class="c"># 워커 → RAGSearchBox  (한 줄, 그 뒤 평소처럼 "질문> ")</span>
-@index {"op":"index-doc","ok":true,"path":"…","chunks":7,"replaced":7,"ms":1840}
-@index {"op":"index-doc","ok":false,"path":"…","why":"추출 실패: 암호가 걸린 문서","kept_old":true}
-@index {"op":"bm25","ok":true,"chunks":498,"ms":410}</pre>
+@index {"op":"index-doc","ok":true,"path":"…","result":"modified","chunks":7,"ms":64}
+<span class="c">#   result = added | modified | same(내용 같음) | unchanged(지문 같음) | failed_before</span>
+@index {"op":"index-doc","ok":false,"path":"…","result":"modified","why":"추출 실패 …","kept_old":true,"ms":…}
+@index {"op":"bm25","ok":true,"chunks":499,"orphans":0,"build_s":0.07,"ms":71}
+@index {"op":"index-plan","ok":true,"add":[…],"modify":[…],"remove":[…],"delete_blocked":"","bm25_stale":false,"ms":6}</pre>
   <ul>
-    <li>경로는 한 줄에 그대로 쓴다. 줄바꿈이 든 경로는 Windows 에 없다. 워커 stdin 은 지금처럼 <b>cp949</b> 로 보낸다 — cp949 로 못 쓰는 글자가 든 경로는 <code>\uXXXX</code> 로 바꿔 보내고 워커가 되돌린다(§12 에 사례)</li>
+    <li><b>[AI2 에서 바꿈]</b> 경로는 <b>ASCII JSON</b>(<code>{"path": …}</code>)으로 보낸다. 워커 stdin 은 cp949 라 이모지 같은 글자가 깨지는데, JSON 은 그런 글자를 <code>\uXXXX</code> 로 적으므로 인코딩 문제가 아예 없다. 처음 생각한 "경로 안의 <code>\u</code> 를 되돌리기" 는 <code>D:\users</code> 같은 평범한 경로와 헷갈려 버렸다. 사람이 칠 때를 위해 경로를 그대로 써도 받는다</li>
+    <li><b>[AI2 에서 바꿈]</b> 처음 적은 <code>/index-state</code> 대신 <code>/index-plan</code> 을 두었다. 대조 규칙(추가·수정·삭제·대량 삭제 멈춤)을 RAGSearchBox 에 한 벌 더 만들지 않고, <code>index</code> 명령과 같은 <code>indexer.plan_changes()</code> 를 쓰게 하려는 것이다</li>
     <li>줄 앞의 <code>@index</code> 로 RAGSearchBox 의 해석기(<code>chat_parser</code>)가 답변과 구분한다. 이 줄은 답변 칸에 나오지 않는다</li>
     <li>명령의 몸통은 <code>indexer.py</code> 에 새로 만드는 <b><code>sync_doc()</code> · <code>remove_doc()</code></b> 이다. <code>index --dir</code> 도 이 두 함수를 쓰게 바꿔, 수동 실행과 자동 실행이 <b>같은 코드</b>로 돈다</li>
   </ul>
@@ -591,7 +594,7 @@ Bm25IdleSec      = 10</pre>
         <tr><td>사람이 <code>simplerag index</code> 를 직접 돌리는 중</td><td>잠금 때문에 워커가 못 뜨는 것은 지금과 같다. 자동 인덱싱은 잠금 오류를 보면 1분 뒤 다시 시도</td></tr>
         <tr><td>드라이브 분리·네트워크 끊김</td><td>폴더가 안 보이면 삭제 대조를 건너뛴다(§6). 알림 스레드는 다시 연결을 시도한다</td></tr>
         <tr><td>수백 개 한꺼번에 복사</td><td>알림 버퍼 넘침 → 대조 순찰. 50건 넘으면 묻는다</td></tr>
-        <tr><td>cp949 로 못 쓰는 문자가 든 파일명</td><td>§9 의 <code>\uXXXX</code> 로 보낸다. <b>구현 전에 시험</b>: 이모지·한자 확장 문자가 든 파일명</td></tr>
+        <tr><td>cp949 로 못 쓰는 문자가 든 파일명</td><td>경로를 ASCII JSON 으로 보낸다(§9). 이모지가 든 파일명으로 추가·삭제 확인(AI2)</td></tr>
         <tr><td>Qdrant 삭제 후 디스크</td><td>local 모드는 sqlite 라 지운 자리를 다시 쓴다. 파일이 줄지 않는 것은 정상 — 필요하면 <code>--rebuild</code></td></tr>
         <tr><td>같은 문서가 지정 폴더 두 곳에 걸침(폴더 A 와 그 하위 B 를 둘 다 지정)</td><td>경로가 같으면 한 문서다. 폴더 목록에서 하위 폴더는 합친다</td></tr>
       </tbody>
@@ -609,7 +612,7 @@ Bm25IdleSec      = 10</pre>
         <tr><td><code>src/simplerag/index/indexer.py</code></td><td><code>sync_doc()</code>(§5 교체) · <code>remove_doc()</code> · <code>plan_changes(roots)</code>(대조: 추가/수정/삭제 목록) · 내용 해시 · 상태 파일에 <code>content_hash</code>·<code>ids</code>·<code>failed</code>·<code>bm25_built_at</code>. <code>index_folder()</code> 는 이 함수들을 부르도록 바꾸고 <b>삭제 대조</b>를 더한다</td><td><span class="chip change">변경</span></td></tr>
         <tr><td><code>src/simplerag/index/store.py</code></td><td><code>delete_doc_except(doc_path, keep_ids)</code> · <code>rename_doc(old, new)</code>(2단계) · <code>sweep_orphans(state)</code></td><td><span class="chip change">변경</span></td></tr>
         <tr><td><code>src/simplerag/retrieve/hybrid.py</code></td><td>payload 를 못 찾은 id 는 버린다(빈 근거 방지)</td><td><span class="chip change">먼저 고칠 버그</span></td></tr>
-        <tr><td><code>src/simplerag/cli.py</code></td><td><code>cmd_chat</code> 에 <code>/index-doc</code>·<code>/remove-doc</code>·<code>/bm25</code>·<code>/index-state</code>. <code>index</code> 에 삭제 대조와 안전 확인</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/cli.py</code></td><td><code>cmd_chat</code> 에 <code>/index-doc</code>·<code>/remove-doc</code>·<code>/bm25</code>·<code>/index-plan</code>(몸통은 새 파일 <code>index/commands.py</code>). <code>index</code> 에 삭제 대조와 안전 확인</td><td><span class="chip change">변경</span></td></tr>
         <tr><td><code>RAGSearchBox/watcher.py</code></td><td>폴더 알림 스레드 · 임시 파일 거르기 · 안정화 · 대조 순찰 → "추가/수정/삭제" 묶음</td><td><span class="chip new">신규</span></td></tr>
         <tr><td><code>RAGSearchBox/index_jobs.py</code></td><td>대기열 · 워커 명령 또는 index 명령 고르기 · 지우기 안전 확인 · 재시도</td><td><span class="chip new">신규</span></td></tr>
         <tr><td><code>RAGSearchBox/rag_worker.py</code></td><td>질문 한 칸 → 질문/인덱싱 두 줄 대기열. <code>@index</code> 결과 받기. 워커가 내려가 있으면 index 명령 실행</td><td><span class="chip change">변경</span></td></tr>
@@ -653,9 +656,12 @@ Bm25IdleSec      = 10</pre>
       <dt>결과</dt><dd><code>bench/test_auto_index.py</code> <b>40/40</b>(가짜 임베더·진짜 토크나이저·임시 Qdrant). <code>hybrid.py</code> 수정을 되돌리면 근거 5건 중 3건이 빈 본문으로 나와 시험이 실패함을 확인 — 시험이 버그를 잡는다.
       진짜 모델·<code>sample</code> 복사본(임시 <code>SIMPLERAG_HOME</code>)으로 CLI: 처음 20건·498청크 27.3초 / 새 문서 추가 0.3초 / 수정 0.4초 — 검색에 새 내용만 나오고 옛 내용은 사라짐 / 날짜만 바뀜은 다시 임베딩 안 함 / 삭제 0.4초 — 검색에서 사라짐 / <code>~$</code> 표시 파일 제외. BM25 재구축 498청크 0.2~0.3초</dd>
       <dt>구현 메모</dt><dd>① 삭제 조건은 <code>gen</code> 이 아니라 <b>"방금 넣은 id 말고"</b>(§5 — 같은 버전 두 벌까지 정리, 시험 8). ② 지난번 실패하고 안 바뀐 문서는 다시 시도하지 않는다(<code>failed</code>). ③ 고아 청소는 BM25 를 만들 때 함께 하되, 고아가 30% 를 넘으면 상태 파일이 깨졌다고 보고 지우지 않는다. ④ 대량 삭제로 멈추면 <code>index</code> 종료 코드 3. ⑤ <code>clear --doc</code> 도 <code>remove_doc</code> 을 써서 다음 <code>index</code> 가 BM25 를 다시 만든다(예전엔 변경 0건이면 건너뛰었다)</dd></dl></div></li>
-    <li class="step"><span class="sid">AI2</span><div class="body"><h4>워커 명령</h4>
-      <dl><dt>할 일</dt><dd><code>/index-doc</code>·<code>/remove-doc</code>·<code>/bm25</code>·<code>/index-state</code>, 워커 BM25 바꿔 끼우기</dd>
-      <dt>확인</dt><dd>워커를 띄운 채 문서를 고치고 명령 → <b>같은 워커에 물어서</b> 새 내용이 근거로 나오는가, 옛 내용은 안 나오는가. 명령 사이에 질문을 끼워 순서가 섞이지 않는가</dd></dl></div></li>
+    <li class="step"><span class="sid">AI2</span><div class="body"><h4>워커 명령 <span class="chip done">완료 2026-09-18</span></h4>
+      <dl><dt>할 일</dt><dd><code>/index-doc</code>·<code>/remove-doc</code>·<code>/bm25</code>·<code>/index-plan</code> — <code>src/simplerag/index/commands.py</code>. 대조 규칙은 <code>indexer.plan_changes()</code> 로 떼어 <code>index</code> 명령과 함께 쓴다</dd>
+      <dt>확인</dt><dd>워커를 띄운 채 문서를 고치고 명령 → <b>같은 워커에 물어서</b> 새 내용이 근거로 나오는가, 옛 내용은 안 나오는가. 명령 사이에 질문을 끼워 순서가 섞이지 않는가</dd>
+      <dt>결과</dt><dd>진짜 모델을 올린 워커(RAGSearchBox 와 같은 stdin cp949 / stdout utf-8)로 <b>20/20</b>: 추가 → 물으면 "서귀포" / 수정 → BM25 를 다시 만들기 전에 물어도 "강릉" 만, 빈 근거 없음 / 삭제 → 근거에서 사라짐 / 파일이 있으면 삭제 거절 / 이모지 파일명 / 없는 폴더는 삭제 후보 없음 / 명령·명령·질문을 한 번에 보내도 보낸 차례대로 / 잘못된 명령 뒤에도 워커가 산다.
+      모델 없는 회귀 시험은 <code>bench/test_auto_index.py</code> 에 13절로 더해 <b>53/53</b>.
+      걸린 시간(짧은 txt, 499청크 인덱스): <code>/index-doc</code> 52~167ms · <code>/bm25</code> 71~158ms · <code>/index-plan</code> 6ms. 실제 docx·hwp 는 추출이 더해진다 — AI4 에서 잰다</dd></dl></div></li>
     <li class="step"><span class="sid">AI3</span><div class="body"><h4>감지 — watcher</h4>
       <dl><dt>할 일</dt><dd>알림 스레드 · 거르기 · 안정화 · 대조 순찰</dd>
       <dt>확인</dt><dd>Word·Excel·한글로 실제 저장 / 탐색기 복사·이동·이름 변경·삭제 / 큰 파일 복사 도중 / 수백 개 복사(버퍼 넘침) / 꺼져 있던 동안 바뀐 것</dd></dl></div></li>
