@@ -11,7 +11,9 @@
 #    3) 워커가 내려가 있으면(쉬어서 내려갔거나 아직 안 뜸) 깨우지 않고
 #         simplerag index --dir 폴더 --max-add N 을 따로 돌린다. 그동안 워커는 띄우지 않는다
 #         (인덱스 폴더를 한 프로세스만 열 수 있다). 질문이 오면 끝난 뒤 답한다.
-#    4) 안전장치 — 사람에게 묻고 기다린다(트레이 "지금 인덱싱")
+#    4) 지정 폴더 밖 문서 정리 — 인덱싱 폴더 = 패널 폴더([Scope] Folders 하나)를 지키려고,
+#       워커가 뜰 때마다 /index-outside 로 밖 문서를 찾아 인덱스에서 뺀다(폴더 한정 검색 설계서 §0)
+#    5) 안전장치 — 사람에게 묻고 기다린다(트레이 "지금 인덱싱")
 #         · 새 문서가 AskAboveDocs 건을 넘으면(처음 켠 폴더) 새 문서는 넣지 않는다
 #         · 한꺼번에 많이 사라지면(simplerag 의 삭제 멈춤) 지우지 않는다
 #
@@ -31,6 +33,7 @@ import log as rsb_log
 SUMMARY_PREFIX = "@index-summary "
 CLI_RETRY_S = 60          # index 명령이 실패했을 때(잠금 등) 다시 해 볼 간격
 NOTIFY_AT_LEAST = 3       # 이보다 적게 바뀐 묶음은 트레이로 알리지 않는다(저장할 때마다 뜨면 귀찮다)
+OUTSIDE_KEY = "(지정 폴더 밖)"   # waiting_delete 에서 "지정 폴더 밖 문서" 를 가리키는 이름
 
 
 #------------------------------------------------------------------
@@ -72,6 +75,8 @@ class IndexJobs:
         self._bm25_needed = False
         self._retry_at = 0.0
         self._last_avail = None                   # 지난번에 본 워커 상태("up" 이 되는 순간을 잡는다)
+        self._outside_needed = True               # 지정 폴더 밖 문서를 확인할 차례인가
+        self._approve_outside = False             # 밖 문서가 많아 멈췄던 것을 사람이 허락했는가
         self.waiting_new = {}                     # {root: 새 문서 수} 허락 대기
         self.waiting_delete = {}                  # {root: 이유} 삭제 허락 대기
         self._round = self._new_round()
@@ -132,7 +137,11 @@ class IndexJobs:
     #--------------------------------------------------------------
     def run_now(self):
         roots = set(self.waiting_new) | set(self.waiting_delete)
-        if not roots:
+        if OUTSIDE_KEY in roots:
+            roots.discard(OUTSIDE_KEY)
+            self._approve_outside = True
+            self._outside_needed = True
+        if not roots and not self._approve_outside:
             roots = set(self.roots)
         for r in roots:
             self._approved.add(r)
@@ -198,6 +207,7 @@ class IndexJobs:
                 # 옛것일 수 있다. 폴더를 한 번씩 대조하면 /index-plan 이 bm25_stale 로 알려 준다.
                 for r in self.roots:
                     self.mark_dirty(r, "워커가 떴다")
+                self._outside_needed = True
             self._last_avail = avail
             if avail == "starting":
                 return                                  # 곧 뜬다 — 뜨면 워커에게 시킨다
@@ -222,10 +232,20 @@ class IndexJobs:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _tick_worker(self, now):
+        if self._outside_needed:
+            self._outside_needed = False
+            self._send("/index-outside " + json.dumps({"roots": self.roots}), self._on_outside,
+                       "지정 폴더 밖 문서 확인")
+            return
         if self._docs:
             op, path, root = self._docs.popleft()
             self._queued.discard((op, os.path.normcase(path)))
-            self._send("/{} {}".format(op, json.dumps({"path": path})),
+            if op == "remove-outside":
+                # 지정 폴더 밖 문서는 파일이 있어도 뺀다 — 워커가 폴더 목록으로 한 번 더 확인한다
+                line = "/remove-doc " + json.dumps({"path": path, "outside_of": self.roots})
+            else:
+                line = "/{} {}".format(op, json.dumps({"path": path}))
+            self._send(line,
                        lambda res, op=op, path=path, root=root: self._on_doc(op, path, root, res),
                        "{} {}".format(op, os.path.basename(path)))
             return
@@ -344,6 +364,43 @@ class IndexJobs:
                           len(remove))
 
     #--------------------------------------------------------------
+    # 지정 폴더 밖 문서 확인 결과
+    #=> 한꺼번에 많으면(30%·50건) 빼지 않고 묻는다 — 지정 폴더 설정을 잘못 바꾼 것일 수 있다.
+    #
+    # -in: res = /index-outside 결과
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_outside(self, res):
+        if res.get("stopped"):
+            self._outside_needed = True             # 워커가 다시 뜨면 다시 본다
+            return
+        if not res.get("ok"):
+            self.log.warning("지정 폴더 밖 문서 확인 실패: %s", res.get("why"))
+            return
+        out = res.get("outside") or []
+        approved, self._approve_outside = self._approve_outside, False
+        if not out:
+            self.waiting_delete.pop(OUTSIDE_KEY, None)
+            return
+        if res.get("delete_blocked") and not approved:
+            if OUTSIDE_KEY not in self.waiting_delete:
+                self.notify("warn", "지정 폴더 밖 문서 {}건이 인덱스에 있습니다({}) — 트레이 '지금 인덱싱' 을 누르면 뺍니다"
+                            .format(len(out), res["delete_blocked"]))
+            self.waiting_delete[OUTSIDE_KEY] = res["delete_blocked"]
+            self.log.info("지정 폴더 밖 문서 %d건 — 허락을 기다린다", len(out))
+            return
+        self.waiting_delete.pop(OUTSIDE_KEY, None)
+        self.log.info("지정 폴더 밖 문서 %d건을 인덱스에서 뺀다(인덱싱 폴더 = 패널 폴더)", len(out))
+        for p in out:
+            key = ("remove-outside", os.path.normcase(p))
+            if key not in self._queued:
+                self._queued.add(key)
+                self._docs.append(("remove-outside", p, None))
+                self._round["total"] += 1
+
+    #--------------------------------------------------------------
     # 문서 명령 결과
     #
     # -in: op   = "index-doc" | "remove-doc"
@@ -357,7 +414,10 @@ class IndexJobs:
     def _on_doc(self, op, path, root, res):
         if res.get("stopped"):
             # 워커가 내려갔다 — 폴더를 다시 대조하게 한다(내려가 있으면 index 명령이 한다)
-            self.mark_dirty(root, "워커가 도중에 내려감")
+            if root is None:
+                self._outside_needed = True        # 지정 폴더 밖 정리는 워커가 다시 뜨면
+            else:
+                self.mark_dirty(root, "워커가 도중에 내려감")
             return
         r = self._round
         r["done"] += 1

@@ -107,6 +107,11 @@ class App:
         self.window.on_show_evidence = self._show_evidence
         self.window.on_restore = self._restore_search
         self.panel.on_show_evidence = self._show_evidence
+        # 폴더 한정 검색(폴더 한정 검색 설계서 §8)
+        self.panel.scope_info = self._scope_info
+        self.panel.on_scope_change = self._on_scope_change
+        self._state_cache = (None, None)       # (상태 파일 mtime, 문서 키 목록)
+        self._cmd = cmd
         self._quitting = False
         self._last_tooltip = ""
         # 예약해 둔 root.after 두 개(큐 처리·상태 갱신). 끝낼 때 취소한다.
@@ -290,7 +295,7 @@ class App:
         if self.worker is None:
             self.window.show_error(self.worker_error or "SimpleRAG 를 찾지 못했습니다")
             return
-        self.worker.ask(question)
+        self.worker.ask(question, folder=self._search_folder(folders[0] if folders else None))
 
     #--------------------------------------------------------------
     # 워커 오류 보여 주기
@@ -389,11 +394,95 @@ class App:
         question = query_filter.one_line(text)
         if not question:
             return
-        self.log.info("패널 질문: %r (폴더 %s)", question[:40], self.panel.folder)
+        folder = self._search_folder(self.panel.folder)
+        self.log.info("패널 질문: %r (범위 %s)", question[:40], folder)
         if self.worker is None:
             self.panel.show_error(self.worker_error or "SimpleRAG 를 찾지 못했습니다")
             return
-        self.worker.ask(question)
+        self.worker.ask(question, folder=folder)
+
+    #--------------------------------------------------------------
+    # 질문의 검색 범위 폴더 (폴더 한정 검색 설계서 §3)
+    #=> "folder" 면 지금 보고 있는 폴더(하위 포함), "root" 면 그 폴더가 속한 지정 폴더.
+    #   인덱싱 폴더 = 패널 폴더이므로 "인덱스 전체" 는 두지 않는다.
+    #
+    # -in: folder = 지금 보고 있는 폴더(모르면 None)
+    #
+    # -out: 범위 폴더 또는 None(모르면 — 워커는 인덱스 전체에서 찾는다)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _search_folder(self, folder):
+        if not folder:
+            return None
+        if self.panel.scope_mode == "root":
+            ok, root = self.scope.contains(folder)
+            return root if ok else folder
+        return folder
+
+    #--------------------------------------------------------------
+    # 범위 이름과 그 범위의 인덱싱된 문서 수 (패널 머리·질문 아래)
+    #=> 문서 수는 SimpleRAG 의 상태 파일(index_state.json)에서 센다. 파일 시각이 바뀔 때만
+    #   다시 읽는다. 읽지 못하면 수는 None("?").
+    #
+    # -in: 없음
+    #
+    # -out: (이름, 문서 수)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _scope_info(self):
+        folder = self._search_folder(self.panel.folder)
+        if not folder:
+            return "", None
+        name = os.path.basename(folder.rstrip("\\/")) or folder
+        keys = self._state_keys()
+        if keys is None:
+            return name, None
+        base = os.path.normcase(os.path.abspath(folder)).rstrip("\\/") + os.sep
+        return name, sum(1 for k in keys if k.startswith(base))
+
+    #--------------------------------------------------------------
+    # SimpleRAG 상태 파일의 문서 키들 (시각이 바뀔 때만 다시 읽는다)
+    #=> 워커의 데이터 폴더: SIMPLERAG_HOME → simplerag.exe 옆 → 개발용 소스면 프로젝트 폴더.
+    #
+    # -in: 없음
+    #
+    # -out: normcase 한 문서 경로 목록 또는 None(못 읽음)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _state_keys(self):
+        import json
+        try:
+            cmd = self._cmd or []
+            home = os.environ.get("SIMPLERAG_HOME")
+            if not home and cmd:
+                exe = os.path.abspath(cmd[-1])
+                if exe.lower().endswith(".exe"):
+                    home = os.path.dirname(exe)
+                else:                                   # [python, .../src/simplerag/cli.py]
+                    home = os.path.dirname(os.path.dirname(os.path.dirname(exe)))
+            path = os.path.join(home, "index_state.json")
+            mtime = os.path.getmtime(path)
+            if self._state_cache[0] == mtime:
+                return self._state_cache[1]
+            with open(path, encoding="utf-8") as f:
+                keys = [os.path.normcase(k) for k in json.load(f).get("docs", {})]
+            self._state_cache = (mtime, keys)
+            return keys
+        except Exception:
+            return None
+
+    #--------------------------------------------------------------
+    # 범위 선택을 바꿨을 때 — INI 에 적는다(다음에 켜도 그대로)
+    #
+    # -in: mode = "folder" | "root"
+    #
+    # -out: 없음
+    # -out: error = 없음 (저장 실패는 로그만)
+    #--------------------------------------------------------------
+    def _on_scope_change(self, mode):
+        ok, detail = rsb_settings.save_ini_value(self.s.ini_path, "Panel", "SearchScope", mode)
+        if not ok:
+            self.log.warning("검색 범위를 설정에 저장하지 못했다: %s", detail)
 
     #--------------------------------------------------------------
     # "근거 파일 보기" (§16)
@@ -560,6 +649,7 @@ class App:
         if kind == "doc":
             if self.panel.visible:
                 self.panel.notice(msg)
+                self.panel.refresh_scope()          # 문서 수가 바뀌었을 수 있다
             return
         self.log.info("자동 인덱싱 알림(%s): %s", kind, msg)
         self.tray.notify("RAGSearchBox", msg)

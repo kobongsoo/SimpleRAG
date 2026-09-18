@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>폴더 한정 검색 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa;
+  --surface: #ffffff;
+  --sunken: #eceff4;
+  --ink: #19212d;
+  --ink-2: #3c4656;
+  --muted: #647083;
+  --rule: #d9dee6;
+  --accent: #2c5aa0;
+  --accent-soft: #e3ebf7;
+  --good: #2a7a57;
+  --good-soft: #e2f1ea;
+  --warn: #a8701a;
+  --warn-soft: #f7ecd8;
+  --bad: #b0463b;
+  --bad-soft: #f6e3e0;
+  --bar-track: #e3e7ee;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c; --bar-track: #26303c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c; --bar-track: #26303c;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 20px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3, h4 { text-wrap: balance; line-height: 1.3; margin: 0; }
+
+.shell { max-width: 1120px; margin: 0 auto; padding-block: 48px 80px; display: grid; grid-template-columns: 1fr; gap: 40px; }
+@media (min-width: 1040px) { .shell { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; } }
+
+.toc { display: none; }
+@media (min-width: 1040px) { .toc { display: block; position: sticky; top: 32px; align-self: start; font-size: 13.5px; } }
+.toc p { margin: 0 0 10px; font-size: 11.5px; letter-spacing: 0.08em; color: var(--muted); }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; border-left: 1px solid var(--rule); }
+.toc a { display: block; padding-left: 14px; color: var(--ink-2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+
+main { min-width: 0; max-width: 840px; display: grid; gap: 56px; }
+
+header.doc { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+.eyebrow { font-size: 12px; letter-spacing: 0.1em; color: var(--accent); font-weight: 600; }
+h1 { font-size: clamp(28px, 4vw, 38px); font-weight: 700; letter-spacing: -0.01em; }
+.lede { margin: 0; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; scroll-margin-top: 24px; }
+section > * { min-width: 0; }
+h2 { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 12px; }
+h2 .sec { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--muted); }
+h3 { font-size: 16.5px; font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+.note { color: var(--muted); font-size: 13.5px; }
+
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; min-width: 0; }
+.twocol { display: grid; gap: 18px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .twocol { grid-template-columns: 1fr 1fr; } }
+.twocol > * { min-width: 0; }
+.panel h3 { margin-bottom: 8px; }
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; color: var(--ink-2); }
+
+/* 확정 사항 띠 */
+.decided { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .decided { grid-template-columns: 1fr 1fr; } }
+.decided > div { background: var(--good-soft); border-radius: 10px; padding: 14px 16px; min-width: 0; font-size: 14px; color: var(--ink-2); }
+.decided b { color: var(--good); display: block; font-size: 13px; margin-bottom: 2px; }
+
+/* 표 */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; background: var(--sunken); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .id, td code.id { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+.wide-table table { min-width: 760px; }
+
+/* 칩 */
+.chip { display: inline-block; font-size: 11.5px; line-height: 1; padding: 5px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+.chip.keep, .chip.done { background: var(--good-soft); color: var(--good); }
+.chip.change { background: var(--warn-soft); color: var(--warn); }
+.chip.drop { background: var(--bad-soft); color: var(--bad); }
+.chip.new { background: var(--accent-soft); color: var(--accent); }
+.chip.wait { background: var(--sunken); color: var(--ink-2); }
+
+/* 흐름도 */
+.flow { display: grid; gap: 0; }
+.lane { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-top: 1px dashed var(--rule); align-items: start; }
+.lane:first-child { border-top: 0; padding-top: 0; }
+.lane .who { font-size: 12.5px; color: var(--muted); padding-top: 8px; }
+.lane .who b { display: block; color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.boxes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.box { background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 11px; font-size: 13px; color: var(--ink-2); }
+.box b { color: var(--ink); font-weight: 600; }
+.box.hot { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.box.hot b { color: var(--accent); }
+.arrow { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+@media (max-width: 560px) { .lane { grid-template-columns: 1fr; gap: 6px; } .lane .who { padding-top: 0; } }
+
+/* 상태 전이 */
+.states { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.state { font-family: var(--mono); font-size: 12.5px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); }
+.state.ok { background: var(--good-soft); border-color: transparent; color: var(--good); }
+.state.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+
+/* 타임라인 */
+.timeline { display: grid; gap: 10px; }
+.tl-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 58px; gap: 12px; align-items: center; font-size: 13.5px; }
+.tl-row .val { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.tl-track { position: relative; height: 12px; background: var(--bar-track); border-radius: 6px; }
+.tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: var(--accent); }
+.tl-seg.warm { background: var(--warn); }
+.tl-seg.ev { background: var(--good); }
+.tl-scale { display: grid; grid-template-columns: 150px minmax(0, 1fr) 58px; gap: 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.tl-scale span.s { display: flex; justify-content: space-between; }
+@media (max-width: 520px) { .tl-row, .tl-scale { grid-template-columns: 96px minmax(0, 1fr) 44px; gap: 8px; } }
+
+/* 단계 */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+.step { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 4px 14px; padding: 16px 18px; border-top: 1px solid var(--rule); }
+.step:first-child { border-top: 0; }
+.step .sid { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent); padding-top: 2px; }
+.step h4 { font-size: 15px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.step .body { display: grid; gap: 8px; min-width: 0; }
+.step dl { margin: 0; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; }
+.step dt { color: var(--muted); }
+.step dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 520px) { .step { grid-template-columns: 1fr; } .step dl { grid-template-columns: 1fr; gap: 0; } .step dt { margin-top: 6px; } }
+
+/* 결정 */
+.decisions { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.decisions li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+.decisions li .body { display: grid; gap: 6px; min-width: 0; }
+.decisions li p { color: var(--ink-2); }
+.decisions .rec { font-size: 13.5px; color: var(--good); }
+
+/* 코드 */
+pre { margin: 0; overflow-x: auto; background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12.8px; line-height: 1.65; color: var(--ink-2); }
+pre .c { color: var(--muted); }
+pre b { color: var(--ink); font-weight: 500; }
+
+/* 창 모형 */
+.mock { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); overflow: hidden; font-size: 13px; max-width: 460px; box-shadow: 0 6px 24px rgba(0,0,0,0.06); }
+.mock .bar { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px; background: var(--sunken); border-bottom: 1px solid var(--rule); font-weight: 600; }
+.mock .bar span { font-weight: 400; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.mock .q { padding: 10px 12px 4px; font-weight: 600; }
+.mock .st { padding: 0 12px 8px; color: var(--muted); font-size: 12px; }
+.mock .ev { margin: 0 12px; border-top: 1px solid var(--rule); padding: 8px 0; display: grid; gap: 6px; }
+.mock .ev div { color: var(--ink-2); }
+.mock .ev small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.mock .ans { margin: 0 12px; border-top: 1px solid var(--rule); padding: 8px 0; color: var(--ink); }
+.mock .ans em { font-style: normal; color: var(--warn); font-size: 11.5px; display: block; margin-bottom: 4px; }
+.mock .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); background: var(--sunken); color: var(--muted); font-size: 12px; }
+.mock .btns { display: flex; gap: 6px; }
+.mock .btns i { font-style: normal; border: 1px solid var(--rule); background: var(--surface); border-radius: 5px; padding: 1px 8px; color: var(--ink-2); }
+
+footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print { .toc { display: none; } .shell { grid-template-columns: 1fr; padding-block: 0; } section { break-inside: avoid-page; } }
+</style>
+<body>
+<div class="shell">
+
+<nav class="toc" aria-label="목차">
+  <p>목차</p>
+  <ol>
+    <li><a href="#goal">목표와 범위</a></li>
+    <li><a href="#now">지금 흐름</a></li>
+    <li><a href="#scope">범위를 무엇으로</a></li>
+    <li><a href="#p0">사전 측정</a></li>
+    <li><a href="#search">검색 구현</a></li>
+    <li><a href="#pass">폴더 전달</a></li>
+    <li><a href="#empty">문서가 없을 때</a></li>
+    <li><a href="#ux">화면</a></li>
+    <li><a href="#cli">CLI</a></li>
+    <li><a href="#error">경계 사례</a></li>
+    <li><a href="#modules">바뀌는 모듈</a></li>
+    <li><a href="#decide">결정 사항</a></li>
+    <li><a href="#order">구현 순서·검증</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="doc">
+  <div class="eyebrow">SimpleRAG · 설계서 · 검색 범위</div>
+  <h1>폴더 한정 검색 설계서</h1>
+  <p class="lede">폴더 패널에서 질문하면 <b>패널이 보고 있는 폴더(하위 포함)의 문서만</b> 근거로 쓴다.
+  지금은 어느 폴더에서 묻든 인덱스 전체에서 찾기 때문에, 인덱스에 여러 폴더가 섞이면 다른 폴더 문서가 근거로 나온다.
+  사전 측정에서 Qdrant 의 필터가 5만 청크 규모에서 <b>검색을 8배 느리게</b> 만든다는 것을 확인해, 필터 대신
+  <b>벡터 행렬 한 벌을 메모리에 두고, 폴더는 "이 청크를 쓸지" 표시(마스크)만 바꾸는</b> 방식으로 설계했다.
+  폴더를 몇 개 오가도 메모리는 늘지 않는다(§5 — 처음 안인 "폴더마다 묶음" 을 메모리 걱정으로 바꿨다).</p>
+  <div class="meta">
+    <span><b>작성</b> 2026-09-18</span>
+    <span><b>상태</b> 2026-09-18 결정 확정 · <b>FS1~FS3 구현·검증·배포 완료</b> — §0 인덱싱 폴더 = 패널 폴더로 통일</span>
+    <span><b>관련</b> <code>retrieve/hybrid.py</code> · <code>index/bm25.py</code> · <code>pipeline.py</code> · <code>cli.py</code>(<code>cmd_chat</code>) · <code>RAGSearchBox/</code>(<code>app.py</code> · <code>rag_worker.py</code> · <code>chat_panel.py</code>)</span>
+  </div>
+</header>
+
+<!-- 0 -->
+<section id="unify">
+  <h2><span class="sec">0</span>인덱싱 폴더 = 패널 폴더 <span class="chip done">결정 2026-09-18</span></h2>
+  <p>설계 뒤 사용자 결정: <b>하위 폴더 단위로 좁혀 찾는다</b>, 그리고 <b>인덱싱 폴더와 패널이 뜨는 폴더는 무조건 같다</b> — 설정도 하나로.</p>
+  <ul>
+    <li><b>INI 는 <code>[Scope] Folders</code> 하나</b>. 자동 인덱싱의 <code>[AutoIndex] Folders</code> 는 없앴다(남아 있으면 쓰지 않고 트레이로 알린다)</li>
+    <li><b>지정 폴더 밖 문서는 인덱스에서 뺀다</b> — 누가 다른 폴더를 직접 인덱싱했거나 지정 폴더에서 하나를 뺐을 때. 워커가 뜰 때마다 <code>/index-outside</code> 로 찾고 <code>/remove-doc {"outside_of": …}</code> 로 뺀다(파일이 있어도). 한꺼번에 많으면(30%·50건) 트레이로 묻는다. 폴더 목록이 비면 아무것도 빼지 않는다</li>
+    <li>그래서 범위 선택은 <b>이 폴더 / 지정 폴더 전체</b> 둘뿐이다 — "인덱스 전체" 는 "모든 지정 폴더" 와 같아 뺐다</li>
+  </ul>
+</section>
+
+<!-- 1 -->
+<section id="goal">
+  <h2><span class="sec">1</span>목표와 범위</h2>
+  <div class="twocol">
+    <div class="panel">
+      <h3>한다</h3>
+      <ul class="plain">
+        <li>패널에서 한 질문은 <b>그 폴더와 하위 폴더 문서</b>에서만 근거를 찾는다</li>
+        <li>범위를 패널에서 바꿀 수 있다 — 이 폴더 / 지정 폴더 전체 / 인덱스 전체</li>
+        <li>답마다 어느 범위에서 찾았는지 보여 준다</li>
+        <li>그 폴더에 인덱싱된 문서가 없으면 모델을 부르지 않고 곧바로 알린다</li>
+        <li>CLI 에서도 쓸 수 있다(<code>ask --folder</code>, chat <code>/folder</code>)</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>하지 않는다</h3>
+      <ul class="plain">
+        <li>폴더마다 인덱스를 따로 만들기 — 인덱스는 지금처럼 하나다(자동 인덱싱과 잠금 설계가 그대로 유지된다)</li>
+        <li>재인덱싱 — 청크에 이미 <code>doc_path</code> 가 있어 그것으로 가른다. 새 필드를 넣지 않는다</li>
+        <li>파일 형식·날짜 같은 다른 조건으로 거르기</li>
+      </ul>
+    </div>
+  </div>
+  <div class="decided">
+    <div><b>핵심 1 — Qdrant 필터를 쓰지 않는다</b>local 모드의 필터는 점마다 파이썬으로 검사해 6만 청크에서 114ms → 730~920ms 가 됐다(§4). 대신 벡터 행렬 한 벌을 두고 numpy 로 직접 찾는다 — 6만 청크 전체 내적이 <b>2.7ms</b>, 폴더 마스크를 씌워도 <b>2.9ms</b>.</div>
+    <div><b>핵심 2 — 질문 한 줄에 폴더를 싣는다</b><code>/ask {"q": …, "folder": …}</code>. 폴더를 따로 먼저 보내면 "질문이 먼저" 규칙과 부딪치고 출력 해석이 어긋난다(§6). 한 줄이면 출력 모양이 그대로라 해석기를 안 고친다.</div>
+    <div><b>핵심 3 — 기본은 "지금 보고 있는 폴더 + 하위"</b>패널 머리에 보이는 폴더가 곧 범위다. 넓히고 싶으면 머리의 선택으로 바꾼다(결정 B1).</div>
+    <div><b>핵심 4 — 없으면 없다고 말한다</b>범위 안에 문서가 없는데 인덱스 전체로 슬쩍 넓히면 사용자가 속는다. 넓히지 않고 알린다.</div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="now">
+  <h2><span class="sec">2</span>지금 흐름 — 폴더 정보가 어디에도 없다</h2>
+  <div class="panel flow">
+    <div class="lane"><div class="who"><b>패널</b>RAGSearchBox</div>
+      <div class="boxes"><span class="box">입력 칸의 글</span><span class="arrow">→</span><span class="box"><code>app._on_panel_ask(text)</code></span><span class="arrow">→</span><span class="box"><code>worker.ask(question)</code> — <b>질문만</b></span></div></div>
+    <div class="lane"><div class="who"><b>워커</b>simplerag chat</div>
+      <div class="boxes"><span class="box">stdin 한 줄</span><span class="arrow">→</span><span class="box"><code>render_answer</code></span><span class="arrow">→</span><span class="box"><code>pipeline.answer(query)</code></span></div></div>
+    <div class="lane"><div class="who"><b>검색</b>hybrid.py</div>
+      <div class="boxes"><span class="box hot">dense — Qdrant <b>전체</b></span><span class="arrow">+</span><span class="box hot">BM25 <b>전체</b></span><span class="arrow">→</span><span class="box">RRF</span><span class="arrow">→</span><span class="box">리랭커</span><span class="arrow">→</span><span class="box">근거 3건</span></div></div>
+  </div>
+  <p>패널은 지금 보고 있는 폴더(<code>panel.folder</code>)를 알고 있지만 워커에 넘기지 않는다. 옛 검색창 방식(<code>_on_query</code>)도 폴더를 로그에만 쓴다.
+  청크의 payload 에는 <code>doc_path</code>(절대 경로)가 이미 있으므로, <b>폴더로 가르는 데 필요한 정보는 인덱스에 다 있다</b>.</p>
+</section>
+
+<!-- 3 -->
+<section id="scope">
+  <h2><span class="sec">3</span>범위를 무엇으로 볼까</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>범위</th><th>예 — <code>D:\분류함\규정\인사</code> 를 보는 중</th><th>좋은 점</th><th>아쉬운 점</th></tr></thead>
+      <tbody>
+        <tr><td><b>이 폴더</b>(하위 포함) <span class="chip new">기본</span></td><td><code>…\규정\인사</code> 와 그 아래</td><td>눈앞의 폴더와 근거가 일치한다. 가장 좁고 정확하다</td><td>하위 폴더로 한 단계 들어가면 범위가 좁아진다 — 그 사실을 화면에 보여 줘야 한다</td></tr>
+        <tr><td><b>지정 폴더 전체</b></td><td>이 폴더가 속한 <code>[Scope] Folders</code> 항목 — <code>D:\분류함</code> 전체</td><td>하위 폴더를 오가도 범위가 그대로다</td><td>지정 폴더가 하나뿐이면 "인덱스 전체" 와 거의 같다</td></tr>
+        <tr><td><s>인덱스 전체</s></td><td colspan="3">§0 결정으로 뺐다 — 인덱스 = 지정 폴더들이므로</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>패널 머리의 폴더 이름 옆에 범위를 고르는 칸을 둔다. 고른 값은 패널을 닫았다 열어도 유지하고 INI 에 적는다(<code>[Panel] SearchScope</code>).</p>
+</section>
+
+<!-- 4 -->
+<section id="p0">
+  <h2><span class="sec">4</span>사전 측정 — Qdrant 필터는 쓰면 안 된다</h2>
+  <p>예전 인덱스 백업(<code>backup_index_20260914_368docs</code> — 368문서 · <b>59,747청크</b> · 폴더 56개)의 복사본에서 dense 검색 20건을 재었다(중앙값, 5회).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>방식</th><th>큰 폴더(18문서 · 594청크)</th><th>작은 폴더(1문서 · 2청크)</th></tr></thead>
+      <tbody>
+        <tr><td>필터 없음(지금)</td><td class="n" colspan="2">114 ms</td></tr>
+        <tr><td>Qdrant 필터 — <code>doc_path</code> MatchAny</td><td class="n">922 ms</td><td class="n">734 ms</td></tr>
+        <tr><td>Qdrant 필터 — 점 id 목록(HasId)</td><td class="n">2,507 ms</td><td class="n">329 ms</td></tr>
+        <tr><td>폴더의 점 id 모으기(필터 scroll) — 폴더당 한 번</td><td class="n">880 ms</td><td class="n">650 ms</td></tr>
+        <tr><td>BM25 허용 마스크(<code>np.isin</code>) — 폴더당 한 번</td><td class="n">1.9 ms</td><td class="n">0.2 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>메모리 측정 (같은 59,747청크)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>항목</th><th>값</th></tr></thead>
+      <tbody>
+        <tr><td>벡터 — 청크 하나</td><td class="n">1.50 KB (e5-small 384차원 × 4바이트). <b>청크를 크게 잘라도 벡터 크기는 같다</b> — 청크 크기는 청크 "개수" 에만 영향</td></tr>
+        <tr><td>본문 — 청크 하나 평균</td><td class="n">0.41 KB (250자)</td></tr>
+        <tr><td>전체 벡터 행렬</td><td class="n">91.8 MB</td></tr>
+        <tr><td>전체 벡터를 읽어 오는 시간</td><td class="n">3.2 초 (워커 시작 뒤 한 번, 뒤에서)</td></tr>
+        <tr><td>전체 행렬 내적 + 상위 20</td><td class="n">2.7 ms</td></tr>
+        <tr><td>같은 것 + 폴더 마스크</td><td class="n">2.9 ms · 마스크 58 KB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><b>결론</b>: local 모드는 필터를 걸면 점마다 조건을 파이썬으로 검사해 <b>8배</b> 느려진다(서버 모드라면 payload 색인을 쓸 수 있지만 SimpleRAG 는 local 모드다 — 설계서 결정5).
+  그래서 매 질문마다 필터를 거는 대신, <b>전체 벡터 행렬 한 벌</b>을 두고 폴더 마스크를 씌워 직접 찾는다.
+  6만 청크에서 2.9ms — 필터 없는 지금(114ms)보다도 빠르다.</p>
+  <p class="note">지금 운영 인덱스(<code>sample</code> 20문서 · 498청크)에서는 어느 방식이든 수 ms 다. 위 수치는 인덱스가 커졌을 때를 위한 것이다.</p>
+</section>
+
+<!-- 5 -->
+<section id="search">
+  <h2><span class="sec">5</span>검색 구현 — 벡터 한 벌 + 폴더 마스크</h2>
+
+  <h3>처음 안을 바꾼 이유</h3>
+  <p>처음에는 폴더마다 <code>{벡터, 본문}</code> 묶음을 만들어 최근 4개까지 두려 했다. 그러면
+  (1) 폴더를 오갈 때마다 묶음이 쌓이고(큰 폴더 넷이면 같은 청크가 여러 벌), (2) 본문까지 들고 있어 청크가 많을수록 커지고,
+  (3) 폴더를 떠나도 곧바로 풀리지 않는다. 측정해 보니 <b>6만 청크 전체를 내적해도 2.7ms</b> 라 폴더마다 따로 모을 까닭이 없었다.</p>
+
+  <h3>바꾼 안</h3>
+  <div class="twocol">
+    <div class="panel">
+      <h3>한 벌만 — 벡터 행렬</h3>
+      <ul class="plain">
+        <li>인덱스의 모든 청크 벡터를 <b>float32 행렬 하나</b>로 둔다(+ 행 → 점 id 표)</li>
+        <li><b>본문은 들고 있지 않는다</b> — 마지막 후보 20개쯤만 id 로 Qdrant 에서 가져온다(지금도 BM25 후보를 이렇게 가져온다)</li>
+        <li>크기는 <b>청크 수 × 1.5KB</b>로 정해져 있다 — 폴더를 몇 번 오가든 늘지 않는다</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>폴더마다 — 표시(마스크)만</h3>
+      <ul class="plain">
+        <li>"이 청크가 그 폴더 것인가" 참/거짓 배열 — <b>청크 하나에 1바이트</b>(6만 청크 = 58KB)</li>
+        <li>dense 와 BM25 가 같은 마스크를 쓴다(BM25 는 이미 행 → 점 id 표가 있다)</li>
+        <li>최근 폴더 8개 마스크만 두고 나머지는 버린다 — 다 합쳐도 0.5MB 안팎</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>얼마나 드나</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>인덱스 크기</th><th>벡터 행렬</th><th>폴더 마스크(개당)</th></tr></thead>
+      <tbody>
+        <tr><td>지금 <code>sample</code> — 498청크</td><td class="n">0.7 MB</td><td class="n">0.5 KB</td></tr>
+        <tr><td>6만 청크(예전 368문서, 실측)</td><td class="n">92 MB</td><td class="n">58 KB</td></tr>
+        <tr><td>15만 청크(local 모드 전환 기준 — 설계서 결정5)</td><td class="n">약 230 MB</td><td class="n">146 KB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>워커는 이미 생성 모델 등으로 약 2.5GB 를 쓴다. 15만 청크를 넘으면 SimpleRAG 자체가 Qdrant 서버 모드로 옮기기로 한 규모이고,
+  서버 모드는 payload 색인으로 필터가 빠르므로 그때는 행렬을 두지 않고 Qdrant 필터를 쓴다.
+  <b>안전장치</b>: 행렬이 <code>[retrieval] folder_matrix_max_mb</code>(기본 300MB)를 넘으면 만들지 않고 Qdrant 필터로 찾는다(느리지만 메모리는 안 쓴다) — 로그로 알린다.</p>
+
+  <h3>언제 만들고 언제 풀리나</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>때</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td>워커가 준비된 뒤</td><td><b>뒤에서</b> 행렬을 만든다(6만 청크 3.2초). 다 되기 전에 폴더 질문이 오면 Qdrant 필터로 찾는다(그 한 번만 느리다)</td></tr>
+        <tr><td>폴더를 처음 볼 때</td><td>마스크만 만든다 — 상태 파일에서 그 폴더 문서의 id 범위를 모아 표시(수 ms). id 범위가 없는 옛 문서만 <code>doc_path</code> 로 찾아 표시</td></tr>
+        <tr><td>인덱스가 바뀌었을 때(자동 인덱싱)</td><td>바뀐 문서의 행만 고친다 — 지운 청크의 행은 "없음" 표시, 새 청크는 행을 덧붙인다. 행이 20% 넘게 "없음" 이 되면 뒤에서 새로 만든다. 마스크는 버리고 다음 질문 때 다시 만든다</td></tr>
+        <tr><td><b>다른 폴더로 갈 때</b></td><td><b>풀 것이 없다</b> — 행렬은 공용이고, 마스크는 수십 KB 라 최근 8개만 남기고 버린다</td></tr>
+        <tr><td>모델을 내릴 때(쉬어서·트레이)</td><td>워커 프로세스가 끝나므로 <b>행렬까지 전부 풀린다</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>질문할 때</h3>
+  <ul>
+    <li><b>dense</b>: <code>행렬 · 질의벡터</code> → 마스크 밖은 뺌 → 상위 <code>dense_top_k</code>(6만 청크 2.9ms)</li>
+    <li><b>BM25</b>: 지금처럼 점수 → 마스크 밖 0 → 상위 <code>bm25_top_k</code></li>
+    <li>후보의 본문만 id 로 가져온 뒤 RRF · 중복 제거 · 리랭커 · 근거 3건은 <b>그대로</b></li>
+    <li>범위가 "인덱스 전체" 면 마스크 없이 같은 행렬을 쓴다</li>
+  </ul>
+  <p class="note">덤: 이 행렬은 폴더가 없는 보통 질문에서도 Qdrant 검색(114ms)보다 빠르다(2.7ms). 다만 이번 설계의 범위는 폴더 한정이므로, 보통 질문을 바꿀지는 따로 정한다(결정 B5).</p>
+</section>
+
+<!-- 6 -->
+<section id="pass">
+  <h2><span class="sec">6</span>폴더를 워커에 전달하기</h2>
+  <p>질문 한 줄에 폴더를 함께 싣는다.</p>
+<pre><span class="c"># 지금</span>
+연차 이월 기준은?
+<span class="c"># 바뀜 — ASCII JSON 한 줄</span>
+<b>/ask</b> {"q": "연차 이월 기준은?", "folder": "D:\\분류함\\규정\\인사", "scope": "folder"}</pre>
+  <ul>
+    <li><b>출력 모양은 지금과 똑같다</b>(근거 → 답변 → 소요 → 프롬프트). 그래서 RAGSearchBox 의 출력 해석기(<code>chat_parser</code>)를 고치지 않는다. 근거 머리에만 범위를 덧붙인다: <code>── 근거 3건 (12ms) · 범위 인사(문서 7건)</code></li>
+    <li>덤: 질문도 ASCII JSON 이 되어 <b>cp949 로 못 쓰는 글자(이모지 등)가 든 질문도 깨지지 않는다</b></li>
+    <li><b>왜 폴더를 따로 먼저 보내지 않나</b>(<code>/scope 폴더</code> 다음 질문): 워커는 명령마다 프롬프트를 내므로 질문의 출력과 섞이고, RAGSearchBox 는 "질문이 먼저" 라 폴더 명령이 질문 뒤로 밀릴 수 있다. 한 줄이면 둘 다 없다</li>
+    <li><b>옛 워커</b>(<code>/ask</code> 를 모름): 워커가 시작할 때 내는 줄에 <code>기능: ask-folder</code> 를 더하고, RAGSearchBox 는 그 줄이 있을 때만 <code>/ask</code> 를 쓴다. 없으면 지금처럼 질문만 보내고 패널에 "이 SimpleRAG 는 폴더 한정을 모릅니다 — 전체에서 찾았습니다" 를 한 번 보인다</li>
+    <li>옛 검색창 방식(<code>[Trigger] SearchBox=1</code>)도 같은 길을 쓴다 — 감시가 이미 폴더를 알고 있다</li>
+  </ul>
+</section>
+
+<!-- 7 -->
+<section id="empty">
+  <h2><span class="sec">7</span>범위 안에 문서가 없을 때</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>상황</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td>그 폴더(하위 포함)에 인덱싱된 문서가 0건</td><td>모델을 부르지 않고 "이 폴더에는 인덱싱된 문서가 없습니다" + 범위를 넓히는 방법. <b>몰래 전체로 넓히지 않는다</b></td></tr>
+        <tr><td>자동 인덱싱이 허락을 기다리는 중(새 문서가 많음)</td><td>위 문구에 "새 문서 N건이 인덱싱을 기다립니다 — 트레이 '지금 인덱싱'" 을 덧붙인다(RAGSearchBox 가 안다)</td></tr>
+        <tr><td>문서는 있는데 관련 내용이 없음</td><td>지금과 같다 — dense 는 늘 가장 가까운 것을 돌려주므로 근거는 나오고, 모델이 "근거에 없다" 고 답한다</td></tr>
+        <tr><td>폴더 청크가 근거 개수(3)보다 적음</td><td>있는 만큼만 쓴다</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="ux">
+  <h2><span class="sec">8</span>화면</h2>
+  <div class="mock">
+    <div class="bar">RAGSearchBox <span>—</span></div>
+    <div class="st">📁 D:\분류함\규정\인사 &nbsp; <b>범위: 이 폴더 ▾</b> · 문서 7건</div>
+    <div class="q">연차 이월 기준은?</div>
+    <div class="st">근거 3건 (12ms) · 범위 인사(문서 7건)</div>
+    <div class="ev"><div>[1] 취업규칙.doc<small>제28조 연차휴가는 다음 해로 이월할 수 없다…</small></div></div>
+    <div class="ans"><em>AI 요약 — 위 근거로 확인하세요</em>연차는 다음 해로 이월되지 않습니다. [1]</div>
+    <div class="foot"><span>범위 ▾ : 이 폴더 / 지정 폴더 전체 / 인덱스 전체</span><span class="btns"><i>대화 지우기</i><i>보내기</i></span></div>
+  </div>
+  <ul>
+    <li>머리: 폴더 옆에 <b>범위 선택</b>과 <b>그 범위의 문서 수</b>. 하위 폴더로 들어가 범위가 좁아지면 문서 수가 바로 줄어 보인다</li>
+    <li>답마다 근거 머리에 범위를 적는다 — 나중에 스크롤해 보아도 어느 범위의 답이었는지 안다</li>
+    <li>범위를 바꾸면 다음 질문부터 적용한다(이미 한 답은 그대로)</li>
+  </ul>
+</section>
+
+<!-- 9 -->
+<section id="cli">
+  <h2><span class="sec">9</span>CLI 에서</h2>
+<pre>simplerag ask --folder "D:\분류함\규정" "연차 이월 기준은?"
+simplerag search --folder "D:\분류함\규정" "연차"
+simplerag chat
+질문&gt; <b>/folder</b> D:\분류함\규정      <span class="c"># 이후 질문은 이 폴더에서만. /folder 만 치면 해제</span></pre>
+  <p class="note">RAGSearchBox 없이 SimpleRAG 만 쓰는 사람도 같은 기능을 쓰게 한다. 몸통(<code>FolderSlice</code>)은 하나다.</p>
+</section>
+
+<!-- 10 -->
+<section id="error">
+  <h2><span class="sec">10</span>경계 사례</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>상황</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td>경로 표기 차이(대소문자·끝의 <code>\</code>·<code>/</code>)</td><td><code>normcase</code> + 끝 구분자 정리 후 "그 폴더 자신이거나 <code>폴더\</code> 로 시작" 으로 판정. 자동 인덱싱의 <code>find_removed</code> 와 같은 규칙</td></tr>
+        <tr><td>폴더 이름을 바꿈</td><td>인덱스의 <code>doc_path</code> 는 옛 이름 — 자동 인덱싱이 삭제+추가로 맞출 때까지 새 이름 폴더는 0건. §7 문구가 뜬다(곧 풀린다)</td></tr>
+        <tr><td>정션·심볼릭 링크, 네트워크 드라이브 문자 vs UNC</td><td>문자열로만 비교한다 — 인덱싱할 때 쓴 표기로 탐색기를 열어야 맞는다. README 에 적는다</td></tr>
+        <tr><td>답변 중 인덱스가 바뀜</td><td>워커는 한 줄씩 처리하므로 질문 도중에는 인덱스가 바뀌지 않는다(자동 인덱싱 명령은 질문 사이에만 온다)</td></tr>
+        <tr><td>매우 큰 폴더(인덱스의 대부분)</td><td>마스크만 다를 뿐 같은 행렬을 쓰므로 따로 다룰 것이 없다</td></tr>
+        <tr><td>리랭커 후보가 줄어듦</td><td>후보 수(dense 10 + BM25 10)는 폴더 안에서 그대로 뽑으므로 줄지 않는다. 폴더가 작아 후보가 모자라면 있는 만큼</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="modules">
+  <h2><span class="sec">11</span>바뀌는 모듈</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>파일</th><th>변경</th><th></th></tr></thead>
+      <tbody>
+        <tr><td><code>src/simplerag/retrieve/vector_matrix.py</code></td><td>벡터 행렬 한 벌(뒤에서 만들기·문서 단위로 고치기·크기 한도) + 폴더 마스크(최근 8개)</td><td><span class="chip new">신규</span></td></tr>
+        <tr><td><code>src/simplerag/index/commands.py</code></td><td><code>/index-doc</code>·<code>/remove-doc</code> 이 끝나면 행렬의 그 문서 행을 고친다</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/retrieve/hybrid.py</code></td><td><code>search(query, top_k, folder=None)</code> — 폴더가 있으면 행렬+마스크로 dense, 같은 마스크로 BM25, 후보 본문만 id 로 가져오기</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/index/bm25.py</code></td><td><code>search(…, allow=None)</code> — 허용 마스크 밖 점수 0</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/pipeline.py</code></td><td><code>answer(query, …, folder=None)</code> — 범위 문서 0건이면 모델 없이 안내</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/cli.py</code></td><td><code>/ask</code>(JSON) · <code>/folder</code> · 준비 뒤 행렬을 뒤에서 만들기 · <code>ask/search --folder</code> · 시작 줄에 <code>기능: ask-folder</code> · 근거 머리에 범위</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/rag_worker.py</code></td><td><code>ask(question, folder, scope)</code> → 워커가 <code>ask-folder</code> 를 알면 <code>/ask</code> 한 줄로. 시작 줄에서 기능 읽기</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/chat_panel.py</code></td><td>머리에 범위 선택·문서 수, 근거 머리에 범위 표시</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/app.py</code> · <code>settings.py</code></td><td>패널 질문에 폴더·범위 싣기, <code>[Panel] SearchScope</code></td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/chat_parser.py</code></td><td>근거 머리 뒤에 붙는 "· 범위 …" 를 허용(지금 정규식이 앞부분만 보므로 확인만)</td><td><span class="chip keep">확인</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 12 -->
+<section id="decide">
+  <h2><span class="sec">12</span>결정 사항 — 2026-09-18 확정(전부 권장안)</h2>
+  <ul class="decisions">
+    <li><span class="chip done">B1</span><div class="body"><b>기본 범위</b>
+      <p>이 폴더(하위 포함) / 지정 폴더 전체 / 인덱스 전체.</p>
+      <p class="rec">결정: <b>이 폴더</b>. 요청하신 "패널 폴더 문서만" 그대로이고, 머리에 문서 수가 보여 좁아진 것을 바로 알 수 있다.</p></div></li>
+    <li><span class="chip done">B2</span><div class="body"><b>범위 안에 문서가 없을 때 넓힐 것인가</b>
+      <p>자동으로 넓히면 편하지만, "이 폴더 문서만" 이라 믿은 답이 다른 폴더에서 나온다.</p>
+      <p class="rec">결정: 넓히지 않고 알린다(§7).</p></div></li>
+    <li><span class="chip done">B3</span><div class="body"><b>행렬을 워커가 준비된 뒤 뒤에서 미리 만들 것인가</b>
+      <p>안 만들어 두면 첫 폴더 질문이 행렬을 만드느라 늦어진다(6만 청크 3.2초, 지금 규모는 수 ms). 마스크는 수 ms 라 미리 만들 필요가 없다 — 처음 안의 <code>/scope-warm</code> 명령은 뺐다.</p>
+      <p class="rec">결정: 뒤에서 미리 만든다.</p></div></li>
+    <li><span class="chip done">B4</span><div class="body"><b>범위 선택을 INI 에 저장할 것인가</b>
+      <p class="rec">결정: 저장한다(<code>[Panel] SearchScope</code>) — 너비처럼 주석을 지키며 그 줄만 바꾼다.</p></div></li>
+    <li><span class="chip done">B5</span><div class="body"><b>폴더가 없는 보통 질문도 이 행렬로 찾을 것인가</b>
+      <p>114ms → 3ms 로 빨라지지만, 검색 결과가 Qdrant 와 같은지(정렬·동점 처리) 확인이 필요하다.</p>
+      <p class="rec">결정: 이번에는 하지 않는다. FS1 에서 두 방식의 결과가 같은지 먼저 재어 보고 따로 정한다.</p></div></li>
+  </ul>
+</section>
+
+<!-- 13 -->
+<section id="order">
+  <h2><span class="sec">13</span>구현 순서와 검증</h2>
+  <ol class="steps">
+    <li class="step"><span class="sid">FS1</span><div class="body"><h4>SimpleRAG — 벡터 한 벌과 검색 <span class="chip done">완료</span></h4>
+      <dl><dt>할 일</dt><dd><code>vector_matrix.py</code> · <code>hybrid.search(folder=)</code> · <code>bm25.search(allow=)</code> · <code>pipeline</code> 0건 안내 · <code>ask/search --folder</code></dd>
+      <dt>확인</dt><dd>근거가 전부 그 폴더 아래인가(하위 포함, <code>규정</code>·<code>규정2</code> 경계) / 범위 "전체" 는 지금과 결과가 같은가 / 0건이면 모델을 안 부르는가 / 문서를 고치거나 지우면 행렬 행이 맞게 바뀌는가 / 6만 청크 백업 복사본에서 워커 메모리 증가(목표 행렬 크기 + 10% 이내)·폴더 질문 dense 10ms 이하 / 폴더를 여러 번 오가도 메모리가 늘지 않는가</dd></dl></div></li>
+    <li class="step"><span class="sid">FS2</span><div class="body"><h4>워커 명령 <span class="chip done">완료</span></h4>
+      <dl><dt>할 일</dt><dd><code>/ask</code> JSON · <code>/folder</code> · 시작 줄 <code>기능: ask-folder</code> · 근거 머리에 범위</dd>
+      <dt>확인</dt><dd>진짜 워커에 <code>/ask</code> 로 두 폴더를 번갈아 물어 근거가 섞이지 않는가 / 이모지가 든 질문 / 출력 해석기가 그대로 읽는가</dd></dl></div></li>
+    <li class="step"><span class="sid">FS3</span><div class="body"><h4>RAGSearchBox <span class="chip done">완료·배포</span></h4>
+      <dl><dt>할 일</dt><dd>질문에 폴더·범위 싣기 · 옛 워커 대비 · 패널 머리 범위 선택·문서 수 · 폴더를 열면 미리 만들기 · INI</dd>
+      <dt>확인</dt><dd>배포 exe 로: 폴더 두 개를 지정해 각각 인덱싱 → A 폴더 패널에서 물으면 A 문서만, 범위를 "전체" 로 바꾸면 B 도 / 하위 폴더로 들어가면 문서 수가 줄어든다 / 빈 폴더에서 물으면 안내</dd></dl></div></li>
+  </ol>
+  <h3>결과 (2026-09-18)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>확인</th><th>결과</th></tr></thead>
+      <tbody>
+        <tr><td>6만 청크 백업 복사본, 진짜 임베딩</td><td>벡터 한 벌 59,747행 <b>+93MB</b>(배열 크기 그대로) · 만들기 4.9초(예열과 나란히) · 폴더 검색 <b>7~8ms</b>(전체 116ms) · 근거가 모두 폴더 안 · 폴더 10개를 20번 오가도 메모리 <b>+0MB</b>, 표시 캐시 8개</td></tr>
+        <tr><td>모델 없는 회귀 <code>bench/test_folder_scope.py</code></td><td><b>30/30</b> — 하위 포함·<code>A</code>/<code>A2</code> 경계·끝 구분자·대소문자, 빈 폴더(모델 안 부름), 느린 길(필터)과 결과 같음, 워커 명령이 한 벌을 고침, 지운 행 20% 유지, BM25 허용 id, 지정 폴더 밖 정리</td></tr>
+        <tr><td>새 <code>simplerag.exe</code> + RAGSearchBox <code>RagWorker</code></td><td><b>10/10</b> — sample 을 규정/지침으로 나눠: 규정 폴더 질문 → 규정 문서만, 지침 → 지침만, 빈 폴더 → 0.1초에 안내, 이모지 질문, 규정만 지정하면 지침이 "밖"</td></tr>
+        <tr><td>RAGSearchBox 단위</td><td>150건(밖 정리 3건·설정 3건 추가) · 앱 통합 14/14 · 패널 머리 범위 줄 화면 확인</td></tr>
+        <tr><td>배포</td><td>커밋만 담은 worktree 에서 빌드해 <code>simplerag.exe</code>·<code>_internal</code> 만 교체(옛 것은 <code>dist\backup_before_folderscope_20260918</code>). 배포판 로그 "워커 기능: ask-folder index-commands"</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">측정 중 실수 하나: 처음 잰 "메모리 +0MB" 는 측정 코드가 Windows 핸들 형식을 안 정해 호출이 조용히 실패한 탓이었다. 고쳐 다시 잰 값이 위 +93MB 다.</p>
+</section>
+
+<footer>
+  <span>근거 코드: <code>retrieve/hybrid.py</code>(<code>search</code> · <code>_search</code>) · <code>index/bm25.py</code>(<code>search</code>) · <code>index/store.py</code> · <code>pipeline.py</code>(<code>answer</code>) · <code>cli.py</code>(<code>cmd_chat</code>) · <code>RAGSearchBox/app.py</code>(<code>_on_panel_ask</code>) · <code>rag_worker.py</code>(<code>ask</code> · <code>_send_pending</code>)</span>
+  <span>사전 측정: <code>backup_index_20260914_368docs</code> 복사본(59,747청크), 무작위 질의 벡터 5개의 중앙값</span>
+  <span>관련 문서: <a href="자동인덱싱_설계서.html">자동 인덱싱 설계서</a>(§5 id 범위 · §9 워커 명령) · <a href="RAGSearchBox_설계서.html">RAGSearchBox 설계서</a> §18 폴더 패널</span>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

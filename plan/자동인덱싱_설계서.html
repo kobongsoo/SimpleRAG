@@ -574,8 +574,6 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
 <pre>[AutoIndex]
 <span class="c">; 1 = 지정 폴더의 문서가 바뀌면 자동으로 인덱스에 반영</span>
 Enabled          = 1
-<span class="c">; 비우면 [Scope] Folders 와 같은 폴더를 본다</span>
-Folders          =
 <span class="c">; 마지막 변경 알림 뒤 이만큼 조용해야 처리한다(초)</span>
 QuietSec         = 5
 <span class="c">; 알림을 놓쳤을 때를 대비한 대조 순찰 주기(분). 0 = 시작할 때만</span>
@@ -652,7 +650,8 @@ Bm25IdleSec      = 10</pre>
       <p class="rec">결정: 1단계는 늘 교체(다시 임베딩). 문서가 커서 느리다는 실측이 나오면 그때 재사용하고 앞머리만 고친다.</p></div></li>
     <li><span class="chip done">A5</span><div class="body"><b>지정 폴더 = 인덱싱 폴더로 볼 것인가</b>
       <p>지금 <code>[Scope] Folders</code> 는 "패널이 뜨는 폴더" 다. 인덱스에는 다른 폴더 문서도 있을 수 있다.</p>
-      <p class="rec">결정: 기본은 같게(<code>[AutoIndex] Folders</code> 비우면 Scope). 지우기는 이 폴더 아래 문서에만 적용.</p></div></li>
+      <p class="rec">결정: 기본은 같게(<code>[AutoIndex] Folders</code> 비우면 Scope). 지우기는 이 폴더 아래 문서에만 적용.</p>
+      <p class="rec"><b>[2026-09-18 바뀜]</b> 폴더 한정 검색을 하며 <b>무조건 같게</b>로 정했다 — <code>[AutoIndex] Folders</code> 는 없애고 <code>[Scope] Folders</code> 하나만 쓴다. 지정 폴더 밖 문서는 인덱스에서 뺀다(폴더 한정 검색 설계서 §0).</p></div></li>
   </ul>
 </section>
 

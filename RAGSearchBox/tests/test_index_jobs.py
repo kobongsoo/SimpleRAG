@@ -36,6 +36,7 @@ class FakeWorker:
         self.plan = plan or {"ok": True, "add": [], "modify": [], "remove": [],
                              "delete_blocked": "", "bm25_stale": False}
         self.doc_result = {"ok": True, "result": "modified", "chunks": 3}
+        self.outside = {"ok": True, "outside": [], "total": 10, "delete_blocked": ""}
 
     def availability(self):
         return self.avail
@@ -51,6 +52,10 @@ class FakeWorker:
         cmd = line.split(" ", 1)[0]
         if cmd == "/index-plan":
             cb(dict(self.plan))
+        elif cmd == "/index-outside":
+            cb(dict(self.outside))
+        elif cmd == "/remove-doc":
+            cb({"ok": True, "result": "removed", "removed": 2})
         elif cmd == "/bm25":
             cb({"ok": True, "chunks": 10})
         else:
@@ -82,8 +87,8 @@ class TestWithWorker(unittest.TestCase):
     def test_flow(self):
         w = FakeWorker()
         jobs, notes = make(w)
-        spin(jobs)                                # 워커가 떴다 → 한 번 대조(바뀐 것 없음)
-        self.assertEqual(w.ops(), ["/index-plan"])
+        spin(jobs)                                # 워커가 떴다 → 밖 문서 확인 + 한 번 대조(바뀐 것 없음)
+        self.assertEqual(w.ops(), ["/index-outside", "/index-plan"])
         w.sent.clear()
         w.plan = {"ok": True, "add": [ROOT + r"\새.docx"], "modify": [ROOT + r"\고친.docx"],
                   "remove": [ROOT + r"\지운.docx"], "delete_blocked": "", "bm25_stale": False}
@@ -169,6 +174,7 @@ class TestWithWorker(unittest.TestCase):
                         "delete_blocked": "", "bm25_stale": False})
         w.doc_result = {"ok": False, "stopped": True}
         jobs, _ = make(w)
+        jobs.tick()          # 지정 폴더 밖 확인
         jobs.tick()          # 대조
         jobs.tick()          # 문서 → stopped
         self.assertIn(ROOT, jobs._dirty)
@@ -196,6 +202,52 @@ class TestWithWorker(unittest.TestCase):
         spin(jobs)
         self.assertEqual(w.sent, [])
         self.assertEqual(w.holds, [])
+
+
+class TestOutside(unittest.TestCase):
+    #--------------------------------------------------------------
+    # 지정 폴더 밖 문서는 워커가 뜰 때 인덱스에서 뺀다 (인덱싱 폴더 = 패널 폴더)
+    #--------------------------------------------------------------
+    def test_outside_removed(self):
+        w = FakeWorker()
+        w.outside = {"ok": True, "outside": [r"D:\다른폴더\a.docx"], "total": 20, "delete_blocked": ""}
+        jobs, _ = make(w)
+        spin(jobs)
+        rm = [ln for ln in w.sent if ln.startswith("/remove-doc")]
+        self.assertEqual(len(rm), 1, w.sent)
+        arg = json.loads(rm[0].split(" ", 1)[1])
+        self.assertEqual(arg["path"], r"D:\다른폴더\a.docx")
+        self.assertEqual(arg["outside_of"], [os.path.abspath(ROOT)])
+
+    #--------------------------------------------------------------
+    # 많으면 멈추고 묻는다 → "지금 인덱싱" 이면 뺀다
+    #--------------------------------------------------------------
+    def test_outside_blocked_then_approved(self):
+        w = FakeWorker()
+        many = [r"D:\다른폴더\%d.docx" % i for i in range(60)]
+        w.outside = {"ok": True, "outside": many, "total": 80, "delete_blocked": "60건이 한꺼번에 사라졌습니다"}
+        jobs, notes = make(w)
+        spin(jobs)
+        self.assertFalse([ln for ln in w.sent if ln.startswith("/remove-doc")])
+        self.assertIn("(지정 폴더 밖)", jobs.waiting_delete)
+        self.assertTrue(any(k == "warn" and "지정 폴더 밖" in m for k, m in notes), notes)
+        jobs.run_now()
+        spin(jobs, 200)
+        self.assertEqual(len([ln for ln in w.sent if ln.startswith("/remove-doc")]), 60)
+        self.assertNotIn("(지정 폴더 밖)", jobs.waiting_delete)
+
+    #--------------------------------------------------------------
+    # 워커가 다시 뜰 때마다 한 번씩 확인한다
+    #--------------------------------------------------------------
+    def test_checked_each_time_up(self):
+        w = FakeWorker()
+        jobs, _ = make(w)
+        spin(jobs)
+        w.avail = "down"
+        jobs.tick()
+        w.avail = "up"
+        spin(jobs)
+        self.assertEqual(w.ops().count("/index-outside"), 2)
 
 
 class TestWorkerDown(unittest.TestCase):
@@ -300,7 +352,7 @@ class TestWorkerDown(unittest.TestCase):
         jobs.tick()
         w.avail = "up"
         spin(jobs)
-        self.assertEqual(w.ops(), ["/index-plan", "/bm25"])
+        self.assertEqual(w.ops(), ["/index-outside", "/index-plan", "/bm25"])
 
 
 if __name__ == "__main__":

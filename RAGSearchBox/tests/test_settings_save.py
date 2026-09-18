@@ -144,5 +144,39 @@ class TestSaveWindowWidth(unittest.TestCase):
         self.assertEqual(rsb_settings.load(p).win_width, 700)
 
 
+class TestScopeSettings(unittest.TestCase):
+    #--------------------------------------------------------------
+    # [Panel] SearchScope — 폴더 한정 검색의 범위
+    #--------------------------------------------------------------
+    def test_search_scope(self):
+        p = make_ini("[Panel]\nSearchScope = root\n")
+        self.assertEqual(rsb_settings.load(p).panel_search_scope, "root")
+        p = make_ini("[Panel]\nSearchScope = 이상한값\n")
+        s = rsb_settings.load(p)
+        self.assertEqual(s.panel_search_scope, "folder")
+        self.assertTrue(any("SearchScope" in w for w in s.warnings))
+        self.assertEqual(rsb_settings.load(make_ini("[Panel]\n")).panel_search_scope, "folder")
+
+    #--------------------------------------------------------------
+    # 인덱싱 폴더 = 패널 폴더 — [AutoIndex] Folders 는 쓰지 않고 알린다
+    #--------------------------------------------------------------
+    def test_autoindex_folders_ignored(self):
+        p = make_ini("[Scope]\nFolders = " + os.path.join("D:" + os.sep, "a") + "\n"
+                     "[AutoIndex]\nFolders = " + os.path.join("D:" + os.sep, "b") + "\n")
+        s = rsb_settings.load(p)
+        self.assertEqual(rsb_settings.autoindex_roots(s), [os.path.join("D:" + os.sep, "a")])
+        self.assertTrue(any("[AutoIndex] Folders" in w for w in s.warnings), s.warnings)
+
+    #--------------------------------------------------------------
+    # 범위를 바꾸면 그 줄만 INI 에 적힌다(주석은 그대로)
+    #--------------------------------------------------------------
+    def test_save_scope(self):
+        p = make_ini()
+        ok, _ = rsb_settings.save_ini_value(p, "Panel", "SearchScope", "root")
+        self.assertTrue(ok)
+        self.assertEqual(rsb_settings.load(p).panel_search_scope, "root")
+        self.assertIn("; off = 검색창 아래 / right = 오른쪽에 붙음", read(p))
+
+
 if __name__ == "__main__":
     unittest.main()

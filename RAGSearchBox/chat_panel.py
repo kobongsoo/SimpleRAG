@@ -21,6 +21,8 @@ import log as rsb_log
 import settings as rsb_settings
 
 MAX_TURNS = 20          # 이보다 오래된 대화는 지운다(메모리·그리기 비용)
+# 검색 범위(폴더 한정 검색 설계서 §3) — 인덱싱 폴더 = 패널 폴더라 "인덱스 전체" 는 두지 않는다
+SCOPE_LABELS = {"folder": "이 폴더", "root": "지정 폴더 전체"}
 INPUT_LINES = 3
 
 
@@ -244,6 +246,10 @@ class ChatPanel:
         self.log = rsb_log.get("panel")
         self.on_ask = on_ask
         self.on_show_evidence = None
+        # 폴더 한정 검색(폴더 한정 검색 설계서 §8) — app 이 채운다
+        self.scope_mode = getattr(settings, "panel_search_scope", "folder")   # "folder" | "root"
+        self.on_scope_change = None     # 범위를 바꾸면 부를 함수 fn(mode)
+        self.scope_info = None          # 지금 범위 설명을 돌려주는 함수 fn() -> (이름, 문서 수)
         self.win = None
         self.visible = False
         self.folder = None
@@ -298,6 +304,20 @@ class ChatPanel:
         self.lbl_folder = tk.Label(head, text="", font=self.f_small, bg="#f5f6f8",
                                    fg="#41485a", anchor="w")
         self.lbl_folder.pack(fill="x")
+        # 범위 줄: 어디서 근거를 찾을지 고르고, 그 범위의 인덱싱된 문서 수를 보인다
+        srow = tk.Frame(head, bg="#f5f6f8")
+        srow.pack(fill="x", pady=(3, 0))
+        tk.Label(srow, text="범위", font=self.f_small, bg="#f5f6f8", fg="#647083").pack(side="left")
+        self._scope_var = tk.StringVar(value=SCOPE_LABELS.get(self.scope_mode, SCOPE_LABELS["folder"]))
+        om = tk.OptionMenu(srow, self._scope_var, *SCOPE_LABELS.values(), command=self._scope_chosen)
+        # 기본 표시(작은 네모)는 어색해 끄고 누를 수 있는 단추처럼 보이게 한다
+        om.config(font=self.f_small, bg="white", relief="groove", highlightthickness=0, bd=1,
+                  activebackground="#e8ebf0", indicatoron=0, padx=6, pady=0)
+        om["menu"].config(font=self.f_small)
+        om.pack(side="left", padx=(4, 6))
+        self.lbl_scope = tk.Label(srow, text="", font=self.f_small, bg="#f5f6f8", fg="#647083",
+                                  anchor="w")
+        self.lbl_scope.pack(side="left", fill="x")
 
         # ── 가운데: 주고받은 내용이 쌓이는 칸 ───────────
         mid = tk.Frame(outer, bg="white")
@@ -373,6 +393,7 @@ class ChatPanel:
             same_window = (self.visible and self.target_hwnd == hwnd)
             self.folder = folder
             self.lbl_folder.config(text="📁 " + folder)
+            self.refresh_scope()
 
             if same_window:
                 return                       # 이미 그 창에 붙어 있다 — 폴더 이름만 바꿨다
@@ -835,6 +856,11 @@ class ChatPanel:
         frame.pack(fill="x", pady=(0, 10))
         tk.Label(frame, text=question, font=self.f_bold, bg="white", anchor="w",
                  justify="left", wraplength=self._wrap()).pack(fill="x")
+        # 어느 범위에서 찾은 답인지 — 나중에 스크롤해 보아도 알 수 있게 질문 아래 남긴다
+        desc = self._scope_desc()
+        if desc:
+            tk.Label(frame, text=desc, font=self.f_small, bg="white", fg="#8b93a7",
+                     anchor="w").pack(fill="x")
         frame.bind("<MouseWheel>", self._on_wheel)
         self.turns.append(Turn(frame, question))
         self.btn_files.config(state="disabled")
@@ -846,6 +872,60 @@ class ChatPanel:
             except Exception:
                 pass
         self._scroll_bottom()
+
+    #--------------------------------------------------------------
+    # 범위 설명 한 줄 ("범위: 인사 · 문서 7건")
+    #
+    # -in: 없음
+    #
+    # -out: 글자 (모르면 "")
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _scope_desc(self):
+        if not self.scope_info:
+            return ""
+        try:
+            name, n = self.scope_info()
+        except Exception:
+            return ""
+        if not name:
+            return ""
+        return "범위: {} · 문서 {}건".format(name, "?" if n is None else n)
+
+    #--------------------------------------------------------------
+    # 머리의 범위 줄 새로 쓰기 (폴더가 바뀌거나 범위를 바꾸거나 인덱스가 바뀌었을 때)
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def refresh_scope(self):
+        if not self.win:
+            return
+        desc = self._scope_desc()
+        self.lbl_scope.config(text=desc.replace("범위: ", "") if desc else "")
+
+    #--------------------------------------------------------------
+    # 범위 선택을 바꿨을 때
+    #
+    # -in: label = 고른 글("이 폴더" 등)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _scope_chosen(self, label):
+        mode = next((k for k, v in SCOPE_LABELS.items() if v == label), "folder")
+        if mode == self.scope_mode:
+            return
+        self.scope_mode = mode
+        self.log.info("검색 범위: %s", label)
+        if self.on_scope_change:
+            try:
+                self.on_scope_change(mode)
+            except Exception:
+                self.log.exception("범위 바꾸기에서 예외")
+        self.refresh_scope()
 
     #--------------------------------------------------------------
     # "근거 파일 보기" (§16)

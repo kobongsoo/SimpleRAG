@@ -116,6 +116,7 @@ def _assign_job(job, pid):
 # -필드: detail   = 상태를 사람 말로 (트레이 툴팁용)
 # -필드: backend  = 워커가 알려 준 생성 백엔드 줄("생성 iGPU(Vulkan) / 리랭킹 켬")
 # -필드: model    = 워커가 올린 생성 모델 파일 이름("Qwen3-0.6B-Q4_K_M.gguf")
+# -필드: features = 워커가 시작할 때 알린 기능들({"ask-folder", "index-commands"}). 옛 워커면 빈 집합
 #------------------------------------------------------------------
 class RagWorker:
     #--------------------------------------------------------------
@@ -155,6 +156,7 @@ class RagWorker:
         self.model = ""
         self.ready_line = ""
         self.startup_lines = []
+        self.features = set()
 
         self._lock = threading.RLock()
         self._proc = None
@@ -165,6 +167,7 @@ class RagWorker:
         self._readers = []
 
         self._pending = None          # 대기 중인 질문(최대 1건) — 새 질문이 오면 갈아 끼운다
+        self._pending_folder = None   # 그 질문의 검색 범위 폴더(폴더 한정 검색). None = 인덱스 전체
         self._current = None          # 지금 답변을 만드는 중인 질문
         self._t_state = time.monotonic()
         self._t_last_ask = time.monotonic()
@@ -216,15 +219,18 @@ class RagWorker:
     #   — 사용자가 연달아 물으면 마지막 것만 의미가 있다.
     #
     # -in: question = 이미 걸러진 질문 글자(한 줄)
+    # -in: folder   = 이 폴더(하위 포함) 문서만 근거로(폴더 한정 검색). None 이면 인덱스 전체.
+    #                 워커가 ask-folder 를 모르면(옛 워커) 폴더 없이 묻는다
     #
     # -out: 없음 (진행 상황은 이벤트로 알린다)
     # -out: error = 없음
     #--------------------------------------------------------------
-    def ask(self, question):
+    def ask(self, question, folder=None):
         with self._lock:
             self._want_running = True
             self._blocked = None
             self._pending = question
+            self._pending_folder = folder
             self._t_last_ask = time.monotonic()
             state = self.state
         self.log.info("질문 접수: %s", question[:20])
@@ -430,6 +436,7 @@ class RagWorker:
             self.model = ""
             self.ready_line = ""
             self.startup_lines = []
+            self.features = set()
         self._set_state(STARTING, "모델 적재 중")
 
         self._readers = [
@@ -479,6 +486,9 @@ class RagWorker:
                         m = MODEL_RE.search(ln)
                         self.model = m.group(1) if m else ""
                         self.ready_line = ln.strip()
+                    elif ln.startswith("기능:"):
+                        # "기능: ask-folder index-commands" — 옛 워커는 이 줄이 없다
+                        self.features = set(ln.split(":", 1)[1].split())
             # 인덱싱 명령의 출력은 답변 해석기에 넣지 않는다 — 다음 프롬프트까지 따로 모은다.
             # (넣으면 "@index {...}" 줄이 답변으로 화면에 뜬다.)
             with self._lock:
@@ -515,6 +525,8 @@ class RagWorker:
                 self.log.info("워커 %s", line)
             if self.backend:
                 self.log.info("워커 %s", self.backend)
+            # 옛 simplerag.exe 면 폴더 한정 검색·자동 인덱싱 명령을 모른다 — 로그로 바로 알 수 있게
+            self.log.info("워커 기능: %s", " ".join(sorted(self.features)) or "(없음 — 옛 simplerag.exe)")
             self._set_state(READY, self.backend or "준비됨")
             return
         if kind == "done":
@@ -572,14 +584,22 @@ class RagWorker:
     def _send_pending(self):
         with self._lock:
             q = self._pending
+            folder = self._pending_folder
             proc = self._proc
             if not q or not proc:
                 return False
             self._pending = None
+            self._pending_folder = None
             self._current = q
             self._parser.begin_question()
+            use_ask = bool(folder) and "ask-folder" in self.features
+        # 폴더 한정이면 질문 한 줄에 폴더를 함께 싣는다(폴더 한정 검색 설계서 §6).
+        # ASCII JSON 이라 cp949 로 못 쓰는 글자(이모지 등)가 든 질문·경로도 깨지지 않는다.
+        line = ("/ask " + json.dumps({"q": q, "folder": folder}, ensure_ascii=True)) if use_ask else q
+        if folder and not use_ask:
+            self.log.info("워커가 폴더 한정을 모른다(옛 simplerag.exe) — 인덱스 전체에서 찾는다")
         try:
-            proc.stdin.write((q + "\n").encode(STDIN_ENCODING, errors="replace"))
+            proc.stdin.write((line + "\n").encode(STDIN_ENCODING, errors="replace"))
             proc.stdin.flush()
         except Exception as e:
             self.log.warning("질문 전송 실패: %s", e)

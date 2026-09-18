@@ -39,11 +39,11 @@ INI_NAME = "RAGSearchBox.ini"
 # -필드: panel_enabled   = 폴더 패널(§18)을 쓸지 — 지정 폴더를 열면 오른쪽에 대화창이 뜬다
 # -필드: shrink_explorer = 패널 자리를 만들려고 탐색기 창을 왼쪽으로 물릴지
 # -필드: folder_poll_ms  = 지금 보고 있는 폴더를 얼마나 자주 확인할지
+# -필드: panel_search_scope = 패널 질문의 근거 범위 "folder"(이 폴더+하위) | "root"(지정 폴더 전체)
 # -필드: searchbox_trigger = 옛 방식(검색창에 ? 입력 → 답변 창). 기본은 끔
 # -필드: dock            = "off"(검색창 아래 뜨는 창) | "right"(탐색기 오른쪽에 붙어 따라다님)
 # -필드: win_width / win_max_height / font_size = 답변 창 모양
 # -필드: autoindex_enabled   = 문서가 바뀌면 자동으로 인덱스에 반영할지(자동 인덱싱 설계서 A2 — 기본 켬)
-# -필드: autoindex_folders   = 지켜볼 폴더(비면 scope_folders 와 같다 — 결정 A5)
 # -필드: autoindex_quiet_s   = 마지막 변경 알림 뒤 이만큼 조용해야 처리한다(초)
 # -필드: autoindex_rescan_min= 알림을 놓쳤을 때를 대비한 대조 순찰 주기(분, 0=시작 때만)
 # -필드: autoindex_ask_above = 새 문서가 이보다 많으면 바로 넣지 않고 트레이에서 허락을 받는다
@@ -81,13 +81,13 @@ class Settings:
         self.panel_enabled = True
         self.shrink_explorer = True
         self.folder_poll_ms = 500
+        self.panel_search_scope = "folder"
         self.searchbox_trigger = False
         self.dock = "off"
         self.win_width = 460
         self.win_max_height = 560
         self.font_size = 10
         self.autoindex_enabled = True
-        self.autoindex_folders = []
         self.autoindex_quiet_s = 5
         self.autoindex_rescan_min = 10
         self.autoindex_ask_above = 50
@@ -201,6 +201,11 @@ def load(path=None):
     s.panel_enabled = _bool(cp, "Panel", "Enabled", True, w)
     s.shrink_explorer = _bool(cp, "Panel", "ShrinkExplorer", True, w)
     s.folder_poll_ms = _int(cp, "Panel", "FolderPollMs", 500, 100, 5000, w)
+    sc = cp.get("Panel", "SearchScope", fallback="").strip().lower()
+    if sc in ("folder", "root"):
+        s.panel_search_scope = sc
+    elif sc:
+        w.append("[Panel] SearchScope = {} 를 알 수 없어 folder 를 씁니다".format(sc))
 
     # 옛 방식(검색창 ? 감지)은 기본으로 끈다 — 켜면 검색창 찾기까지 함께 돈다
     s.searchbox_trigger = _bool(cp, "Trigger", "SearchBox", False, w)
@@ -225,8 +230,11 @@ def load(path=None):
 
     # 자동 인덱싱 (plan/자동인덱싱_설계서.html §11)
     s.autoindex_enabled = _bool(cp, "AutoIndex", "Enabled", True, w)
-    ai_folders = cp.get("AutoIndex", "Folders", fallback="")
-    s.autoindex_folders = [p.strip() for p in ai_folders.split(";") if p.strip()]
+    # 인덱싱 폴더 = 패널이 뜨는 폴더 = [Scope] Folders 하나로 통일했다(폴더 한정 검색 설계서 §0).
+    # 예전 INI 에 [AutoIndex] Folders 가 남아 있으면 쓰지 않고 알린다 — 둘이 다르면
+    # "패널 폴더 문서만 근거로" 가 성립하지 않는다.
+    if cp.get("AutoIndex", "Folders", fallback="").strip():
+        w.append("[AutoIndex] Folders 는 더 이상 쓰지 않습니다 — [Scope] Folders 하나로 인덱싱·패널 폴더를 정합니다")
     s.autoindex_quiet_s = _int(cp, "AutoIndex", "QuietSec", 5, 1, 300, w)
     s.autoindex_rescan_min = _int(cp, "AutoIndex", "RescanMin", 10, 0, 1440, w)
     s.autoindex_ask_above = _int(cp, "AutoIndex", "AskAboveDocs", 50, 0, 100000, w)
@@ -238,7 +246,8 @@ def load(path=None):
 
 #------------------------------------------------------------------
 # 자동 인덱싱이 지켜볼 폴더
-#=> [AutoIndex] Folders 가 비면 패널이 뜨는 폴더([Scope] Folders)와 같게 본다(결정 A5).
+#=> 인덱싱 폴더와 패널이 뜨는 폴더는 언제나 같다 — [Scope] Folders 하나로 정한다.
+#   (예전에는 [AutoIndex] Folders 로 따로 줄 수 있었으나 없앴다.)
 #
 # -in: s = Settings
 #
@@ -246,7 +255,7 @@ def load(path=None):
 # -out: error = 없음
 #------------------------------------------------------------------
 def autoindex_roots(s):
-    return list(s.autoindex_folders or s.scope_folders)
+    return list(s.scope_folders)
 
 
 #------------------------------------------------------------------
