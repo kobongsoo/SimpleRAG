@@ -20,6 +20,7 @@ from .index.store import VectorStore
 from .pipeline import RagPipeline
 from .retrieve.hybrid import HybridRetriever
 from .retrieve.reranker import Reranker
+from .retrieve.vector_matrix import VectorMatrix
 
 
 class App:
@@ -36,7 +37,10 @@ class App:
         # 리랭커는 만들어만 둔다 — 켤지는 warmup() 이 생성 백엔드를 정한 뒤 결정한다.
         # 토크나이저는 임베더가 파싱해 둔 것을 빌려 조립한다(파싱 0.88초 GIL 점유 제거, §33)
         self.reranker = Reranker(tokenizer_source=self.embedder)
-        self.retriever = HybridRetriever(self.embedder, self.store, self.bm25)
+        # 폴더 한정 검색용 벡터 한 벌(폴더 한정 검색 설계서 §5) — 만들기는 예열 때
+        self.matrix = VectorMatrix()
+        self.retriever = HybridRetriever(self.embedder, self.store, self.bm25,
+                                         matrix=self.matrix)
         self.pipeline = RagPipeline(self.retriever, self.generator)
         self.backend = None      # warmup() 이 backend.select() 결과로 채운다
         # 백그라운드 리랭커 적재 결과: None(안 함·진행 중) | 적재 ms | "에러문자열"
@@ -60,6 +64,8 @@ class App:
     # -in: on_log    = 진행 안내를 받을 함수(None 이면 조용히)
     # -in: rerank    = None 이면 설정·백엔드를 따르고, False 면 끈다(인덱싱처럼
     #                  검색을 안 하는 명령이 280MB 모델을 괜히 올리지 않게)
+    # -in: matrix    = True 면 폴더 한정 검색용 벡터 한 벌도 나란히 만든다. None 이면
+    #                  생성 모델을 올릴 때(= chat 워커)만 만든다 — 인덱싱·1회 검색에는 필요 없다
     #
     #   리랭커는 기본적으로 병렬 예열에 넣지 않고 **준비 완료 뒤 백그라운드로** 올린다
     #   (config.RERANK_DEFER_LOAD, §34). 적재 결과는 rerank_load / wait_rerank() 로 본다.
@@ -69,7 +75,7 @@ class App:
     #               wait=False 면 {}
     # -out: error = 없음 (구성요소 예외는 문자열로 담아 돌려준다)
     #------------------------------------------------------------------
-    def warmup(self, wait=True, skip_llm=False, on_log=None, rerank=None):
+    def warmup(self, wait=True, skip_llm=False, on_log=None, rerank=None, matrix=None):
         results = {}
         lock = threading.Lock()
 
@@ -98,6 +104,11 @@ class App:
             ("qdrant", self.store.ensure_loaded),
             ("bm25", self.bm25.ensure_loaded),
         ]
+        # 벡터 한 벌은 Qdrant 가 열린 뒤에 읽는다. 생성 모델을 올리는 동안 나란히 만들어
+        # 준비 시간을 늘리지 않는다(6만 청크 3.2초 — 모델 적재보다 짧다).
+        # 대화 루프가 돌기 전이라 인덱스 쓰기와 겹치지 않는다.
+        if matrix or (matrix is None and not skip_llm):
+            jobs.append(("matrix", self._build_matrix))
         # 리랭커 적재는 GIL 을 쥐어 파이썬으로 도는 Qdrant 적재를 멈춘다(§33) — 병렬로 넣지
         # 않고 준비 완료 뒤로 미룬다. 설정으로 끄면 종전처럼 함께 올린다.
         defer = use_rerank and config.RERANK_DEFER_LOAD
@@ -144,6 +155,20 @@ class App:
     # -out: load_ms = 모델 적재 밀리초
     # -out: error = 적재·예열 실패 시 예외 전파(run 이 문자열로 담는다)
     #------------------------------------------------------------------
+    #------------------------------------------------------------------
+    # 벡터 한 벌 만들기 (예열 스레드)
+    #=> Qdrant 적재를 기다린 뒤(같은 잠금이라 이미 올라와 있으면 바로 돌아온다) 만든다.
+    #   한도를 넘으면 만들지 않고 폴더 검색은 Qdrant 필터로 한다(-1 을 돌려준다).
+    #
+    # -in: 없음
+    #
+    # -out: 걸린 ms (-1 = 한도 초과로 만들지 않음)
+    # -out: error = 저장소 읽기 실패는 예외(예열 결과에 문자열로 담긴다)
+    #------------------------------------------------------------------
+    def _build_matrix(self):
+        self.store.ensure_loaded()
+        return self.matrix.ensure_built(self.store)
+
     def _load_llm(self):
         ms = self.generator.ensure_loaded()
         self.generator.warm()

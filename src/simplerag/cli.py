@@ -8,6 +8,7 @@
 #------------------------------------------------------------------
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -132,7 +133,8 @@ def cmd_ask(args):
         app.wait_rerank()
         ok = render_answer(app, args.query, top_k=args.top_k,
                            max_tokens=args.max_tokens,
-                           stream=not args.no_stream)
+                           stream=not args.no_stream,
+                           folder=getattr(args, "folder", None))
         return 0 if ok else 130
     finally:
         app.close()
@@ -257,7 +259,8 @@ class StreamWriter:
 # -out: True = 정상 완료, False = 사용자가 중단
 #------------------------------------------------------------------
 def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
-                  stream=True):
+                  stream=True, folder=None):
+    from simplerag.pipeline import NO_DOCS_IN_FOLDER
     writer = StreamWriter()
     parts = []
     # 근거 개수. evidence 이벤트에서 정해지고, 마무리 정리 때 쓰인다 —
@@ -269,14 +272,25 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
         return strip_instruction_echo(text, n_ev[0])
 
     try:
-        for event in app.pipeline.answer(query, top_k=top_k, max_tokens=max_tokens):
+        for event in app.pipeline.answer(query, top_k=top_k, max_tokens=max_tokens,
+                                         folder=folder):
             kind = event[0]
 
             if kind == "evidence":
                 chunks, timing = event[1], event[2]
                 n_ev[0] = len(chunks)
-                print("\n── 근거 {}건 ({:.0f}ms) ─────────────────────".format(
-                    len(chunks), timing["total_ms"]))
+                if folder and timing.get("scope_docs") == 0:
+                    # 폴더에 인덱싱된 문서가 없다 — 근거 머리 없이 안내만 낸다.
+                    # (RAGSearchBox 는 근거 머리가 없는 출력을 그대로 패널에 보여 준다)
+                    print("\n" + NO_DOCS_IN_FOLDER + "\n")
+                    return True
+                # 폴더 한정이면 머리에 범위를 덧붙인다 — 나중에 보아도 어느 범위의 답인지 안다
+                scope = ""
+                if folder:
+                    scope = " · 범위 {}(문서 {}건)".format(
+                        os.path.basename(folder.rstrip("\\/")) or folder, timing.get("scope_docs", "?"))
+                print("\n── 근거 {}건 ({:.0f}ms){} ─────────────────────".format(
+                    len(chunks), timing["total_ms"], scope))
                 for i, c in enumerate(chunks, 1):
                     body = c["text"].replace("\n", " ").strip()
                     print("  [{}] {}".format(i, c["doc_name"]))
@@ -340,6 +354,7 @@ def cmd_chat(args):
     rr_warned = False        # 백그라운드 리랭커 적재 실패를 한 번만 알리기 위한 표시
     from simplerag.index import commands as index_commands
     indexer_cmds = None      # 인덱싱 명령 처리기 — 처음 쓸 때 만든다(추출기 적재가 무겁다)
+    chat_folder = None       # /folder 로 정한 검색 범위(폴더 한정 검색). None = 인덱스 전체
 
     try:
         print("모델 적재 중...")
@@ -353,6 +368,8 @@ def cmd_chat(args):
             gen_backend.label(warm.get("_backend")),
             ("켬(백그라운드 적재 중)" if warm.get("_rerank_deferred") else "켬")
             if warm.get("_rerank") else "끔"))
+        # RAGSearchBox 가 이 줄로 워커가 아는 명령을 알아본다(옛 워커와 구분)
+        print("기능: ask-folder index-commands")
         print("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n")
 
         while True:
@@ -367,14 +384,29 @@ def cmd_chat(args):
             if query.lower() in ("exit", "quit", "종료", "/exit", "/quit"):
                 break
 
+            # /ask {"q": …, "folder": …} — 폴더 한정 질문 한 줄(RAGSearchBox 폴더 패널).
+            # 질문을 ASCII JSON 으로 받으므로 cp949 로 못 쓰는 글자도 깨지지 않는다.
+            ask_folder = chat_folder
+            if query.startswith("/ask ") or query == "/ask":
+                try:
+                    req = json.loads(query[4:].strip() or "{}")
+                    query = str(req.get("q", "")).strip()
+                    ask_folder = req.get("folder") or None
+                except (ValueError, AttributeError):
+                    print("  /ask 형식이 잘못됐습니다: /ask {\"q\": \"질문\", \"folder\": \"폴더\"}\n")
+                    continue
+                if not query:
+                    continue
+
             # 슬래시 명령 — 모델을 다시 올리지 않고 설정만 바꾼다.
-            if query.startswith("/"):
+            elif query.startswith("/"):
                 parts = query.split()
                 cmd = parts[0].lower()
                 if cmd == "/help":
                     print("  /topk N     근거 개수 변경 (현재 {})".format(
                         top_k or config.TOP_K))
                     print("  /status     인덱스 상태")
+                    print("  /folder <폴더>       이후 질문은 그 폴더(하위 포함) 문서에서만 찾기. 비우면 해제")
                     print("  /index-doc <경로>    문서 한 건 반영(추가·수정)")
                     print("  /remove-doc <경로>   지운 문서를 인덱스에서 빼기")
                     print("  /bm25                키워드 색인 다시 만들기")
@@ -386,6 +418,10 @@ def cmd_chat(args):
                 elif cmd == "/status":
                     s = app.store.stats()
                     print("  {:,}청크 / {:.1f}MB\n".format(s["count"], s["disk_mb"]))
+                elif cmd == "/folder":
+                    arg = query[len(parts[0]):].strip().strip('"')
+                    chat_folder = arg or None
+                    print("  검색 범위: {}\n".format(chat_folder or "인덱스 전체"))
                 elif cmd in index_commands.COMMANDS:
                     # 자동 인덱싱(설계서 §9) — 결과는 "@index {json}" 한 줄.
                     # 인덱스를 쥔 이 워커가 직접 반영하므로 `index` 를 따로 돌릴 필요가 없다.
@@ -398,7 +434,7 @@ def cmd_chat(args):
                 continue
 
             render_answer(app, query, top_k=top_k, max_tokens=args.max_tokens,
-                          stream=not args.no_stream)
+                          stream=not args.no_stream, folder=ask_folder)
             print()
             # 백그라운드 리랭커 적재가 실패했으면 한 번만 알린다(이후 질의는 RRF 순서)
             if isinstance(app.rerank_load, str) and not rr_warned:
@@ -463,16 +499,24 @@ def cmd_search(args):
     try:
         app.warmup(wait=True, skip_llm=True)     # LLM 미적재
         app.wait_rerank()        # 1회용 — 검색 시간에 리랭커 적재가 섞이지 않게(§34)
-        chunks, timing = app.retriever.search(args.query, top_k=args.top_k)
+        folder = getattr(args, "folder", None)
+        chunks, timing = app.retriever.search(args.query, top_k=args.top_k, folder=folder)
 
         print("\n질의: {}".format(args.query))
+        if folder:
+            print("범위: {} (문서 {}건, {})".format(folder, timing.get("scope_docs"),
+                                                  "벡터 한 벌" if timing.get("scope_via") == "matrix"
+                                                  else "Qdrant 필터"))
         rr = " + 리랭킹 {:.0f}".format(timing["rerank_ms"]) if "rerank_ms" in timing else ""
         print("검색 {:.0f}ms (임베딩 {:.0f} + dense {:.0f} + BM25 {:.0f} + 융합 {:.0f}{})\n"
               .format(timing["total_ms"], timing["embed_ms"], timing["dense_ms"],
                       timing["bm25_ms"], timing["fuse_ms"], rr))
 
         if not chunks:
-            print("검색 결과 없음 — 인덱스가 비었거나 질의어가 코퍼스에 없습니다.")
+            if folder and timing.get("scope_docs") == 0:
+                print("이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다.")
+            else:
+                print("검색 결과 없음 — 인덱스가 비었거나 질의어가 코퍼스에 없습니다.")
             return 1
 
         for i, c in enumerate(chunks, 1):
@@ -765,6 +809,8 @@ def main(argv=None):
     pa.add_argument("query", nargs="?", default=None)
     pa.add_argument("--top-k", type=int, default=None)
     pa.add_argument("--max-tokens", type=int, default=None)
+    pa.add_argument("--folder", default=None,
+                    help="이 폴더(하위 포함) 문서만 근거로 쓴다(폴더 한정 검색)")
     pa.add_argument("--model", default=None,
                     choices=list(config.GEN_MODELS), help="생성 모델 직접 지정")
     pa.add_argument("--precise", action="store_true",
@@ -792,6 +838,7 @@ def main(argv=None):
     pse.add_argument("query")
     pse.add_argument("--top-k", type=int, default=None)
     pse.add_argument("--chars", type=int, default=200, help="청크 미리보기 길이")
+    pse.add_argument("--folder", default=None, help="이 폴더(하위 포함) 문서에서만 찾는다")
     pse.set_defaults(func=cmd_search)
 
     pcl = sub.add_parser("clear", help="인덱스 삭제")

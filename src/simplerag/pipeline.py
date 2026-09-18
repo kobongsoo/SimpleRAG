@@ -19,6 +19,10 @@ import time
 from . import config
 from .generate.prompts import parse_answer
 
+# 폴더 한정 검색에서 그 폴더에 인덱싱된 문서가 없을 때 알리는 글
+NO_DOCS_IN_FOLDER = ("이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다. "
+                     "범위를 '지정 폴더 전체' 로 넓히거나, 문서가 인덱싱될 때까지 기다려 주세요.")
+
 
 class RagPipeline:
     #------------------------------------------------------------------
@@ -39,15 +43,23 @@ class RagPipeline:
     # -in: query      = 사용자 질문
     # -in: top_k      = 근거 개수(None 이면 설정값=3)
     # -in: max_tokens = 답변 토큰 상한
+    # -in: folder     = 이 폴더(하위 포함) 문서만 근거로 쓴다(폴더 한정 검색). None 이면 전체
     #
     # -out: Iterator[tuple] = ("evidence"|"token"|"done", ...)
+    #       폴더에 인덱싱된 문서가 없으면 모델을 부르지 않고 done 의 answer 로 알린다
+    #       (timing["scope_docs"] == 0) — 전체로 슬쩍 넓히지 않는다(설계서 §7)
     #------------------------------------------------------------------
-    def answer(self, query, top_k=None, max_tokens=None):
+    def answer(self, query, top_k=None, max_tokens=None, folder=None):
         t0 = time.perf_counter()
 
-        chunks, timing = self.retriever.search(query, top_k=top_k)
+        chunks, timing = self.retriever.search(query, top_k=top_k, folder=folder)
         yield ("evidence", chunks, timing)
 
+        if not chunks and timing.get("scope_docs") == 0:
+            yield ("done", {"answer": NO_DOCS_IN_FOLDER, "cited": [],
+                            "ttft_s": 0.0, "total_s": round(time.perf_counter() - t0, 2),
+                            "timing": timing})
+            return
         if not chunks:
             yield ("done", {"answer": "검색된 근거가 없습니다.", "cited": [],
                             "ttft_s": 0.0, "total_s": round(time.perf_counter() - t0, 2),

@@ -214,17 +214,51 @@ class VectorStore:
     # 벡터 검색
     #=> payload 를 함께 받아 본문까지 한 번에 돌려준다.
     #
-    # -in: vector = 질의 벡터 (dim,)
-    # -in: limit  = 반환 개수
+    # -in: vector    = 질의 벡터 (dim,)
+    # -in: limit     = 반환 개수
+    # -in: doc_paths = 이 문서들의 청크에서만 찾는다(폴더 한정 검색의 느린 길).
+    #                  ⚠️ local 모드 필터는 점마다 파이썬으로 검사해 6만 청크에서 8배 느리다 —
+    #                  벡터 한 벌(VectorMatrix)을 못 만들었을 때만 쓴다
     #
     # -out: [(point_id, score, payload), ...] 점수 내림차순
     #------------------------------------------------------------------
-    def search(self, vector, limit):
+    def search(self, vector, limit, doc_paths=None):
+        from qdrant_client.models import FieldCondition, Filter, MatchAny
+
         self.ensure_collection()
+        flt = None
+        if doc_paths is not None:
+            if not doc_paths:
+                return []
+            flt = Filter(must=[FieldCondition(key="doc_path", match=MatchAny(any=list(doc_paths)))])
         res = self._client.query_points(
             collection_name=COLLECTION, query=vector.tolist(),
-            limit=limit, with_payload=True)
+            limit=limit, with_payload=True, query_filter=flt)
         return [(p.id, p.score, p.payload) for p in res.points]
+
+    #------------------------------------------------------------------
+    # 문서들의 점 id 모으기 (폴더 한정 검색의 느린 길)
+    #
+    # -in: doc_paths = 문서 경로 목록
+    #
+    # -out: 점 id 목록
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def ids_of_docs(self, doc_paths):
+        from qdrant_client.models import FieldCondition, Filter, MatchAny
+
+        if not doc_paths:
+            return []
+        self.ensure_collection()
+        flt = Filter(must=[FieldCondition(key="doc_path", match=MatchAny(any=list(doc_paths)))])
+        out, offset = [], None
+        while True:
+            pts, offset = self._client.scroll(collection_name=COLLECTION, scroll_filter=flt,
+                                              limit=5000, offset=offset,
+                                              with_payload=False, with_vectors=False)
+            out.extend(p.id for p in pts)
+            if offset is None:
+                return out
 
     #------------------------------------------------------------------
     # 인덱스 통계

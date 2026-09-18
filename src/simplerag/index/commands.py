@@ -19,6 +19,8 @@
 #     /remove-doc  문서 한 건 빼기 — 파일이 실제로 없을 때만
 #     /bm25        BM25 다시 만들기 + 고아 청소. 워커가 쓰는 BM25 가 그 자리에서 바뀐다
 #     /index-plan  폴더와 상태 파일을 대조한 할 일 목록(인덱스는 안 건드린다)
+#     /index-outside 지정 폴더 어디에도 속하지 않는 인덱스 문서 목록(폴더 한정 검색 설계서 §0 —
+#                  인덱싱 폴더 = 패널 폴더를 지키려고, 밖 문서는 인덱스에서 뺀다)
 #------------------------------------------------------------------
 
 import json
@@ -28,7 +30,7 @@ import time
 from . import indexer
 
 PREFIX = "@index "
-COMMANDS = ("/index-doc", "/remove-doc", "/bm25", "/index-plan")
+COMMANDS = ("/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside")
 
 
 #------------------------------------------------------------------
@@ -77,13 +79,26 @@ def format_result(result, prefix=PREFIX):
 # -out: error = 없음
 #------------------------------------------------------------------
 def parse_flag(arg, key):
+    return bool(parse_value(arg, key))
+
+
+#------------------------------------------------------------------
+# 명령 인자(JSON)에서 값 하나 꺼내기
+#
+# -in: arg = 명령 뒤의 글자
+# -in: key = 읽을 이름
+#
+# -out: 값 (JSON 이 아니거나 없으면 None)
+# -out: error = 없음
+#------------------------------------------------------------------
+def parse_value(arg, key):
     arg = (arg or "").strip()
     if not arg.startswith("{"):
-        return False
+        return None
     try:
-        return bool(json.loads(arg).get(key))
+        return json.loads(arg).get(key)
     except (ValueError, AttributeError):
-        return False
+        return None
 
 
 #------------------------------------------------------------------
@@ -124,7 +139,9 @@ class IndexCommands:
             if cmd == "/index-doc":
                 res = self.index_doc(parse_path(arg))
             elif cmd == "/remove-doc":
-                res = self.remove_doc(parse_path(arg))
+                res = self.remove_doc(parse_path(arg), outside_of=parse_value(arg, "outside_of"))
+            elif cmd == "/index-outside":
+                res = self.outside(parse_value(arg, "roots") or [])
             elif cmd == "/bm25":
                 res = self.rebuild_bm25()
             elif cmd == "/index-plan":
@@ -136,6 +153,29 @@ class IndexCommands:
         res = dict({"op": op}, **res)
         res["ms"] = round((time.perf_counter() - t0) * 1000)
         return res
+
+    #--------------------------------------------------------------
+    # 벡터 한 벌 고치기 (폴더 한정 검색 설계서 §5)
+    #=> 워커가 벡터 한 벌을 들고 있으면 문서 반영·삭제를 곧바로 옮긴다. 실패해도 인덱싱
+    #   결과는 그대로다 — 한 벌을 버려 다음 폴더 질문 때 새로 만들게 한다.
+    #
+    # -in: doc_path = 문서 경로(상태 파일 키)
+    # -in: new_ids  = 새로 넣은 점 id 목록(None 이면 지우기)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _matrix_update(self, doc_path, new_ids):
+        m = getattr(self.app, "matrix", None)
+        if m is None or not m.ready():
+            return
+        try:
+            if new_ids is None:
+                m.remove_doc(doc_path)
+            else:
+                m.update_doc(self.app.store, doc_path, new_ids)
+        except Exception:
+            m.mat = None                # 다음 폴더 질문 때 새로 만든다
 
     #--------------------------------------------------------------
     # 상태 파일 읽고 청킹 설정 확인
@@ -185,6 +225,10 @@ class IndexCommands:
             self._ext = indexer.build_extractor()
         self.app.embedder.ensure_loaded()
         r = indexer.sync_doc(path, fp, state, self.app.embedder, self.app.store, self._ext)
+        if r["ok"] and r["op"] in ("added", "modified"):
+            # 폴더 한정 검색용 벡터 한 벌에도 반영한다 — 옛 행은 지우고 새 청크를 덧붙인다
+            rng = state["docs"].get(path, {}).get("ids") or [0, 0]
+            self._matrix_update(path, list(range(rng[0], rng[1])))
         out = {"ok": r["ok"], "path": path, "result": r["op"], "chunks": r.get("chunks", 0)}
         if not r["ok"]:
             out["why"] = r.get("why", "")
@@ -196,22 +240,27 @@ class IndexCommands:
     #=> ⚠️ 파일이 실제로 있으면 거절한다. 잘못된 명령 하나로 멀쩡한 문서가 인덱스에서
     #   빠지면 안 된다. 여러 건을 한꺼번에 뺄지는 /index-plan 의 안전 확인이 정한다.
     #
-    # -in: path = 문서 경로(상태 파일의 키와 대소문자가 달라도 된다)
+    # -in: path       = 문서 경로(상태 파일의 키와 대소문자가 달라도 된다)
+    # -in: outside_of = 지정 폴더 목록. 주면 "파일은 있지만 지정 폴더 밖" 인 문서도 뺀다
+    #                   (인덱싱 폴더 = 패널 폴더를 지키려고). 그 폴더들 아래 문서는 여전히 거절
     #
     # -out: {ok, removed(청크 수), why}
     # -out: error = 저장소 쓰기 실패는 예외(run 이 받는다)
     #--------------------------------------------------------------
-    def remove_doc(self, path):
+    def remove_doc(self, path, outside_of=None):
         if not path:
             return {"ok": False, "why": "경로가 없습니다"}
         if os.path.exists(path):
-            return {"ok": False, "path": path, "why": "파일이 아직 있어 빼지 않습니다"}
+            outside = bool(outside_of) and not _under_any(path, outside_of)
+            if not outside:
+                return {"ok": False, "path": path, "why": "파일이 아직 있어 빼지 않습니다"}
         state = self._state()
         want = indexer.norm_path(path)
         key = next((k for k in state["docs"] if indexer.norm_path(k) == want), None)
         if key is None:
             return {"ok": True, "path": path, "removed": 0, "result": "not_indexed"}
         n = indexer.remove_doc(key, state, self.app.store)
+        self._matrix_update(key, None)
         return {"ok": True, "path": key, "removed": n, "result": "removed"}
 
     #--------------------------------------------------------------
@@ -228,6 +277,11 @@ class IndexCommands:
         state = self._state()
         logs = []
         texts, ids, n_orphans = indexer.collect_for_bm25(self.app.store, state, logs.append)
+        m = getattr(self.app, "matrix", None)
+        if n_orphans and m is not None and m.ready():
+            # 고아 청크가 지워졌다 — 벡터 한 벌에 남은 그 행을 없애려면 새로 만든다
+            m.mat = None
+            m.ensure_built(self.app.store)
         self.app.embedder.ensure_loaded()
         build_s = self.app.bm25.build(texts, ids, self.app.embedder.tokenizer) if texts else 0.0
         state["bm25_built_at"] = time.time()
@@ -237,6 +291,28 @@ class IndexCommands:
         if logs:
             out["note"] = " / ".join(l.strip() for l in logs)[:300]
         return out
+
+    #--------------------------------------------------------------
+    # 지정 폴더 밖 문서 목록 (인덱스는 안 건드린다)
+    #=> 인덱싱 폴더와 패널 폴더는 같아야 한다. 누가 다른 폴더를 직접 인덱싱했거나 지정
+    #   폴더에서 하나를 뺐으면 그 문서가 인덱스에 남는다 — 그것을 찾는다.
+    #   ⚠️ 폴더 목록이 비었으면 아무것도 "밖" 이라 하지 않는다(설정이 빈 것이지, 전부 지울 일이 아니다).
+    #   경로 문자열로만 판단한다 — 드라이브가 빠져 폴더가 안 보여도 그 아래 문서는 "안" 이다.
+    #
+    # -in: roots = 지정 폴더 목록
+    #
+    # -out: {ok, outside:[문서 키], total, delete_blocked}
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def outside(self, roots):
+        roots = [r for r in (roots or []) if r]
+        if not roots:
+            return {"ok": False, "why": "지정 폴더가 없습니다"}
+        state = self._state()
+        docs = list(state["docs"])
+        out = [k for k in docs if not _under_any(k, roots)]
+        ok, why = indexer.delete_guard(len(out), len(docs))
+        return {"ok": True, "outside": out, "total": len(docs), "delete_blocked": "" if ok else why}
 
     #--------------------------------------------------------------
     # 할 일 목록 (인덱스는 안 건드린다)
@@ -261,3 +337,21 @@ class IndexCommands:
                 "add": add, "modify": modify, "remove": p["removed"],
                 "delete_blocked": p["delete_blocked"], "retry_skip": p["retry_skip"],
                 "bm25_stale": indexer.bm25_stale(state)}
+
+
+#------------------------------------------------------------------
+# 경로가 폴더들 가운데 하나 아래에 있는가 (하위 포함, 대소문자 무시)
+#
+# -in: path  = 문서 경로
+# -in: roots = 폴더 목록
+#
+# -out: bool
+# -out: error = 없음
+#------------------------------------------------------------------
+def _under_any(path, roots):
+    p = indexer.norm_path(path)
+    for r in roots:
+        base = indexer.norm_path(r).rstrip("\\/")
+        if p.startswith(base + os.sep):
+            return True
+    return False

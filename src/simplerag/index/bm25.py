@@ -196,10 +196,11 @@ class Bm25Index:
     #=> 질의 토큰의 postings 만 누산한다. 전체 문서를 훑지 않는다.
     #
     # -in: query, tok, limit
+    # -in: allow_ids = 이 점 id 들만 결과에 남긴다(폴더 한정 검색). None 이면 전체
     #
     # -out: [point_id, ...] 점수 순. 인덱스가 없으면 []
     #------------------------------------------------------------------
-    def search(self, query, tok, limit):
+    def search(self, query, tok, limit, allow_ids=None):
         if self.ensure_loaded() < 0 or not self.is_ready():
             return []
 
@@ -218,6 +219,10 @@ class Bm25Index:
             if e > s:
                 # (term, doc) 쌍은 유일하므로 fancy-index 누산이 안전하다.
                 scores[self.post_doc[s:e]] += self.post_w[s:e]
+
+        # 폴더 한정 검색: 폴더 밖 청크는 점수를 지운다(6만 청크에서 2ms 안팎 — 설계서 §4)
+        if allow_ids is not None:
+            scores[~np.isin(self.ids, allow_ids)] = 0.0
 
         if not np.any(scores):
             return []

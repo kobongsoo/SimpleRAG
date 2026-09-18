@@ -111,12 +111,15 @@ class HybridRetriever:
     # -in: embedder, store, bm25
     # -in: reranker = Reranker 또는 None(리랭킹 끔). App.warmup() 이 생성 백엔드를
     #                 정한 뒤 붙이거나 뗀다 — 켤지는 백엔드에 달렸기 때문이다.
+    # -in: matrix   = VectorMatrix(폴더 한정 검색용 벡터 한 벌). None 이면 폴더 검색은
+    #                 Qdrant 필터로 한다(느리다 — 폴더 한정 검색 설계서 §4)
     #------------------------------------------------------------------
-    def __init__(self, embedder, store, bm25, reranker=None):
+    def __init__(self, embedder, store, bm25, reranker=None, matrix=None):
         self.embedder = embedder
         self.store = store
         self.bm25 = bm25
         self.reranker = reranker
+        self.matrix = matrix
 
     #------------------------------------------------------------------
     # 검색 (핵심) — 1단계 RRF + (켜져 있으면) 리랭킹
@@ -135,20 +138,24 @@ class HybridRetriever:
     # -in: query       = 사용자 질문
     # -in: top_k       = 최종 반환 개수(None 이면 설정값)
     # -in: first_stage = 각 검색기 1차 후보 수(None 이면 설정값)
+    # -in: folder      = 이 폴더(하위 포함) 문서의 청크만 근거로 쓴다. None 이면 인덱스 전체
     #
-    # -out: (chunks, timing) — timing 에 rerank_ms(리랭킹 시) 또는 rerank_error 추가
+    # -out: (chunks, timing) — timing 에 rerank_ms(리랭킹 시) 또는 rerank_error 추가.
+    #        폴더를 주면 scope_docs(그 폴더의 인덱싱된 문서 수)·scope_via 도 담는다
     # -out: error = 검색 구성요소 예외는 전파, 리랭커 예외는 삼키고 RRF 순서로 폴백
     #------------------------------------------------------------------
-    def search(self, query, top_k=None, first_stage=None):
+    def search(self, query, top_k=None, first_stage=None, folder=None):
         import time
 
         top_k = top_k or config.TOP_K
+        # 폴더가 없으면 예전과 똑같이 부른다(기존 시험의 가짜 _search 가 folder 를 모른다)
+        extra = {"folder": folder} if folder else {}
         if self.reranker is None:
-            return self._search(query, top_k, first_stage)
+            return self._search(query, top_k, first_stage, **extra)
 
         # 재정렬할 여지가 있어야 하므로 top_k 보다 넉넉히 뽑는다
         pool = max(top_k, config.RERANK_POOL)
-        chunks, timing = self._search(query, pool, first_stage)
+        chunks, timing = self._search(query, pool, first_stage, **extra)
         if len(chunks) <= top_k:
             return chunks, timing
 
@@ -181,8 +188,9 @@ class HybridRetriever:
     # -out: (chunks, timing)
     #        chunks = [{id, text, doc_name, doc_path, chunk_idx}, ...] 순위 순
     #        timing = {embed_ms, dense_ms, bm25_ms, fuse_ms, total_ms}
+    #                 (+ 폴더를 주면 scope_docs, scope_via)
     #------------------------------------------------------------------
-    def _search(self, query, top_k=None, first_stage=None):
+    def _search(self, query, top_k=None, first_stage=None, folder=None):
         import time
 
         top_k = top_k or config.TOP_K
@@ -191,16 +199,29 @@ class HybridRetriever:
         bm25_k = first_stage or config.BM25_TOP_K
 
         t0 = time.perf_counter()
+        # 폴더 한정이면 먼저 그 폴더에 문서가 있는지 본다 — 없으면 임베딩도 하지 않는다
+        scope = self._scope(folder) if folder else None
+        if scope is not None and scope["n_docs"] == 0:
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            return [], {"embed_ms": 0.0, "dense_ms": 0.0, "bm25_ms": 0.0, "fuse_ms": 0.0,
+                        "total_ms": ms, "scope_docs": 0, "scope_via": scope["via"]}
         qv = self.embedder.embed_query(query)
         t1 = time.perf_counter()
 
-        dense = self.store.search(qv, dense_k)
+        if scope is None:
+            dense = self.store.search(qv, dense_k)
+        elif scope["via"] == "matrix":
+            # 벡터 한 벌 + 폴더 표시 — 본문은 아래에서 후보 것만 가져온다
+            dense = [(pid, s, None) for pid, s in self.matrix.search(qv, dense_k, scope["mask"])]
+        else:
+            dense = self.store.search(qv, dense_k, doc_paths=scope["doc_paths"])
         dense_ids = [pid for pid, _, _ in dense]
-        payloads = {pid: pl for pid, _, pl in dense}
+        payloads = {pid: pl for pid, _, pl in dense if pl}
         t2 = time.perf_counter()
 
         # bm25_top_k 가 0 이면 BM25 를 건너뛰고 dense 단독으로 융합한다
-        bm_ids = (self.bm25.search(query, self.embedder.tokenizer, bm25_k)
+        bm_extra = {"allow_ids": scope["allow_ids"]} if scope else {}
+        bm_ids = (self.bm25.search(query, self.embedder.tokenizer, bm25_k, **bm_extra)
                   if bm25_k > 0 else [])
         t3 = time.perf_counter()
 
@@ -239,7 +260,51 @@ class HybridRetriever:
             "fuse_ms": round((t4 - t3) * 1000, 1),
             "total_ms": round((t4 - t0) * 1000, 1),
         }
+        if scope is not None:
+            timing["scope_docs"] = scope["n_docs"]
+            timing["scope_via"] = scope["via"]
         return chunks, timing
+
+    #------------------------------------------------------------------
+    # 폴더 범위 준비 (폴더 한정 검색 설계서 §5)
+    #=> 1) 벡터 한 벌이 있으면(없으면 지금 만든다) 폴더 표시와 허용 점 id 를 꺼낸다 — 빠른 길
+    #   2) 한 벌을 한도 때문에 못 만들었으면 상태 파일로 그 폴더 문서를 골라
+    #      Qdrant 필터로 찾는다 — 느리지만 메모리를 안 쓰는 길
+    #
+    # -in: folder = 폴더
+    #
+    # -out: dict {via: "matrix"|"filter", n_docs, mask, allow_ids, doc_paths}
+    # -out: error = 저장소 읽기 실패는 예외 전파
+    #------------------------------------------------------------------
+    def _scope(self, folder):
+        import numpy as np
+
+        from .vector_matrix import norm_dir, under
+
+        if self.matrix is not None:
+            self.matrix.ensure_built(self.store)
+            if self.matrix.ready():
+                m, n_docs = self.matrix.mask(folder)
+                return {"via": "matrix", "n_docs": n_docs, "mask": m,
+                        "allow_ids": self.matrix.allowed_ids(m), "doc_paths": None}
+
+        # 느린 길 — 상태 파일에서 그 폴더 문서와 점 id 를 모은다
+        from ..index.indexer import load_state
+        f = norm_dir(folder)
+        docs = {k: v for k, v in load_state().get("docs", {}).items()
+                if under(os.path.normcase(k), f)}
+        ids, no_range = [], []
+        for k, meta in docs.items():
+            rng = meta.get("ids")
+            if rng:
+                ids.extend(range(rng[0], rng[1]))
+            else:
+                no_range.append(k)
+        if no_range:
+            # 자동 인덱싱 전의 옛 문서(id 범위 없음) — 필터로 모은다(느리다)
+            ids.extend(self.store.ids_of_docs(no_range))
+        return {"via": "filter", "n_docs": len(docs), "mask": None,
+                "allow_ids": np.asarray(ids, dtype=np.int64), "doc_paths": list(docs)}
 
     #------------------------------------------------------------------
     # 사본 걸러내기
