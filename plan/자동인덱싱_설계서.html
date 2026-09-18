@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>문서 자동 인덱싱 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa;
+  --surface: #ffffff;
+  --sunken: #eceff4;
+  --ink: #19212d;
+  --ink-2: #3c4656;
+  --muted: #647083;
+  --rule: #d9dee6;
+  --accent: #2c5aa0;
+  --accent-soft: #e3ebf7;
+  --good: #2a7a57;
+  --good-soft: #e2f1ea;
+  --warn: #a8701a;
+  --warn-soft: #f7ecd8;
+  --bad: #b0463b;
+  --bad-soft: #f6e3e0;
+  --bar-track: #e3e7ee;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c; --bar-track: #26303c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c; --bar-track: #26303c;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 20px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3, h4 { text-wrap: balance; line-height: 1.3; margin: 0; }
+
+.shell { max-width: 1120px; margin: 0 auto; padding-block: 48px 80px; display: grid; grid-template-columns: 1fr; gap: 40px; }
+@media (min-width: 1040px) { .shell { grid-template-columns: 200px minmax(0, 1fr); gap: 56px; } }
+
+.toc { display: none; }
+@media (min-width: 1040px) { .toc { display: block; position: sticky; top: 32px; align-self: start; font-size: 13.5px; } }
+.toc p { margin: 0 0 10px; font-size: 11.5px; letter-spacing: 0.08em; color: var(--muted); }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; border-left: 1px solid var(--rule); }
+.toc a { display: block; padding-left: 14px; color: var(--ink-2); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+
+main { min-width: 0; max-width: 840px; display: grid; gap: 56px; }
+
+header.doc { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); }
+.eyebrow { font-size: 12px; letter-spacing: 0.1em; color: var(--accent); font-weight: 600; }
+h1 { font-size: clamp(28px, 4vw, 38px); font-weight: 700; letter-spacing: -0.01em; }
+.lede { margin: 0; max-width: 66ch; color: var(--ink-2); font-size: 16.5px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; scroll-margin-top: 24px; }
+section > * { min-width: 0; }
+h2 { font-size: 22px; font-weight: 600; display: flex; align-items: baseline; gap: 12px; }
+h2 .sec { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--muted); }
+h3 { font-size: 16.5px; font-weight: 600; }
+p { margin: 0; max-width: 70ch; }
+.note { color: var(--muted); font-size: 13.5px; }
+
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px 22px; min-width: 0; }
+.twocol { display: grid; gap: 18px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .twocol { grid-template-columns: 1fr 1fr; } }
+.twocol > * { min-width: 0; }
+.panel h3 { margin-bottom: 8px; }
+ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; color: var(--ink-2); }
+
+/* 확정 사항 띠 */
+.decided { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .decided { grid-template-columns: 1fr 1fr; } }
+.decided > div { background: var(--good-soft); border-radius: 10px; padding: 14px 16px; min-width: 0; font-size: 14px; color: var(--ink-2); }
+.decided b { color: var(--good); display: block; font-size: 13px; margin-bottom: 2px; }
+
+/* 표 */
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; background: var(--sunken); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .id, td code.id { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+.wide-table table { min-width: 760px; }
+
+/* 칩 */
+.chip { display: inline-block; font-size: 11.5px; line-height: 1; padding: 5px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+.chip.keep, .chip.done { background: var(--good-soft); color: var(--good); }
+.chip.change { background: var(--warn-soft); color: var(--warn); }
+.chip.drop { background: var(--bad-soft); color: var(--bad); }
+.chip.new { background: var(--accent-soft); color: var(--accent); }
+.chip.wait { background: var(--sunken); color: var(--ink-2); }
+
+/* 흐름도 */
+.flow { display: grid; gap: 0; }
+.lane { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding: 14px 0; border-top: 1px dashed var(--rule); align-items: start; }
+.lane:first-child { border-top: 0; padding-top: 0; }
+.lane .who { font-size: 12.5px; color: var(--muted); padding-top: 8px; }
+.lane .who b { display: block; color: var(--ink); font-size: 13.5px; font-weight: 600; }
+.boxes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.box { background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 11px; font-size: 13px; color: var(--ink-2); }
+.box b { color: var(--ink); font-weight: 600; }
+.box.hot { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.box.hot b { color: var(--accent); }
+.arrow { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+@media (max-width: 560px) { .lane { grid-template-columns: 1fr; gap: 6px; } .lane .who { padding-top: 0; } }
+
+/* 상태 전이 */
+.states { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.state { font-family: var(--mono); font-size: 12.5px; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); }
+.state.ok { background: var(--good-soft); border-color: transparent; color: var(--good); }
+.state.bad { background: var(--bad-soft); border-color: transparent; color: var(--bad); }
+
+/* 타임라인 */
+.timeline { display: grid; gap: 10px; }
+.tl-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 58px; gap: 12px; align-items: center; font-size: 13.5px; }
+.tl-row .val { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.tl-track { position: relative; height: 12px; background: var(--bar-track); border-radius: 6px; }
+.tl-seg { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: var(--accent); }
+.tl-seg.warm { background: var(--warn); }
+.tl-seg.ev { background: var(--good); }
+.tl-scale { display: grid; grid-template-columns: 150px minmax(0, 1fr) 58px; gap: 12px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.tl-scale span.s { display: flex; justify-content: space-between; }
+@media (max-width: 520px) { .tl-row, .tl-scale { grid-template-columns: 96px minmax(0, 1fr) 44px; gap: 8px; } }
+
+/* 단계 */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+.step { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 4px 14px; padding: 16px 18px; border-top: 1px solid var(--rule); }
+.step:first-child { border-top: 0; }
+.step .sid { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--accent); padding-top: 2px; }
+.step h4 { font-size: 15px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.step .body { display: grid; gap: 8px; min-width: 0; }
+.step dl { margin: 0; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 12px; font-size: 13.5px; }
+.step dt { color: var(--muted); }
+.step dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 520px) { .step { grid-template-columns: 1fr; } .step dl { grid-template-columns: 1fr; gap: 0; } .step dt { margin-top: 6px; } }
+
+/* 결정 */
+.decisions { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.decisions li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-size: 14px; }
+.decisions li .body { display: grid; gap: 6px; min-width: 0; }
+.decisions li p { color: var(--ink-2); }
+.decisions .rec { font-size: 13.5px; color: var(--good); }
+
+/* 코드 */
+pre { margin: 0; overflow-x: auto; background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12.8px; line-height: 1.65; color: var(--ink-2); }
+pre .c { color: var(--muted); }
+pre b { color: var(--ink); font-weight: 500; }
+
+/* 창 모형 */
+.mock { border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); overflow: hidden; font-size: 13px; max-width: 460px; box-shadow: 0 6px 24px rgba(0,0,0,0.06); }
+.mock .bar { display: flex; justify-content: space-between; gap: 8px; padding: 8px 12px; background: var(--sunken); border-bottom: 1px solid var(--rule); font-weight: 600; }
+.mock .bar span { font-weight: 400; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.mock .q { padding: 10px 12px 4px; font-weight: 600; }
+.mock .st { padding: 0 12px 8px; color: var(--muted); font-size: 12px; }
+.mock .ev { margin: 0 12px; border-top: 1px solid var(--rule); padding: 8px 0; display: grid; gap: 6px; }
+.mock .ev div { color: var(--ink-2); }
+.mock .ev small { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+.mock .ans { margin: 0 12px; border-top: 1px solid var(--rule); padding: 8px 0; color: var(--ink); }
+.mock .ans em { font-style: normal; color: var(--warn); font-size: 11.5px; display: block; margin-bottom: 4px; }
+.mock .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); background: var(--sunken); color: var(--muted); font-size: 12px; }
+.mock .btns { display: flex; gap: 6px; }
+.mock .btns i { font-style: normal; border: 1px solid var(--rule); background: var(--surface); border-radius: 5px; padding: 1px 8px; color: var(--ink-2); }
+
+footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print { .toc { display: none; } .shell { grid-template-columns: 1fr; padding-block: 0; } section { break-inside: avoid-page; } }
+</style>
+<body>
+<div class="shell">
+
+<nav class="toc" aria-label="목차">
+  <p>목차</p>
+  <ol>
+    <li><a href="#goal">목표와 범위</a></li>
+    <li><a href="#now">지금 인덱싱 분석</a></li>
+    <li><a href="#arch">전체 구조</a></li>
+    <li><a href="#detect">변경 감지</a></li>
+    <li><a href="#swap">수정 문서 교체</a></li>
+    <li><a href="#cases">추가·삭제·이름 변경</a></li>
+    <li><a href="#bm25">BM25 반영</a></li>
+    <li><a href="#runner">누가 실행하나</a></li>
+    <li><a href="#protocol">워커 명령</a></li>
+    <li><a href="#ux">사용자에게 보이는 것</a></li>
+    <li><a href="#ini">설정</a></li>
+    <li><a href="#error">오류·경계 사례</a></li>
+    <li><a href="#modules">바뀌는 모듈</a></li>
+    <li><a href="#decide">결정 사항</a></li>
+    <li><a href="#order">구현 순서·검증</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="doc">
+  <div class="eyebrow">SimpleRAG · 설계서 · 인덱스 유지</div>
+  <h1>문서 자동 인덱싱 설계서</h1>
+  <p class="lede">설정한 폴더에 문서가 <b>추가</b>되거나 <b>수정</b>되면 사람이 <code>simplerag index</code> 를 돌리지 않아도
+  그 문서만 알아서 인덱스에 반영한다. 수정된 문서는 <b>수정 전 벡터와 정보를 지우고 수정 후 것으로 바꾼다</b> —
+  이때 "지우는 순간과 넣는 순간 사이" 에 문서가 사라지거나 두 벌이 섞이지 않게 하는 것이 이 설계의 중심이다.</p>
+  <div class="meta">
+    <span><b>작성</b> 2026-09-18</span>
+    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1 구현·검증 완료</b> — AI2 부터 남음</span>
+    <span><b>관련</b> <code>src/simplerag/index/indexer.py</code> · <code>store.py</code> · <code>bm25.py</code> · <code>retrieve/hybrid.py</code> · <code>cli.py</code> · <code>RAGSearchBox/</code></span>
+  </div>
+</header>
+
+<!-- 1 -->
+<section id="goal">
+  <h2><span class="sec">1</span>목표와 범위</h2>
+  <div class="twocol">
+    <div class="panel">
+      <h3>한다</h3>
+      <ul class="plain">
+        <li>지정 폴더(하위 포함)의 문서 <b>추가·수정·삭제·이름 변경</b>을 알아채 인덱스에 반영</li>
+        <li>수정 문서는 <b>옛 청크 삭제 + 새 청크 추가</b>를 한 덩어리처럼 처리(중간에 끊겨도 복구)</li>
+        <li>벡터(Qdrant)·키워드(BM25)·상태 파일(<code>index_state.json</code>) 세 곳을 서로 맞게 유지</li>
+        <li>프로그램이 꺼져 있던 동안 바뀐 것도 다음 시작 때 따라잡기</li>
+        <li>질문에 답하는 일을 방해하지 않기 — 질문이 항상 먼저</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>하지 않는다</h3>
+      <ul class="plain">
+        <li>청킹 설정이 바뀌었을 때의 전체 재구축 — 지금처럼 <code>--rebuild</code> 를 사람이 돌린다</li>
+        <li>문서 <b>안의 일부만</b> 바뀐 청크를 골라 고치기 — 문서 단위로 통째 교체한다(§5 이유)</li>
+        <li>지정 폴더 밖 문서 관리 — 다른 경로로 인덱싱된 문서는 건드리지 않는다</li>
+        <li>여러 PC 가 한 인덱스를 함께 쓰기</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="decided">
+    <div><b>핵심 1 — 새것을 먼저 넣고 옛것을 지운다</b>지금 코드는 "지우고 넣기" 라 그 사이 문서가 비고, 넣기가 실패하면 문서가 사라진다. 순서를 뒤집어, 새 청크를 넣은 뒤 <b>방금 넣은 것 말고</b> 그 문서의 청크를 지운다(§5).</div>
+    <div><b>핵심 2 — 인덱스를 쥔 프로세스가 실행한다</b>Qdrant local 은 폴더를 한 프로세스만 연다. 워커가 떠 있으면 <b>워커에게 명령으로</b>, 내려가 있으면 <b>index 명령을 따로</b> 돌린다(§8).</div>
+    <div><b>핵심 3 — 이벤트는 힌트, 최종 판단은 대조</b>파일 알림은 놓치거나 겹친다. 알림으로 "어디를 볼지" 만 정하고, 무엇이 바뀌었는지는 <b>상태 파일과 대조</b>해 정한다(§4).</div>
+    <div><b>핵심 4 — 지우기는 겁을 내고 한다</b>드라이브가 빠지거나 네트워크가 끊기면 "파일이 전부 사라졌다" 로 보인다. 폴더 자체가 안 보이면 지우지 않고, 한꺼번에 많이 사라지면 멈추고 묻는다(§6).</div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="now">
+  <h2><span class="sec">2</span>지금 인덱싱은 어떻게 도는가 — 코드 분석</h2>
+  <p><code>simplerag index --dir &lt;폴더&gt;</code> 를 사람이 돌리면 <code>indexer.index_folder()</code> 가 아래 순서로 처리한다.
+  <b>증분 인덱싱의 뼈대는 이미 있다</b> — 자동화는 이것을 "누가, 언제 부르나" 와 "빈틈 메우기" 의 문제다.</p>
+
+  <ol class="steps">
+    <li class="step"><span class="sid">①</span><div class="body"><h4>대상 나열</h4>
+      <p><code>list_files()</code> 가 하위 폴더까지 훑어 확장자(<code>TEXT_EXTS</code>)로 거른다.</p></div></li>
+    <li class="step"><span class="sid">②</span><div class="body"><h4>변경 판정 — 파일 지문</h4>
+      <p><code>file_fingerprint()</code> = <code>sha1(절대경로 | mtime(초) | 크기)</code>. 상태 파일의 지문과 같으면 건너뛴다.
+      내용을 읽지 않으므로 수천 개도 금방 끝난다.</p></div></li>
+    <li class="step"><span class="sid">③</span><div class="body"><h4>문서마다 추출 → 청킹 → 임베딩</h4>
+      <p>실패하면 그 문서만 건너뛴다(옛 청크는 그대로 남는다 — 좋은 동작).</p></div></li>
+    <li class="step"><span class="sid">④</span><div class="body"><h4>옛 청크 삭제 → 새 청크 추가</h4>
+      <p><code>store.delete_doc(경로)</code> 로 그 문서의 점을 <b>모두</b> 지운 뒤 <code>store.upsert()</code>. 점 id 는 상태 파일의 <code>next_id</code> 부터 이어 붙인다.</p></div></li>
+    <li class="step"><span class="sid">⑤</span><div class="body"><h4>문서 단위 체크포인트</h4>
+      <p><code>save_state()</code> 가 임시 파일에 쓰고 <code>os.replace</code> 로 바꿔 끼운다(중단돼도 상태 파일이 깨지지 않는다).</p></div></li>
+    <li class="step"><span class="sid">⑥</span><div class="body"><h4>BM25 전체 재구축</h4>
+      <p>Qdrant 에서 모든 청크를 다시 읽어(<code>_collect_all</code>) BM25 를 처음부터 만든다. 실측 <b>43,058청크 14.3초</b>.</p></div></li>
+  </ol>
+
+  <h3>자동화 전에 메워야 할 빈틈</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>빈틈</th><th>지금 무슨 일이 생기나</th><th>이 설계의 처리</th></tr></thead>
+      <tbody>
+        <tr><td><b>지운 파일이 인덱스에 남는다</b></td><td><code>index_folder</code> 는 <b>있는 파일만</b> 본다. 상태 파일에는 있는데 디스크에서 사라진 문서를 찾는 단계가 없다. 지운 문서가 <b>계속 근거로 나온다</b></td><td>§6 삭제 대조</td></tr>
+        <tr><td><b>수정 때 "지우고 넣기" 사이의 빈틈</b></td><td>④ 에서 지운 뒤 넣는 동안 그 문서는 검색에 안 나온다. 넣기가 실패(디스크 가득·예외)하면 <b>문서가 통째로 사라진 채</b> 남는다(상태 파일은 옛 지문이라 다음 실행에 다시 하긴 한다)</td><td>§5 넣고 지우기 + 세대 표시</td></tr>
+        <tr><td><b>BM25 가 옛 점 id 를 가리킨다</b></td><td>문서를 지우고 BM25 를 아직 안 만든 사이, BM25 가 없는 id 를 돌려주면 <code>hybrid.py</code> 가 <code>payloads.get(pid) or {}</code> 로 <b>빈 근거</b>를 만든다. 지금도 <code>clear --doc</code> 뒤에 생길 수 있다</td><td>§7 없는 id 는 버린다</td></tr>
+        <tr><td><b>인덱스 폴더 잠금</b></td><td>워커(<code>simplerag chat</code>)가 떠 있으면 <code>simplerag index</code> 가 Qdrant 폴더를 열지 못한다. 그래서 지금은 트레이 "모델 내리기" 후에 돌린다</td><td>§8 쥔 쪽이 실행</td></tr>
+        <tr><td><b>파일 지문이 내용과 무관하다</b></td><td>저장만 다시 하고 내용이 같아도(백업·동기화 도구가 날짜만 바꿀 때) 다시 임베딩한다. 수동 실행에선 드물어 괜찮았지만 자동이면 잦아진다</td><td>§4 내용 해시 2차 확인</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="arch">
+  <h2><span class="sec">3</span>전체 구조</h2>
+  <p>다섯 단계로 나눈다. <b>감지·모으기·판정은 가벼워서 RAGSearchBox(늘 떠 있는 프로그램)</b>가 하고,
+  <b>인덱스를 실제로 고치는 일은 인덱스를 쥔 프로세스</b>가 한다.</p>
+  <div class="panel flow">
+    <div class="lane"><div class="who"><b>① 감지</b>RAGSearchBox</div>
+      <div class="boxes"><span class="box hot"><b>폴더 알림</b> ReadDirectoryChangesW</span><span class="arrow">+</span><span class="box"><b>대조 순찰</b> 시작 시 · 10분마다</span></div></div>
+    <div class="lane"><div class="who"><b>② 모으기</b>RAGSearchBox</div>
+      <div class="boxes"><span class="box">임시 파일 거르기</span><span class="arrow">→</span><span class="box"><b>잠잠해질 때까지</b> 기다리기(5초)</span><span class="arrow">→</span><span class="box">크기·시각이 멈췄나 확인</span></div></div>
+    <div class="lane"><div class="who"><b>③ 판정</b>RAGSearchBox</div>
+      <div class="boxes"><span class="box">상태 파일과 대조</span><span class="arrow">→</span><span class="box hot"><b>추가 · 수정 · 삭제</b> 목록</span><span class="arrow">→</span><span class="box">지우기 안전 확인</span></div></div>
+    <div class="lane"><div class="who"><b>④ 실행</b>인덱스를 쥔 쪽</div>
+      <div class="boxes"><span class="box hot"><b>워커가 떠 있음</b> stdin 명령 <code>/index-doc</code></span><span class="arrow">또는</span><span class="box"><b>워커 내려감</b> <code>simplerag index</code></span></div></div>
+    <div class="lane"><div class="who"><b>⑤ 마무리</b></div>
+      <div class="boxes"><span class="box">BM25 다시 만들기(한가할 때)</span><span class="arrow">→</span><span class="box">트레이·패널에 알림</span></div></div>
+  </div>
+  <p class="note">왜 감지를 워커 안에 두지 않나: 워커는 60분 쉬면 내려가도록 되어 있다(<code>IdleUnloadMin</code>). 감시가 워커 안에 있으면 그동안 아무것도 못 본다.
+  RAGSearchBox 는 늘 떠 있고, 이미 지정 폴더(<code>[Scope] Folders</code>)를 알고 있다.</p>
+</section>
+
+<!-- 4 -->
+<section id="detect">
+  <h2><span class="sec">4</span>변경 감지 — 알림은 힌트, 판단은 대조</h2>
+
+  <h3>두 가지를 함께 쓴다</h3>
+  <div class="twocol">
+    <div class="panel">
+      <h3>폴더 알림 (빠름)</h3>
+      <ul class="plain">
+        <li>Windows <code>ReadDirectoryChangesW</code>(하위 폴더 포함). pywin32 의 <code>win32file</code> 로 부른다 — 이미 쓰는 라이브러리라 새 의존성이 없다</li>
+        <li>지정 폴더마다 스레드 하나. 알림이 오면 "이 경로를 다시 봐라" 만 기록한다</li>
+        <li>알림 버퍼가 넘치면(대량 복사) Windows 가 "놓쳤다" 를 알려 준다 → 그 폴더 전체 대조로 바꾼다</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>대조 순찰 (확실함)</h3>
+      <ul class="plain">
+        <li>폴더를 훑어 <b>상태 파일과 지문을 비교</b> — 지금 <code>index_folder</code> 의 ②와 같다. 파일 수천 개도 1초 안쪽(내용을 읽지 않는다)</li>
+        <li>언제: <b>프로그램 시작 때</b>, <b>10분마다</b>, 알림이 넘쳤을 때, 폴더 이름이 바뀌었을 때</li>
+        <li>네트워크 드라이브(UNC)는 알림을 믿기 어려워 순찰만으로도 동작해야 한다</li>
+      </ul>
+    </div>
+  </div>
+  <p>알림은 "무엇을 볼지" 만 정한다. <b>무엇이 바뀌었는지는 언제나 상태 파일과 대조해서</b> 정한다 — 그래서 알림을 놓치거나
+  같은 알림이 열 번 와도 결과가 같다.</p>
+
+  <h3>거를 것 — 저장할 때 잠깐 생기는 파일</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>모양</th><th>누가 만드나</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td><code>~$보고서.docx</code></td><td>Word·Excel·PowerPoint — "지금 열려 있음" 표시 파일. <b>확장자가 .docx 라 지금 필터로는 못 거른다</b></td><td>이름이 <code>~$</code> 로 시작하면 제외</td></tr>
+        <tr><td><code>~WRL0001.tmp</code>, <code>보고서.docx.tmp</code></td><td>Office 가 저장할 때 임시로 쓰고 바꿔 끼운다</td><td>확장자 필터로 이미 제외</td></tr>
+        <tr><td><code>.~lock.보고서.docx#</code></td><td>LibreOffice</td><td><code>.~lock.</code> 으로 시작하면 제외</td></tr>
+        <tr><td>숨김·시스템 파일, <code>Thumbs.db</code>, <code>desktop.ini</code></td><td>Windows</td><td>속성으로 제외</td></tr>
+        <tr><td>복사 중인 큰 파일</td><td>탐색기 복사</td><td>아래 "안정화" 로 다 써질 때까지 기다린다</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>안정화 — 다 써진 파일만 읽는다</h3>
+  <ul>
+    <li><b>잠잠해질 때까지 기다린다</b>: 같은 파일에 알림이 계속 오면 마지막 알림 뒤 <b>5초</b>가 지나야 처리 대상으로 넘긴다. Word 저장 한 번에도 알림이 여러 개 온다</li>
+    <li><b>크기·수정 시각이 두 번 연속 같아야</b> 한다(1초 간격). 복사 중이면 계속 커진다</li>
+    <li><b>읽기로 열려야</b> 한다. 공유 위반으로 못 열면 5초 → 15초 → 60초 간격으로 다시 시도하고, 그래도 안 되면 다음 순찰로 미룬다</li>
+    <li>많이 쏟아지면(폴더째 복사) 모아서 <b>한 묶음</b>으로 넘긴다 — BM25 재구축을 한 번만 하기 위해서다</li>
+  </ul>
+
+  <h3>내용 해시로 한 번 더 확인</h3>
+  <p>지문(경로·시각·크기)이 달라도 <b>내용이 같으면 다시 임베딩하지 않는다</b>. 지문이 다른 파일만 통째로 읽어 <code>sha1</code> 을 내고,
+  상태 파일의 <code>content_hash</code> 와 같으면 지문만 새로 적는다. 읽는 비용은 바뀐 파일에만 들고, 임베딩(문서당 수 초)을 아낀다.
+  이름 바꾸기(§6)에서도 이 해시를 쓴다.</p>
+</section>
+
+<!-- 5 -->
+<section id="swap">
+  <h2><span class="sec">5</span>수정 문서 교체 — 옛것 지우고 새것 넣기를 안전하게</h2>
+  <p>이 기능의 핵심 요구다. "수정 전 벡터와 정보를 지우고, 수정 후 벡터와 정보를 넣는다" 를 그대로 순서대로 하면
+  <b>그 사이에 문서가 비고</b>, 넣기가 실패하면 <b>문서가 사라진다</b>. 그래서 순서를 뒤집는다.</p>
+
+  <h3>왜 문서 단위로 통째 바꾸나 (바뀐 청크만 고치지 않는 이유)</h3>
+  <p>문단 하나만 고쳐도 그 뒤 청크의 경계가 모두 밀린다(청크는 토큰 수로 자르고 겹침이 있다). 청크 번호로 짝을 맞출 수 없고,
+  "같은 내용 청크는 벡터 재사용" 을 해도 한 문서가 보통 수~수십 청크라 임베딩 절약은 1초 안팎이다. 복잡도에 비해 얻는 게 없다.</p>
+
+  <h3>세대 표시 — 청크마다 "어느 버전의 문서에서 나왔나" 를 단다</h3>
+  <p>Qdrant 의 각 점(payload)에 <code>gen</code> 필드를 추가한다. 값은 그 버전 문서의 <b>지문</b>이다.
+  그러면 "이 문서의 청크 가운데 <b>지금 세대가 아닌 것</b>만 지워라" 를 한 번의 조건 삭제로 할 수 있다.</p>
+<pre><span class="c"># 지금 payload</span>
+{text, doc_path, doc_name, folder, chunk_idx, mtime}
+<span class="c"># 추가</span>
+{..., <b>gen</b>: "bfd3c35d…"   <span class="c"># 이 청크를 만든 문서 버전의 지문</span>
+      <b>content_hash</b>: "…" }  <span class="c"># 문서 내용 해시(이름 바꾸기 재사용용, §6)</span></pre>
+
+  <h3>교체 순서</h3>
+  <ol class="steps">
+    <li class="step"><span class="sid">1</span><div class="body"><h4>새 버전을 만든다 — 인덱스는 아직 안 건드린다</h4>
+      <p>추출 → 청킹 → 임베딩. <b>여기서 실패하면 옛 버전을 그대로 둔다</b>(비밀번호 걸린 파일, 저장 도중 깨진 파일). 실패를 상태 파일에 적어 같은 지문으로는 다시 시도하지 않는다.</p></div></li>
+    <li class="step"><span class="sid">2</span><div class="body"><h4>새 점 id 를 예약하고 상태 파일에 먼저 적는다</h4>
+      <p><code>next_id</code> 를 청크 수만큼 올려 저장한다. 3 에서 죽어도 다음 실행이 같은 id 를 다른 문서에 주지 않는다.</p></div></li>
+    <li class="step"><span class="sid">3</span><div class="body"><h4>새 청크를 넣는다 (<code>gen = 새 지문</code>)</h4>
+      <p>이 순간엔 옛것과 새것이 <b>함께</b> 있다. 워커 안에서는 질문과 번갈아 한 줄씩 처리하므로(§8) 이 순간에 검색이 끼어들지 않는다.</p></div></li>
+    <li class="step"><span class="sid">4</span><div class="body"><h4>옛 청크를 지운다</h4>
+      <p>조건: <code>doc_path == 이 문서</code> 그리고 <b>id 가 3 에서 방금 넣은 목록에 없음</b>. "방금 넣은 것 말고 이 문서의 나머지 전부" 라서,
+      옛 버전은 물론 예전에 넣다 만 찌꺼기와 <code>gen</code> 필드가 없는 옛 인덱스의 청크까지 한 번에 지워진다.</p></div></li>
+    <li class="step"><span class="sid">5</span><div class="body"><h4>상태 파일을 새 버전으로 바꾼다</h4>
+      <p><code>{fingerprint, content_hash, chunks, ids 범위, gen}</code> 을 적고 원자적으로 교체.</p></div></li>
+    <li class="step"><span class="sid">6</span><div class="body"><h4>BM25 에 "다시 만들어야 함" 표시</h4>
+      <p>바로 만들지 않는다 — 묶음이 끝나고 한가할 때 한 번(§7).</p></div></li>
+  </ol>
+
+  <h3>어디서 끊겨도 다음 실행이 바로잡는다</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>끊긴 곳</th><th>남은 모습</th><th>다음 실행에서</th></tr></thead>
+      <tbody>
+        <tr><td>1 도중</td><td>옛 버전 그대로. 상태 파일도 옛 지문</td><td>지문이 달라 다시 처리 — 정상</td></tr>
+        <tr><td>2 뒤, 3 전</td><td>id 만 예약됨(빈 번호가 생길 뿐)</td><td>다시 처리 — 정상</td></tr>
+        <tr><td>3 뒤, 4 전</td><td><b>옛것 + 새것 두 벌</b>. 상태 파일은 옛 지문</td><td>지문이 달라 다시 처리 → 새 id 로 또 넣고 → <b>방금 넣은 것 말고 전부 삭제</b>. 옛것과 지난번에 넣다 만 새것이 함께 정리된다</td></tr>
+        <tr><td>4 뒤, 5 전</td><td>새것만. 상태 파일은 옛 지문</td><td>다시 처리(같은 결과를 한 번 더 만든다 — 낭비지만 정확)</td></tr>
+        <tr><td>5 뒤, 6 전</td><td>벡터는 새것, BM25 는 옛것</td><td>§7 — 시작 시 BM25 가 상태 파일보다 오래됐으면 다시 만든다</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><b>왜 세대(<code>gen</code>) 대신 id 목록으로 지우나</b>: 3·4 사이에서 끊긴 뒤 다시 돌리면 <b>같은 버전을 두 번</b> 넣게 된다.
+  두 벌 모두 세대가 같아서 "세대가 다른 것 지우기" 로는 먼저 넣은 벌이 남는다. id 목록은 이번에 넣은 것만 정확히 가리킨다.
+  <code>gen</code> 은 진단과 고아 청소(아래)에 쓴다.</p>
+  <p class="note">Qdrant 필터로 표현: <code>must=[doc_path == P]</code>, <code>must_not=[HasId(이번 id 목록)]</code>. 문서 하나가 수백 청크여도 목록 크기는 문제되지 않는다.</p>
+
+  <h3>시작할 때 한 번 — 고아 청소</h3>
+  <p>상태 파일에 없는 <code>doc_path</code> 의 점, 상태 파일의 id 범위 밖에 있는 점을 찾아 지운다. 중간에 죽어서 남은 두 벌을 여기서 정리한다.
+  전체 점을 훑어야 하므로(<code>scroll</code>, payload 는 <code>doc_path</code> 만) 시작 때와 수동 명령에서만 한다.</p>
+</section>
+
+<!-- 6 -->
+<section id="cases">
+  <h2><span class="sec">6</span>추가 · 삭제 · 이름 변경 · 폴더 이동</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>일어난 일</th><th>대조 결과</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td><b>새 파일</b></td><td>디스크에 있고 상태 파일에 없음</td><td>§5 의 1·2·3·5·6 (지울 옛것이 없다)</td></tr>
+        <tr><td><b>수정</b></td><td>둘 다 있고 지문이 다름</td><td>내용 해시가 같으면 지문만 갱신. 다르면 §5 교체</td></tr>
+        <tr><td><b>삭제</b></td><td>상태 파일에 있고 디스크에 없음</td><td>그 문서의 점 전부 삭제 → 상태에서 제거 → BM25 표시. <b>아래 안전 확인을 통과해야만</b></td></tr>
+        <tr><td><b>이름 변경·같은 폴더 안 이동</b></td><td>옛 경로 사라짐 + 새 경로 생김, 내용 해시가 같음</td><td><b>다시 임베딩하지 않는다</b> — 옛 점의 payload(<code>doc_path</code>·<code>doc_name</code>·<code>folder</code>)만 새 경로로 바꾼다(<code>set_payload</code>). 청크 앞머리에 파일명이 들어가 있으므로(구조 청킹의 제목) <b>본문이 달라지는 경우는 교체</b>로 처리한다 — 1단계는 늘 교체, 재사용은 2단계(§15)</td></tr>
+        <tr><td><b>폴더 이름 변경</b></td><td>하위 문서 전부가 "삭제 + 추가" 로 보인다</td><td>알림에 폴더 이름 변경이 오면 곧바로 대조 순찰. 위 이름 변경 규칙을 문서마다 적용</td></tr>
+        <tr><td><b>지정 폴더 밖으로 이동</b></td><td>삭제</td><td>삭제로 처리</td></tr>
+        <tr><td><b>확장자 변경</b>(.txt → .md)</td><td>삭제 + 추가</td><td>그대로 처리</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>지우기 안전 확인 — 인덱스를 통째로 날리지 않게</h3>
+  <ul>
+    <li><b>지정 폴더 자체가 안 보이면 아무것도 지우지 않는다.</b> USB·외장 드라이브가 빠졌거나, 네트워크 드라이브가 끊겼거나, 드라이브 문자가 바뀐 것이다. 파일이 사라진 게 아니다</li>
+    <li><b>한 번에 많이 사라지면 멈추고 묻는다.</b> 그 폴더 문서의 <b>30% 이상(단 5건 이상일 때) 또는 50건 이상</b>이 한꺼번에 사라지면 지우지 않고 트레이 알림으로 알린다("문서 120건이 사라졌습니다 — 인덱스에서 뺄까요?"). 사용자가 트레이 메뉴에서 확인해야 지운다</li>
+    <li><b>지정 폴더 아래 문서만</b> 삭제 후보가 된다. 상태 파일에는 다른 경로로 인덱싱한 문서가 섞여 있을 수 있다 — 그것은 절대 건드리지 않는다</li>
+    <li>경로 비교는 대소문자를 무시한다(<code>os.path.normcase</code>). 상태 파일의 키는 인덱싱 당시 표기 그대로라 알림의 표기와 다를 수 있다</li>
+  </ul>
+</section>
+
+<!-- 7 -->
+<section id="bm25">
+  <h2><span class="sec">7</span>BM25 반영</h2>
+  <p>BM25 는 전체 문서 통계(IDF·평균 길이)로 점수를 내므로 문서 하나만 끼워 넣을 수 없다. 지금처럼 <b>통째로 다시 만든다</b>.
+  대신 언제 만들지와, 만들기 전 빈틈을 다룬다.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>문제</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td>재구축이 무겁다(43,058청크 14.3초, 지금 <code>sample</code> 498청크는 1초 안쪽 예상)</td><td><b>묶음이 끝나고, 질문이 10초 이상 없을 때</b> 한 번 만든다. 늦어도 5분 안에는 만든다</td></tr>
+        <tr><td>만들기 전 BM25 가 <b>지워진 점 id</b> 를 돌려준다</td><td><code>hybrid.py</code>: payload 를 못 찾은 id 는 <b>버린다</b>(지금은 빈 근거가 된다). 이것은 자동 인덱싱과 상관없이 먼저 고칠 버그다</td></tr>
+        <tr><td>만들기 전 <b>새 청크</b>는 BM25 에 없다</td><td>그동안은 벡터 검색으로만 찾힌다. 수 초~수 분의 일이라 허용한다</td></tr>
+        <tr><td>워커 안에서 만들면 그동안 질문이 기다린다</td><td>1단계: 한가할 때만 만들므로 대개 문제없다. 2단계(청크 수만 개 이상): 점 읽기는 워커 스레드에서, 계산은 별도 스레드에서 하고 다 되면 바꿔 끼운다</td></tr>
+        <tr><td>워커가 들고 있는 BM25 는 메모리에 있다</td><td>새로 만든 뒤 <b>워커의 <code>Bm25Index</code> 를 교체</b>한다(파일만 바꾸면 워커는 옛것을 계속 쓴다)</td></tr>
+        <tr><td>BM25 파일이 상태 파일보다 오래됐다(§5 의 5·6 사이에서 끊김)</td><td>상태 파일에 <code>bm25_built_at</code> 과 <code>index_changed_at</code> 을 적는다. 시작할 때 앞이 뒤보다 이르면 다시 만든다</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="runner">
+  <h2><span class="sec">8</span>누가 실행하나 — 인덱스 폴더 잠금</h2>
+  <p>Qdrant local 모드는 인덱스 폴더를 <b>한 프로세스만</b> 열 수 있다. 워커가 떠 있는 동안 <code>simplerag index</code> 를 돌리면 열지 못한다
+  (그래서 지금 트레이에 "모델 내리기" 가 있다). 자동 인덱싱은 <b>그 순간 인덱스를 쥔 쪽</b>이 실행하게 한다.</p>
+
+  <div class="twocol">
+    <div class="panel">
+      <h3>워커가 떠 있을 때 — 워커에게 명령</h3>
+      <ul class="plain">
+        <li>RAGSearchBox 가 워커 stdin 에 <code>/index-doc &lt;경로&gt;</code> 같은 명령을 보낸다(§9)</li>
+        <li>워커의 입력 루프는 <b>한 줄씩 차례로</b> 처리한다 → 질문과 인덱싱이 저절로 번갈아 돌고, 동시에 인덱스를 만지는 일이 없다. 잠금·스레드 설계가 필요 없다</li>
+        <li>이미 올려 둔 임베딩 모델·Qdrant·BM25 를 그대로 쓴다 — 추가 메모리 없음</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>워커가 내려가 있을 때 — index 명령</h3>
+      <ul class="plain">
+        <li><code>simplerag.exe index --dir &lt;폴더&gt;</code> 를 따로 띄운다. 생성 모델(2.5GB)은 올리지 않는다 — 지금도 index 는 임베딩만 쓴다</li>
+        <li>일부러 워커를 깨우지 않는다. 60분 쉬어 내려간 워커를 파일 하나 때문에 다시 올리면 "쉬면 메모리 돌려주기" 가 무너진다</li>
+        <li>도는 동안 질문이 오면: 워커를 띄우지 않고 기다렸다가(상태 "인덱스 갱신 중 — 곧 답합니다") 끝나면 띄운다</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>질문이 항상 먼저</h3>
+  <ul>
+    <li>RAGSearchBox 의 워커 관리(<code>rag_worker.py</code>)는 지금 "보낼 질문 한 칸" 만 있다. 이것을 <b>두 줄짜리 대기열</b>로 바꾼다 — 질문 줄, 인덱싱 줄. 워커가 "질문&gt; " 을 띄울 때마다 <b>질문 줄을 먼저</b> 비운다</li>
+    <li>인덱싱은 <b>한 번에 문서 하나</b>만 보낸다. 문서 하나는 보통 1~2초(청크 수십 개 × 초당 47~69청크), 큰 문서도 수 초다. 그래서 질문이 들어와도 길어야 그만큼만 기다린다</li>
+    <li>답변이 흘러나오는 중에는 인덱싱 명령을 보내지 않는다(생성과 임베딩이 CPU 를 다툰다)</li>
+  </ul>
+
+  <h3>처음 켜는 폴더 — 규모가 크면 묻는다</h3>
+  <p>지정 폴더를 새로 추가하면 대조 결과 "전부 추가" 가 된다. 문서 371건 기준 전체 인덱싱은 19분이 걸렸다.
+  <b>추가 대상이 50건을 넘으면 바로 시작하지 않고</b> 트레이 알림으로 알린 뒤, 트레이 메뉴 "지금 인덱싱" 을 눌러야 시작한다.
+  시작하면 질문 사이사이 문서 하나씩 처리하므로 그동안도 질문은 된다.</p>
+</section>
+
+<!-- 9 -->
+<section id="protocol">
+  <h2><span class="sec">9</span>워커 명령 — stdin 으로 주고받기</h2>
+  <p>지금 워커 입력 루프(<code>cli.cmd_chat</code>)에는 <code>/help</code>·<code>/topk</code>·<code>/status</code> 같은 <b>슬래시 명령</b>이 이미 있다. 같은 자리에 넣는다.
+  결과는 <b>한 줄짜리 JSON</b>으로 내보내, RAGSearchBox 가 답변 출력과 헷갈리지 않게 한다.</p>
+<pre><span class="c"># RAGSearchBox → 워커</span>
+<b>/index-doc</b> D:\분류함\규정\출장여비규정.docx      <span class="c"># 추가·수정(§5 교체)</span>
+<b>/remove-doc</b> D:\분류함\규정\옛규정.docx           <span class="c"># 삭제</span>
+<b>/bm25</b>                                            <span class="c"># BM25 다시 만들고 바꿔 끼우기</span>
+<b>/index-state</b>                                     <span class="c"># 상태 파일 요약(지문 대조용, 시작 때)</span>
+
+<span class="c"># 워커 → RAGSearchBox  (한 줄, 그 뒤 평소처럼 "질문> ")</span>
+@index {"op":"index-doc","ok":true,"path":"…","chunks":7,"replaced":7,"ms":1840}
+@index {"op":"index-doc","ok":false,"path":"…","why":"추출 실패: 암호가 걸린 문서","kept_old":true}
+@index {"op":"bm25","ok":true,"chunks":498,"ms":410}</pre>
+  <ul>
+    <li>경로는 한 줄에 그대로 쓴다. 줄바꿈이 든 경로는 Windows 에 없다. 워커 stdin 은 지금처럼 <b>cp949</b> 로 보낸다 — cp949 로 못 쓰는 글자가 든 경로는 <code>\uXXXX</code> 로 바꿔 보내고 워커가 되돌린다(§12 에 사례)</li>
+    <li>줄 앞의 <code>@index</code> 로 RAGSearchBox 의 해석기(<code>chat_parser</code>)가 답변과 구분한다. 이 줄은 답변 칸에 나오지 않는다</li>
+    <li>명령의 몸통은 <code>indexer.py</code> 에 새로 만드는 <b><code>sync_doc()</code> · <code>remove_doc()</code></b> 이다. <code>index --dir</code> 도 이 두 함수를 쓰게 바꿔, 수동 실행과 자동 실행이 <b>같은 코드</b>로 돈다</li>
+  </ul>
+</section>
+
+<!-- 10 -->
+<section id="ux">
+  <h2><span class="sec">10</span>사용자에게 보이는 것</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>어디</th><th>무엇</th></tr></thead>
+      <tbody>
+        <tr><td>트레이 툴팁</td><td>평소: <code>준비됨 · 문서 20건</code> / 갱신 중: <code>인덱스 갱신 중 2/5</code> / 대기: <code>새 문서 120건 — 메뉴에서 시작</code></td></tr>
+        <tr><td>트레이 메뉴</td><td><b>지금 인덱싱</b>(대기 중인 것 시작) · <b>전체 다시 확인</b>(대조 순찰 즉시) · <b>자동 인덱싱</b> 켜고 끄기(체크 표시)</td></tr>
+        <tr><td>트레이 알림</td><td>큰 묶음이 끝났을 때 한 번("문서 5건 반영"), 실패가 있을 때("1건 실패 — 로그 참고"), 삭제 확인이 필요할 때. <b>문서 1~2건 반영은 알리지 않는다</b>(저장할 때마다 뜨면 귀찮다)</td></tr>
+        <tr><td>폴더 패널</td><td>아래 상태 줄에 잠깐 <code>방금 반영: 출장여비규정.docx</code>. 패널이 보고 있는 폴더의 문서일 때만</td></tr>
+        <tr><td>로그</td><td>문서마다 한 줄: 무엇을·왜(추가/수정/삭제/내용 같음)·청크 수·걸린 시간·실패 이유</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">"방금 고친 문서로 물었는데 옛 내용이 나온다" 가 가장 헷갈리는 순간이다. 저장 뒤 반영까지 보통 <b>5~10초</b>(안정화 5초 + 처리)이고 BM25 는 조금 더 늦다 — README 에 적는다.</p>
+</section>
+
+<!-- 11 -->
+<section id="ini">
+  <h2><span class="sec">11</span>설정 — <code>RAGSearchBox.ini</code> 에 <code>[AutoIndex]</code></h2>
+<pre>[AutoIndex]
+<span class="c">; 1 = 지정 폴더의 문서가 바뀌면 자동으로 인덱스에 반영</span>
+Enabled          = 1
+<span class="c">; 비우면 [Scope] Folders 와 같은 폴더를 본다</span>
+Folders          =
+<span class="c">; 마지막 변경 알림 뒤 이만큼 조용해야 처리한다(초)</span>
+QuietSec         = 5
+<span class="c">; 알림을 놓쳤을 때를 대비한 대조 순찰 주기(분). 0 = 시작할 때만</span>
+RescanMin        = 10
+<span class="c">; 새로 추가할 문서가 이보다 많으면 바로 시작하지 않고 묻는다</span>
+AskAboveDocs     = 50
+<span class="c">; 한 번에 사라진 문서가 이 비율(%) 이상이면 지우지 않고 묻는다</span>
+DeleteGuardPct   = 30
+<span class="c">; BM25 는 질문이 이만큼 없을 때 다시 만든다(초)</span>
+Bm25IdleSec      = 10</pre>
+  <p class="note">청크 크기 등 인덱스의 모양은 지금처럼 SimpleRAG 의 <code>config.yaml</code> 이 정한다. 여기에는 "언제·무엇을" 만 둔다.</p>
+</section>
+
+<!-- 12 -->
+<section id="error">
+  <h2><span class="sec">12</span>오류·경계 사례</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>상황</th><th>처리</th></tr></thead>
+      <tbody>
+        <tr><td>추출 실패(암호·손상·지원 안 하는 형식)</td><td>옛 버전 유지. 상태 파일에 <code>failed: {지문, 이유}</code> — 같은 지문이면 다시 시도하지 않는다(저장할 때마다 실패 알림이 뜨지 않게). 파일이 다시 바뀌면 다시 시도</td></tr>
+        <tr><td>처리하는 사이 파일이 또 바뀜</td><td>끝난 뒤 지문을 다시 재어, 다르면 대기열 뒤에 다시 넣는다</td></tr>
+        <tr><td>청킹 설정이 인덱스와 다름(<code>check_chunk_params</code>)</td><td>자동 인덱싱을 <b>멈추고</b> 알린다("청크 설정이 바뀌었습니다 — <code>index --rebuild</code> 필요"). 옛·새 청크를 섞지 않는다</td></tr>
+        <tr><td>인덱스가 비어 있음 / 상태 파일 없음</td><td>"처음 켜는 폴더" 로 본다 → 50건 넘으면 묻는다</td></tr>
+        <tr><td>워커가 인덱싱 도중 죽음</td><td>§5 표대로 다음 실행이 바로잡는다. RAGSearchBox 는 그 문서를 대기열에 다시 넣는다</td></tr>
+        <tr><td>사람이 <code>simplerag index</code> 를 직접 돌리는 중</td><td>잠금 때문에 워커가 못 뜨는 것은 지금과 같다. 자동 인덱싱은 잠금 오류를 보면 1분 뒤 다시 시도</td></tr>
+        <tr><td>드라이브 분리·네트워크 끊김</td><td>폴더가 안 보이면 삭제 대조를 건너뛴다(§6). 알림 스레드는 다시 연결을 시도한다</td></tr>
+        <tr><td>수백 개 한꺼번에 복사</td><td>알림 버퍼 넘침 → 대조 순찰. 50건 넘으면 묻는다</td></tr>
+        <tr><td>cp949 로 못 쓰는 문자가 든 파일명</td><td>§9 의 <code>\uXXXX</code> 로 보낸다. <b>구현 전에 시험</b>: 이모지·한자 확장 문자가 든 파일명</td></tr>
+        <tr><td>Qdrant 삭제 후 디스크</td><td>local 모드는 sqlite 라 지운 자리를 다시 쓴다. 파일이 줄지 않는 것은 정상 — 필요하면 <code>--rebuild</code></td></tr>
+        <tr><td>같은 문서가 지정 폴더 두 곳에 걸침(폴더 A 와 그 하위 B 를 둘 다 지정)</td><td>경로가 같으면 한 문서다. 폴더 목록에서 하위 폴더는 합친다</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 13 -->
+<section id="modules">
+  <h2><span class="sec">13</span>바뀌는 모듈</h2>
+  <div class="table-wrap wide-table">
+    <table>
+      <thead><tr><th>파일</th><th>변경</th><th></th></tr></thead>
+      <tbody>
+        <tr><td><code>src/simplerag/index/indexer.py</code></td><td><code>sync_doc()</code>(§5 교체) · <code>remove_doc()</code> · <code>plan_changes(roots)</code>(대조: 추가/수정/삭제 목록) · 내용 해시 · 상태 파일에 <code>content_hash</code>·<code>ids</code>·<code>failed</code>·<code>bm25_built_at</code>. <code>index_folder()</code> 는 이 함수들을 부르도록 바꾸고 <b>삭제 대조</b>를 더한다</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/index/store.py</code></td><td><code>delete_doc_except(doc_path, keep_ids)</code> · <code>rename_doc(old, new)</code>(2단계) · <code>sweep_orphans(state)</code></td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>src/simplerag/retrieve/hybrid.py</code></td><td>payload 를 못 찾은 id 는 버린다(빈 근거 방지)</td><td><span class="chip change">먼저 고칠 버그</span></td></tr>
+        <tr><td><code>src/simplerag/cli.py</code></td><td><code>cmd_chat</code> 에 <code>/index-doc</code>·<code>/remove-doc</code>·<code>/bm25</code>·<code>/index-state</code>. <code>index</code> 에 삭제 대조와 안전 확인</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/watcher.py</code></td><td>폴더 알림 스레드 · 임시 파일 거르기 · 안정화 · 대조 순찰 → "추가/수정/삭제" 묶음</td><td><span class="chip new">신규</span></td></tr>
+        <tr><td><code>RAGSearchBox/index_jobs.py</code></td><td>대기열 · 워커 명령 또는 index 명령 고르기 · 지우기 안전 확인 · 재시도</td><td><span class="chip new">신규</span></td></tr>
+        <tr><td><code>RAGSearchBox/rag_worker.py</code></td><td>질문 한 칸 → 질문/인덱싱 두 줄 대기열. <code>@index</code> 결과 받기. 워커가 내려가 있으면 index 명령 실행</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/chat_parser.py</code></td><td><code>@index</code> 줄을 답변과 구분</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/settings.py</code> · <code>tray.py</code> · <code>app.py</code></td><td><code>[AutoIndex]</code> · 트레이 메뉴 3개 · 알림 · 패널 상태 줄</td><td><span class="chip change">변경</span></td></tr>
+        <tr><td><code>RAGSearchBox/build_searchbox.py</code></td><td><code>win32file</code> hidden-import 확인</td><td><span class="chip change">변경</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 14 -->
+<section id="decide">
+  <h2><span class="sec">14</span>결정 사항 — 2026-09-18 확정(전부 권장안)</h2>
+  <ul class="decisions">
+    <li><span class="chip done">A1</span><div class="body"><b>감지는 RAGSearchBox, 실행은 인덱스를 쥔 쪽</b>
+      <p>대안: ① 워커 안에서 감시 — 워커가 쉬어 내려가면 못 본다. ② 독립 감시 프로그램 — 잠금 때문에 결국 워커와 조율해야 해 한 단계가 더 생긴다.</p>
+      <p class="rec">결정: 이 설계대로. SimpleRAG 만 쓰는 사람을 위한 <code>simplerag watch</code> 는 나중에 같은 함수로 만들 수 있다.</p></div></li>
+    <li><span class="chip done">A2</span><div class="body"><b>기본으로 켤 것인가</b>
+      <p>켜 두면 저장하는 대로 반영된다. 끄면 지금과 같다.</p>
+      <p class="rec">결정: 켬(<code>Enabled = 1</code>). 단 50건 넘는 첫 인덱싱과 대량 삭제는 묻는다.</p></div></li>
+    <li><span class="chip done">A3</span><div class="body"><b>워커가 내려가 있을 때 바로 할 것인가, 다음에 워커가 뜰 때까지 미룰 것인가</b>
+      <p>바로 하면 <code>simplerag index</code> 가 잠깐 뜬다(임베딩 모델만, 수 초). 미루면 첫 질문 전에 밀린 것을 처리해야 해서 첫 답이 늦어진다.</p>
+      <p class="rec">결정: 바로 한다.</p></div></li>
+    <li><span class="chip done">A4</span><div class="body"><b>이름 변경 때 벡터 재사용(2단계)을 할 것인가</b>
+      <p>구조 청킹은 청크 앞머리에 파일명(제목)을 넣으므로, 이름이 바뀌면 청크 본문도 달라진다. 재사용하면 검색에 옛 이름이 남는다.</p>
+      <p class="rec">결정: 1단계는 늘 교체(다시 임베딩). 문서가 커서 느리다는 실측이 나오면 그때 재사용하고 앞머리만 고친다.</p></div></li>
+    <li><span class="chip done">A5</span><div class="body"><b>지정 폴더 = 인덱싱 폴더로 볼 것인가</b>
+      <p>지금 <code>[Scope] Folders</code> 는 "패널이 뜨는 폴더" 다. 인덱스에는 다른 폴더 문서도 있을 수 있다.</p>
+      <p class="rec">결정: 기본은 같게(<code>[AutoIndex] Folders</code> 비우면 Scope). 지우기는 이 폴더 아래 문서에만 적용.</p></div></li>
+  </ul>
+</section>
+
+<!-- 15 -->
+<section id="order">
+  <h2><span class="sec">15</span>구현 순서와 검증</h2>
+  <ol class="steps">
+    <li class="step"><span class="sid">AI1</span><div class="body"><h4>빈틈 먼저 — 수동 index 부터 바로잡기 <span class="chip done">완료 2026-09-18</span></h4>
+      <dl><dt>할 일</dt><dd><code>hybrid.py</code> 빈 근거 버그 · <code>sync_doc</code>(넣고 지우기) · 삭제 대조 · 안전 확인 · 내용 해시. <code>index --dir</code> 가 이것을 쓰게</dd>
+      <dt>확인</dt><dd>단위 시험: 수정·삭제·이름 변경 후 점 수와 <code>doc_path</code> 가 맞는가 / <b>3·4 사이에서 일부러 죽인 뒤</b> 다시 돌려 두 벌이 안 남는가 / 폴더를 못 찾을 때 하나도 안 지우는가 / 30% 넘게 사라지면 멈추는가</dd>
+      <dt>결과</dt><dd><code>bench/test_auto_index.py</code> <b>40/40</b>(가짜 임베더·진짜 토크나이저·임시 Qdrant). <code>hybrid.py</code> 수정을 되돌리면 근거 5건 중 3건이 빈 본문으로 나와 시험이 실패함을 확인 — 시험이 버그를 잡는다.
+      진짜 모델·<code>sample</code> 복사본(임시 <code>SIMPLERAG_HOME</code>)으로 CLI: 처음 20건·498청크 27.3초 / 새 문서 추가 0.3초 / 수정 0.4초 — 검색에 새 내용만 나오고 옛 내용은 사라짐 / 날짜만 바뀜은 다시 임베딩 안 함 / 삭제 0.4초 — 검색에서 사라짐 / <code>~$</code> 표시 파일 제외. BM25 재구축 498청크 0.2~0.3초</dd>
+      <dt>구현 메모</dt><dd>① 삭제 조건은 <code>gen</code> 이 아니라 <b>"방금 넣은 id 말고"</b>(§5 — 같은 버전 두 벌까지 정리, 시험 8). ② 지난번 실패하고 안 바뀐 문서는 다시 시도하지 않는다(<code>failed</code>). ③ 고아 청소는 BM25 를 만들 때 함께 하되, 고아가 30% 를 넘으면 상태 파일이 깨졌다고 보고 지우지 않는다. ④ 대량 삭제로 멈추면 <code>index</code> 종료 코드 3. ⑤ <code>clear --doc</code> 도 <code>remove_doc</code> 을 써서 다음 <code>index</code> 가 BM25 를 다시 만든다(예전엔 변경 0건이면 건너뛰었다)</dd></dl></div></li>
+    <li class="step"><span class="sid">AI2</span><div class="body"><h4>워커 명령</h4>
+      <dl><dt>할 일</dt><dd><code>/index-doc</code>·<code>/remove-doc</code>·<code>/bm25</code>·<code>/index-state</code>, 워커 BM25 바꿔 끼우기</dd>
+      <dt>확인</dt><dd>워커를 띄운 채 문서를 고치고 명령 → <b>같은 워커에 물어서</b> 새 내용이 근거로 나오는가, 옛 내용은 안 나오는가. 명령 사이에 질문을 끼워 순서가 섞이지 않는가</dd></dl></div></li>
+    <li class="step"><span class="sid">AI3</span><div class="body"><h4>감지 — watcher</h4>
+      <dl><dt>할 일</dt><dd>알림 스레드 · 거르기 · 안정화 · 대조 순찰</dd>
+      <dt>확인</dt><dd>Word·Excel·한글로 실제 저장 / 탐색기 복사·이동·이름 변경·삭제 / 큰 파일 복사 도중 / 수백 개 복사(버퍼 넘침) / 꺼져 있던 동안 바뀐 것</dd></dl></div></li>
+    <li class="step"><span class="sid">AI4</span><div class="body"><h4>대기열과 연결 — RAGSearchBox</h4>
+      <dl><dt>할 일</dt><dd>질문 우선 대기열 · 워커 내려감일 때 index 명령 · 트레이·패널 표시 · INI</dd>
+      <dt>확인</dt><dd>인덱싱 중 질문했을 때 기다림이 문서 하나 처리 시간 안쪽인가(실측) / 워커가 쉬어 내려간 뒤 저장 → 반영되고 워커는 안 깨는가 / 배포 exe 로 끝까지</dd></dl></div></li>
+    <li class="step"><span class="sid">AI5</span><div class="body"><h4>규모 — 필요할 때만</h4>
+      <dl><dt>할 일</dt><dd>BM25 백그라운드 재구축 · 이름 변경 벡터 재사용</dd>
+      <dt>언제</dt><dd>청크 수만 개에서 BM25 재구축이 질문을 눈에 띄게 막는다는 실측이 나오면</dd></dl></div></li>
+  </ol>
+  <p class="note">수치 중 "1초 안쪽", "5~10초" 는 기존 실측(43,058청크 BM25 14.3초, 임베딩 초당 47~69청크, 371문서 19분)에서 짐작한 값이다. AI1~AI4 에서 실제로 재어 이 문서를 고친다.</p>
+</section>
+
+<footer>
+  <span>근거 코드: <code>src/simplerag/index/indexer.py</code>(<code>index_folder</code> · <code>file_fingerprint</code> · <code>save_state</code> · <code>check_chunk_params</code>) · <code>index/store.py</code>(<code>delete_doc</code> · <code>upsert</code>) · <code>index/bm25.py</code>(<code>build</code>) · <code>retrieve/hybrid.py</code>(<code>_search</code>) · <code>cli.py</code>(<code>cmd_chat</code> · <code>cmd_clear</code>) · <code>RAGSearchBox/rag_worker.py</code>(<code>_send_pending</code>)</span>
+  <span>관련 문서: <a href="RAGSearchBox_설계서.html">RAGSearchBox 설계서</a> §6 상주 워커 · §18 폴더 패널</span>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

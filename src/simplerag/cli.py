@@ -85,15 +85,23 @@ def cmd_index(args):
         try:
             summary = index_folder(args.dir, app.embedder, app.store, app.bm25,
                                    rebuild=args.rebuild, on_log=print,
-                                   recursive=not args.no_recursive)
+                                   recursive=not args.no_recursive,
+                                   allow_delete=args.allow_delete)
         except RuntimeError as e:
             # 폴더 없음·청킹 설정 불일치 — 사용자가 고칠 수 있는 오류라 스택 없이 알린다
             print("\n❌ {}".format(e), file=sys.stderr)
             return 1
-        print("\n문서 {}건 / 변경 {}건 / 청크 {:,}개 / {:.1f}s".format(
-            summary["files"], summary["changed"], summary["chunks"], summary["sec"]))
+        print("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 삭제 {}건 / 청크 {:,}개 / {:.1f}s"
+              .format(summary["files"], summary["added"], summary["modified"], summary["same"],
+                      summary["removed"], summary["chunks"], summary["sec"]))
         if summary.get("failed"):
-            print("실패 {}건".format(len(summary["failed"])))
+            print("실패 {}건 (실패한 문서는 옛 버전이 그대로 남아 있습니다)".format(
+                len(summary["failed"])))
+        if summary.get("delete_blocked"):
+            # 지우지 않고 멈춘 것은 따로 알린다 — 스크립트가 조용히 넘어가지 않게 종료 코드 3
+            print("⚠️ 삭제를 멈췄습니다: {}. 정말 지운 것이면 --allow-delete 를 붙여 다시 실행하세요."
+                  .format(summary["delete_blocked"]), file=sys.stderr)
+            return 3
         return 0
     finally:
         app.close()
@@ -542,11 +550,12 @@ def cmd_clear(args):
         app = App()
         try:
             app.warmup(wait=True, skip_llm=True, rerank=False)
-            app.store.delete_doc(target)
-            del state["docs"][target]
-            save_state(state)
-            print("제거했습니다. ⚠️ BM25 인덱스는 그대로이므로 "
-                  "`index --dir <폴더>` 로 갱신하세요.")
+            # remove_doc 이 "인덱스가 바뀌었다" 를 적어 두므로, 다음 index 가 바뀐 문서가
+            # 없어도 BM25 를 다시 만든다(예전에는 변경 0건이면 BM25 를 건너뛰었다)
+            from simplerag.index.indexer import remove_doc
+            remove_doc(target, state, app.store)
+            print("제거했습니다. BM25 는 다음 `index --dir <폴더>` 때 다시 만들어집니다 "
+                  "(그 전에도 지운 문서는 근거로 나오지 않습니다).")
             return 0
         finally:
             app.close()
@@ -725,6 +734,8 @@ def main(argv=None):
     pi.add_argument("--dir", required=True)
     pi.add_argument("--rebuild", action="store_true", help="전체 재인덱싱")
     pi.add_argument("--no-recursive", action="store_true", help="하위 폴더 제외")
+    pi.add_argument("--allow-delete", action="store_true",
+                    help="사라진 문서가 많아도(30%% 또는 50건 이상) 인덱스에서 뺀다")
     pi.set_defaults(func=cmd_index)
 
     pa = sub.add_parser("ask", help="질의 (질문 생략 시 대화형)")

@@ -207,19 +207,20 @@ class HybridRetriever:
         lists = [dense_ids] + ([bm_ids] if bm_ids else [])
         fused = [pid for pid, _ in rrf(lists)]
 
+        # 융합 목록 전체의 payload 를 한 번에 묶어 가져온다(왕복을 늘리지 않게).
+        missing = [pid for pid in fused if pid not in payloads]
+        if missing:
+            payloads.update(self._fetch_payloads(missing))
+        # ⚠️ payload 가 없는 id 는 버린다. 문서를 지우거나 바꾼 뒤 BM25 를 아직 다시
+        #    만들지 않았으면 BM25 가 이미 없는 점을 돌려준다 — 그대로 두면 본문 없는
+        #    빈 근거가 답변에 섞였다(자동 인덱싱 설계서 §7).
+        fused = [pid for pid in fused if payloads.get(pid)]
+
         if config.DEDUP_EVIDENCE:
-            # 사본을 걸러내려면 top_k 보다 넉넉히 봐야 한다. 융합 목록 전체를
-            # 훑되, payload 조회는 한 번에 묶어 왕복을 늘리지 않는다.
-            window = fused
-            missing = [pid for pid in window if pid not in payloads]
-            if missing:
-                payloads.update(self._fetch_payloads(missing))
-            picked = self._dedup(window, payloads, top_k)
+            # 사본을 걸러내려면 top_k 보다 넉넉히 봐야 하므로 융합 목록 전체를 훑는다
+            picked = self._dedup(fused, payloads, top_k)
         else:
             picked = fused[:top_k]
-            missing = [pid for pid in picked if pid not in payloads]
-            if missing:
-                payloads.update(self._fetch_payloads(missing))
 
         chunks = []
         for pid in picked:

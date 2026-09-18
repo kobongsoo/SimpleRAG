@@ -167,6 +167,50 @@ class VectorStore:
             ]))
 
     #------------------------------------------------------------------
+    # 문서의 청크 가운데 "방금 넣은 것" 만 남기고 지우기 (자동 인덱싱 §5)
+    #=> 수정된 문서를 바꿀 때 새 청크를 먼저 넣고 부른다. 옛 버전은 물론,
+    #   예전에 넣다가 중간에 끊겨 남은 찌꺼기까지 한 번에 지운다.
+    #   (먼저 지우고 넣으면 그 사이 문서가 검색에서 사라지고, 넣기가 실패하면
+    #    문서가 통째로 없어진다 — 그래서 순서를 뒤집었다.)
+    #    1) 조건: doc_path 가 이 문서이고, id 가 keep_ids 에 없음
+    #
+    # -in: doc_path = 문서 경로(payload 의 doc_path 와 같은 표기)
+    # -in: keep_ids = 남길 점 id 목록(방금 넣은 것)
+    #
+    # -out: 없음
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def delete_doc_except(self, doc_path, keep_ids):
+        from qdrant_client.models import FieldCondition, Filter, HasIdCondition, MatchValue
+
+        self.ensure_collection()
+        must_not = [HasIdCondition(has_id=[int(i) for i in keep_ids])] if keep_ids else []
+        self._client.delete(
+            collection_name=COLLECTION,
+            points_selector=Filter(
+                must=[FieldCondition(key="doc_path", match=MatchValue(value=doc_path))],
+                must_not=must_not))
+
+    #------------------------------------------------------------------
+    # 점 id 로 지우기 (고아 청소용)
+    #
+    # -in: ids = 지울 점 id 목록
+    #
+    # -out: 없음
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def delete_ids(self, ids):
+        from qdrant_client.models import PointIdsList
+
+        if not ids:
+            return
+        self.ensure_collection()
+        for i in range(0, len(ids), 1000):
+            self._client.delete(
+                collection_name=COLLECTION,
+                points_selector=PointIdsList(points=[int(x) for x in ids[i:i + 1000]]))
+
+    #------------------------------------------------------------------
     # 벡터 검색
     #=> payload 를 함께 받아 본문까지 한 번에 돌려준다.
     #
