@@ -221,7 +221,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
   이때 "지우는 순간과 넣는 순간 사이" 에 문서가 사라지거나 두 벌이 섞이지 않게 하는 것이 이 설계의 중심이다.</p>
   <div class="meta">
     <span><b>작성</b> 2026-09-18</span>
-    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1·AI2 구현·검증 완료</b> — AI3 부터 남음</span>
+    <span><b>상태</b> 2026-09-18 결정 A1~A5 확정(전부 권장안) · <b>AI1·AI2·AI3 구현·검증 완료</b> — AI4 남음</span>
     <span><b>관련</b> <code>src/simplerag/index/indexer.py</code> · <code>store.py</code> · <code>bm25.py</code> · <code>retrieve/hybrid.py</code> · <code>cli.py</code> · <code>RAGSearchBox/</code></span>
   </div>
 </header>
@@ -363,6 +363,16 @@ footer { border-top: 1px solid var(--rule); padding-top: 20px; font-size: 13px; 
     <li><b>크기·수정 시각이 두 번 연속 같아야</b> 한다(1초 간격). 복사 중이면 계속 커진다</li>
     <li><b>읽기로 열려야</b> 한다. 공유 위반으로 못 열면 5초 → 15초 → 60초 간격으로 다시 시도하고, 그래도 안 되면 다음 순찰로 미룬다</li>
     <li>많이 쏟아지면(폴더째 복사) 모아서 <b>한 묶음</b>으로 넘긴다 — BM25 재구축을 한 번만 하기 위해서다</li>
+  </ul>
+
+  <h3>AI3 에서 실측으로 알게 된 것</h3>
+  <ul>
+    <li><b>폴더 핸들은 폴더를 "따라간다".</b> 지켜보는 폴더의 이름을 바꾸거나 옮기면, 핸들은 옮겨 간 폴더를 계속 지켜보며 <b>오류도 내지 않는다</b>.
+      그대로 두면 옛 경로로 엉뚱하게 알리고 폴더가 없어진 것도 모른다 → 1초마다 그 자리에 폴더가 있는지 직접 보고, 없으면 핸들을 닫고 다시 연결을 시도한다. 돌아오면 전체 대조</li>
+    <li><b>감시 중에도 사용자가 폴더 이름을 바꿀 수 있다</b>(<code>FILE_SHARE_DELETE</code>). 감시 때문에 폴더가 "사용 중" 으로 잠기지 않는다</li>
+    <li><b>알림 버퍼 64KB 로 3,000개를 한꺼번에 만들어도 넘치지 않았다</b> — 3,000개 모두 알림으로 왔다. 넘침 처리는 버퍼를 줄여 확인했다(넘치는지는 읽는 속도에 달려 들쭉날쭉해, 판단 부분을 떼어 직접 시험한다)</li>
+    <li><b>Word·Excel·PowerPoint 실제 저장</b>: 저장 한 번에 묶음 한 번, <code>~$</code> 표시 파일·<code>~WRL….tmp</code> 임시 파일 때문에 엉뚱한 추가·삭제가 오지 않는다. 문서를 열어 둔 채 다시 저장해도 온다(Office 는 읽기 공유를 허락한다)</li>
+    <li>한글(HWP)은 자동화하면 보안 확인 창이 사용자 화면에 뜰 수 있어 이번 확인에서 뺐다 — 저장 방식이 같다면 같은 규칙으로 걸러진다. AI4 에서 손으로 한 번 저장해 본다</li>
   </ul>
 
   <h3>내용 해시로 한 번 더 확인</h3>
@@ -662,9 +672,13 @@ Bm25IdleSec      = 10</pre>
       <dt>결과</dt><dd>진짜 모델을 올린 워커(RAGSearchBox 와 같은 stdin cp949 / stdout utf-8)로 <b>20/20</b>: 추가 → 물으면 "서귀포" / 수정 → BM25 를 다시 만들기 전에 물어도 "강릉" 만, 빈 근거 없음 / 삭제 → 근거에서 사라짐 / 파일이 있으면 삭제 거절 / 이모지 파일명 / 없는 폴더는 삭제 후보 없음 / 명령·명령·질문을 한 번에 보내도 보낸 차례대로 / 잘못된 명령 뒤에도 워커가 산다.
       모델 없는 회귀 시험은 <code>bench/test_auto_index.py</code> 에 13절로 더해 <b>53/53</b>.
       걸린 시간(짧은 txt, 499청크 인덱스): <code>/index-doc</code> 52~167ms · <code>/bm25</code> 71~158ms · <code>/index-plan</code> 6ms. 실제 docx·hwp 는 추출이 더해진다 — AI4 에서 잰다</dd></dl></div></li>
-    <li class="step"><span class="sid">AI3</span><div class="body"><h4>감지 — watcher</h4>
-      <dl><dt>할 일</dt><dd>알림 스레드 · 거르기 · 안정화 · 대조 순찰</dd>
-      <dt>확인</dt><dd>Word·Excel·한글로 실제 저장 / 탐색기 복사·이동·이름 변경·삭제 / 큰 파일 복사 도중 / 수백 개 복사(버퍼 넘침) / 꺼져 있던 동안 바뀐 것</dd></dl></div></li>
+    <li class="step"><span class="sid">AI3</span><div class="body"><h4>감지 — watcher <span class="chip done">완료 2026-09-18</span></h4>
+      <dl><dt>할 일</dt><dd>알림 스레드 · 거르기 · 안정화 · 대조 순찰 — <code>RAGSearchBox/watcher.py</code>. 무엇을 넣고 뺄지는 정하지 않고 "어디를 다시 볼지"(<code>Batch</code>: changed·removed·rescan)만 넘긴다 — 판정은 AI2 의 <code>/index-plan</code> 한곳</dd>
+      <dt>확인</dt><dd>Word·Excel·한글로 실제 저장 / 탐색기 복사·이동·이름 변경·삭제 / 큰 파일 복사 도중 / 수백 개 복사(버퍼 넘침) / 꺼져 있던 동안 바뀐 것</dd>
+      <dt>결과</dt><dd>단위 시험 <code>tests/test_watcher.py</code> 19건(판정 규칙·가짜 시계, 실제 알림: 만들기·고치기·이름 변경·삭제·하위 폴더·폴더 이동 뒤 복귀, 알림 처리 규칙) — RAGSearchBox 전체 125건, 세 번 연달아 통과.
+      실제 프로그램 17/17: Word·Excel·PowerPoint 새로 저장·다시 저장, 큰 파일(32MB)을 6.4초에 걸쳐 쓰는 동안 알리지 않고 다 쓴 뒤 한 번, 독점 잠금 동안 기다렸다 풀리면 알림, 3,000개 한꺼번에, 폴더 통째로 옮겨 넣기 → 전체 대조, 폴더를 옮겼다 되돌리기 → 옛 경로로 알리지 않고 돌아오면 전체 대조.
+      저장부터 알림까지 <b>3.0~3.5초</b>(조용히 2초로 시험). 기본값 5초면 약 6~7초 — 여기에 문서 반영(AI2 실측 0.1초 안팎 + 추출)이 더해진다.
+      시험 중 잡은 것: 폴더 핸들이 옮겨 간 폴더를 따라가 옛 경로로 알리던 문제(§4 에 적음)</dd></dl></div></li>
     <li class="step"><span class="sid">AI4</span><div class="body"><h4>대기열과 연결 — RAGSearchBox</h4>
       <dl><dt>할 일</dt><dd>질문 우선 대기열 · 워커 내려감일 때 index 명령 · 트레이·패널 표시 · INI</dd>
       <dt>확인</dt><dd>인덱싱 중 질문했을 때 기다림이 문서 하나 처리 시간 안쪽인가(실측) / 워커가 쉬어 내려간 뒤 저장 → 반영되고 워커는 안 깨는가 / 배포 exe 로 끝까지</dd></dl></div></li>
