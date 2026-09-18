@@ -336,9 +336,12 @@ class App:
                 # 곧 물어볼 참이다 — 미리 올려 두면 첫 질문이 빨라진다(D7)
                 if self.worker and self.s.start_mode != "lazy":
                     self.worker.ensure_started()
-        elif self.panel.visible and self.panel.target_hwnd == hwnd:
-            self.panel.hide()
-            self.monitor.watch_window(None)
+        else:
+            # 닫기를 눌렀던 창이라도 범위 밖에 한 번 나갔다 오면 다시 띄운다
+            self.panel.forget_closed(hwnd)
+            if self.panel.visible and self.panel.target_hwnd == hwnd:
+                self.panel.hide()
+                self.monitor.watch_window(None)
 
     #--------------------------------------------------------------
     # 패널 입력 칸에서 질문을 보냈다 (§18)
@@ -398,7 +401,7 @@ class App:
     #--------------------------------------------------------------
     # 트레이 메뉴 처리
     #
-    # -in: name = "unload" | "reload" | "autorun" | "logs" | "exit"
+    # -in: name = "open" | "unload" | "reload" | "autorun" | "logs" | "exit"
     #
     # -out: 없음
     # -out: error = 없음
@@ -406,7 +409,10 @@ class App:
     def _on_tray(self, name):
         self.log.info("트레이: %s", name)
 
-        if name == "unload":
+        if name == "open":
+            self._open_panel()
+
+        elif name == "unload":
             if self.worker:
                 self.worker.unload("트레이 메뉴")
                 self.tray.notify("RAGSearchBox", "모델을 내렸습니다 — 이제 index 를 실행할 수 있습니다")
@@ -429,6 +435,42 @@ class App:
 
         elif name == "exit":
             self.quit()
+
+    #--------------------------------------------------------------
+    # 트레이 "창 열기" (§18)
+    #=> 닫기를 눌러 숨긴 패널을 다시 불러낸다.
+    #    1) 이미 떠 있으면 앞으로 가져와 입력 칸에 커서를 둔다
+    #    2) 범위 폴더를 보고 있는 탐색기 창이 있으면 가장 최근 창 옆에 띄운다
+    #       (닫기를 눌렀던 창이어도 사용자가 직접 부른 것이므로 띄운다)
+    #    3) 그런 창이 없으면 첫 번째 범위 폴더를 탐색기로 연다 — 열리면 폴더 감시가
+    #       그 창을 알아보고 패널을 붙인다
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (탐색기를 못 열면 트레이 알림)
+    #--------------------------------------------------------------
+    def _open_panel(self):
+        if self.panel.visible:
+            self.panel.activate()
+            return
+        wins = self.monitor.in_scope_windows()
+        if wins:
+            hwnd, folder = wins[0]
+            self.panel.forget_closed(hwnd)
+            self._on_folder(hwnd, folder)
+            self.panel.activate()
+            return
+        if not self.scope.active:
+            self.tray.notify("RAGSearchBox", SCOPE_WARN)
+            return
+        target = self.scope.active[0]
+        self.log.info("창 열기: 범위 폴더를 탐색기로 연다 — %s", target)
+        try:
+            subprocess.Popen(["explorer.exe", target])
+        except Exception as e:
+            self.log.warning("탐색기를 열지 못했다: %s", e)
+            self.tray.notify("RAGSearchBox", "탐색기를 열지 못했습니다: {}".format(target))
 
     #--------------------------------------------------------------
     # 로그 폴더 열기

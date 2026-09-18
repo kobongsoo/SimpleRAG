@@ -137,6 +137,43 @@ def give_focus_back(win, prev_fg):
 
 
 #------------------------------------------------------------------
+# 창을 확실히 맨 앞으로 (사용자가 직접 불렀을 때만 쓴다)
+#=> Windows 는 뒤에 있는 프로그램이 SetForegroundWindow 로 앞에 나서는 것을 막는다
+#   (작업 표시줄만 깜빡이고 끝난다). 트레이 메뉴를 거치면 대개 허락되지만,
+#   메뉴가 닫히는 사이 다른 창이 앞을 차지하면 막힌다(실측: 한 번 실패).
+#    1) 먼저 그냥 시도한다
+#    2) 안 되면 지금 앞에 있는 창의 입력 스레드에 잠깐 붙어서 다시 시도한다
+#       — 같은 입력 흐름에 속하면 앞에 나설 수 있다는 Windows 규칙을 쓰는 것이다
+#
+# -in: h = 앞으로 가져올 창
+#
+# -out: True = 앞으로 왔다
+# -out: error = 없음 (실패하면 False)
+#------------------------------------------------------------------
+def bring_to_front(h):
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        if user32.SetForegroundWindow(h) and user32.GetForegroundWindow() == h:
+            return True
+        fg = user32.GetForegroundWindow()
+        fg_tid = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        me = kernel32.GetCurrentThreadId()
+        attached = bool(fg_tid and fg_tid != me and user32.AttachThreadInput(me, fg_tid, True))
+        try:
+            user32.BringWindowToTop(h)
+            user32.SetForegroundWindow(h)
+        finally:
+            # 붙었던 것은 반드시 떼어 낸다 — 붙은 채로 두면 두 창의 키 입력이 엉킨다
+            if attached:
+                user32.AttachThreadInput(me, fg_tid, False)
+        return user32.GetForegroundWindow() == h
+    except Exception:
+        return False
+
+
+#------------------------------------------------------------------
 # 지금 마우스 왼쪽 단추가 눌려 있는가
 #=> 사용자가 패널을 끌고 있는 중에 우리가 자리를 되돌리면 서로 싸운다.
 #   끌고 있는 동안에는 가만히 두고, 놓은 뒤에 다시 붙인다.
@@ -268,8 +305,9 @@ class ChatPanel:
         self.canvas = tk.Canvas(mid, bg="white", highlightthickness=0, bd=0)
         self.vbar = tk.Scrollbar(mid, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.vbar.set)
-        self.canvas.pack(side="left", fill="both", expand=True)
+        # 스크롤 막대를 먼저 붙인다 — 나중에 붙이면 좁은 폭에서 대화 칸에 밀려 사라진다
         self.vbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
 
         self.body = tk.Frame(self.canvas, bg="white", padx=10, pady=8)
         self.canvas.create_window((0, 0), window=self.body, anchor="nw", tags="body")
@@ -307,6 +345,9 @@ class ChatPanel:
         self.btn_files = tk.Button(bar, text="근거 파일 보기", command=self._show_files,
                                    relief="groove", font=self.f_small, state="disabled")
         self.btn_files.pack(side="right", padx=(0, 6))
+        self.btn_clear = tk.Button(bar, text="대화 지우기", command=self.clear,
+                                   relief="groove", font=self.f_small)
+        self.btn_clear.pack(side="right", padx=(0, 6))
 
         win.bind("<Escape>", lambda e: self.close_by_user())
         self.win = win
@@ -373,7 +414,9 @@ class ChatPanel:
 
     #--------------------------------------------------------------
     # 사용자가 닫기를 눌렀을 때
-    #=> 그 탐색기 창에서는 다시 뜨지 않는다. 다른 폴더에 갔다 오면 다시 뜬다.
+    #=> 그 탐색기 창에서 범위 안 폴더를 오가는 동안은 다시 뜨지 않는다.
+    #   범위 밖 폴더에 갔다 오거나(app 이 forget_closed 를 부른다),
+    #   트레이 "창 열기" 를 고르면 다시 뜬다.
     #
     # -in: 없음
     #
@@ -495,16 +538,17 @@ class ChatPanel:
         if t.txt_answer is None:
             tk.Label(t.frame, text="AI 요약 — 위 근거로 확인하세요", font=self.f_small,
                      bg="white", fg="#a8701a", anchor="w").pack(fill="x", pady=(6, 2))
+            # width=1 — 기본값(80글자)이면 칸보다 넓게 요구해 줄바꿈 위치가 어긋난다
             t.txt_answer = tk.Text(t.frame, font=self.f_base, wrap="word", bg="white",
-                                   relief="flat", highlightthickness=0, bd=0, height=1)
+                                   relief="flat", highlightthickness=0, bd=0, height=1,
+                                   width=1)
             t.txt_answer.pack(fill="x")
             t.txt_answer.bind("<MouseWheel>", self._on_wheel)
         t.txt_answer.configure(state="normal")
         t.txt_answer.insert("end", text)
         t.answer_chars += len(text)
-        # 글자 수에 맞춰 칸 높이를 늘린다(Text 는 스스로 늘지 않는다)
-        lines = int(t.txt_answer.index("end-1c").split(".")[0])
-        t.txt_answer.configure(height=max(1, lines), state="disabled")
+        t.txt_answer.configure(state="disabled")
+        self._fit_text(t.txt_answer)
         self._scroll_bottom()
 
     #--------------------------------------------------------------
@@ -533,6 +577,18 @@ class ChatPanel:
                      fg="#8b93a7", anchor="w").pack(fill="x", pady=(4, 0))
         for warn in info.get("warnings", []):
             self.append_token("\n" + warn)
+        # 모델이 끝에 빈 줄을 붙이는 일이 잦다 — 그만큼 칸이 늘어 빈 틈이 생기므로 걷어 낸다
+        if t.txt_answer is not None:
+            try:
+                body = t.txt_answer.get("1.0", "end-1c")
+                tail = len(body) - len(body.rstrip())
+                if tail:
+                    t.txt_answer.configure(state="normal")
+                    t.txt_answer.delete("end-1c - {}c".format(tail), "end-1c")
+                    t.txt_answer.configure(state="disabled")
+                    self._fit_text(t.txt_answer)
+            except Exception:
+                pass
         rsb_log.diag(self.log, "답변 완료: 근거 %d건 · 답변 %d자", len(t.docs), t.answer_chars)
         self._scroll_bottom()
 
@@ -580,6 +636,127 @@ class ChatPanel:
     # ── 안에서 쓰는 것들 ──────────────────────────────
 
     #--------------------------------------------------------------
+    # 답변 칸 높이를 글 길이에 맞추기
+    #=> Text 는 스스로 늘지 않는다. 예전에는 줄바꿈 문자 개수로 높이를 정했는데,
+    #   긴 문장은 화면에서 여러 줄로 접히므로 칸이 모자라 안에 스크롤이 생기고
+    #   뒷부분이 잘려 보였다(사용자 화면에서 확인). 화면에 실제로 보이는 줄 수로 센다.
+    #    1) 줄바꿈 계산이 끝나도록 한 번 그리게 한다
+    #    2) "displaylines" 로 접힌 줄까지 센다(첫 줄은 세지 않으므로 +1)
+    #
+    # -in: txt = 답변 Text 위젯
+    #
+    # -out: 없음
+    # -out: error = 없음 (재지 못하면 그대로 둔다)
+    #--------------------------------------------------------------
+    def _fit_text(self, txt):
+        try:
+            txt.update_idletasks()
+            n = txt.count("1.0", "end-1c", "displaylines")
+            # tkinter 는 0 이면 None, 아니면 (n,) 을 준다
+            n = (n[0] if isinstance(n, tuple) else n) or 0
+            if int(txt.cget("height")) != n + 1:
+                txt.configure(height=n + 1)
+        except Exception:
+            pass
+
+    #--------------------------------------------------------------
+    # 패널 폭이 바뀐 뒤 모든 글의 줄바꿈 다시 맞추기
+    #=> 이름표(Label)는 줄바꿈 폭을 숫자로 들고 있어 폭이 바뀌어도 그대로다.
+    #   답변 칸은 폭에 따라 줄 수가 달라진다. 둘 다 새 폭에 맞춘다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _refit_all(self):
+        self._job_refit = None
+        wrap = self._wrap()
+        for t in self.turns:
+            try:
+                for w in t.frame.winfo_children():
+                    if isinstance(w, tk.Label) and int(w.cget("wraplength") or 0) > 0:
+                        w.configure(wraplength=wrap)
+                if t.txt_answer is not None:
+                    self._fit_text(t.txt_answer)
+            except Exception:
+                pass
+        try:
+            self.lbl_hint.configure(wraplength=wrap)
+        except Exception:
+            pass
+        self._sync_scroll()
+
+    #--------------------------------------------------------------
+    # 주고받은 내용 모두 지우기 ("대화 지우기" 단추)
+    #=> 처음 떴을 때처럼 안내 글만 남긴다.
+    #   답변이 오는 중에 지우면, 남은 글자는 붙을 마디가 없어 조용히 버려진다
+    #   (워커는 그대로 끝까지 답하고, 끝나면 다시 보낼 수 있다).
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def clear(self):
+        if not self.win:
+            return
+        for t in self.turns:
+            try:
+                t.frame.destroy()
+            except Exception:
+                pass
+        self.turns = []
+        self.btn_files.config(state="disabled")
+        if not self._busy:
+            self.set_state("")
+        self.lbl_hint.pack(fill="x", pady=(4, 0))
+        self.canvas.yview_moveto(0.0)
+        self._sync_scroll()
+        self.log.info("대화 지움")
+
+    #--------------------------------------------------------------
+    # "닫기를 눌렀던 창" 표시 풀기
+    #=> 그 창이 범위 밖 폴더로 나갔거나, 트레이에서 "창 열기" 를 골랐을 때 부른다.
+    #   그러면 다음에 범위 폴더로 돌아왔을 때 다시 뜬다.
+    #
+    # -in: hwnd = 탐색기 창
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def forget_closed(self, hwnd):
+        if hwnd in self._closed_for:
+            self._closed_for.discard(hwnd)
+            self.log.info("닫았던 창 %s 에서 다시 띄울 수 있게 했다", hwnd)
+
+    #--------------------------------------------------------------
+    # 패널을 앞으로 가져와 입력 칸에 커서 두기 (트레이 "창 열기")
+    #=> 사용자가 직접 부른 것이므로 이때는 포커스를 가져가도 된다.
+    #
+    # -in: retry = 막혔을 때 잠시 뒤 한 번 더 해 볼지 (기본 True)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def activate(self, retry=True):
+        if not self.win or not self.visible:
+            return
+        try:
+            self.win.deiconify()
+            self.win.lift()
+            h = hwnd_of(self.win)
+            ok = bring_to_front(h) if h else False
+            self.txt_input.focus_force()
+            if not ok and retry:
+                # 트레이 메뉴가 막 닫히는 중에는 가끔 막힌다 — 잠시 뒤 한 번 더
+                self.win.after(250, lambda: self.activate(retry=False))
+                return
+            self.log.info("패널을 앞으로 가져왔다: %s", "성공" if ok else "실패(Windows 가 막음)")
+        except Exception:
+            pass
+
+    #--------------------------------------------------------------
     # 지금 마디
     #
     # -in: 없음
@@ -599,7 +776,9 @@ class ChatPanel:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _wrap(self):
-        return max(200, self.s.win_width - 50)
+        # 실제 칸 폭을 알면 그것을 쓴다 — 사용자가 너비를 바꿨을 수 있다
+        w = getattr(self, "_canvas_w", None) or self._width
+        return max(200, w - 40)
 
     #--------------------------------------------------------------
     # Enter 로 보내기
@@ -885,6 +1064,15 @@ class ChatPanel:
             self.canvas.itemconfigure("body", width=event.width)
         except Exception:
             return
+        # 폭이 바뀌면 줄바꿈 위치가 달라진다 — 그리기가 끝난 뒤 높이를 다시 맞춘다
+        if event.width != getattr(self, "_canvas_w", None):
+            self._canvas_w = event.width
+            if getattr(self, "_job_refit", None):
+                try:
+                    self.win.after_cancel(self._job_refit)
+                except Exception:
+                    pass
+            self._job_refit = self.win.after(80, self._refit_all)
         self._sync_scroll()
 
     #--------------------------------------------------------------

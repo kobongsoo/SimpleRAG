@@ -482,6 +482,35 @@ class Monitor(threading.Thread):
         self._watch_hwnd = hwnd
 
     #--------------------------------------------------------------
+    # 지금 범위 폴더를 보고 있는 탐색기 창 (트레이 "창 열기" 용)
+    #=> 감시하면서 알게 된 창들 가운데, 아직 살아 있고 범위 안 폴더를 보던 것을
+    #   화면에서 위에 있는 순서(가장 최근에 쓴 창이 먼저)로 돌려준다.
+    #    1) 감시 스레드가 쓰는 표를 복사해 읽는다(도중에 바뀌어도 안전하게)
+    #    2) EnumWindows 는 위에 있는 창부터 알려 주므로 그 순서를 그대로 쓴다
+    #
+    # -in: 없음
+    #
+    # -out: [(hwnd, folder), …] (없으면 빈 목록)
+    # -out: error = 없음 (창 목록을 못 얻으면 빈 목록)
+    #--------------------------------------------------------------
+    def in_scope_windows(self):
+        seen = dict(self._folder_seen)
+        order = []
+        try:
+            import win32gui
+
+            # 위에 있는 창부터 차례로 불린다 — 범위 안 폴더를 보던 창만 모은다
+            def cb(h, _):
+                if seen.get(h) and win32gui.IsWindowVisible(h):
+                    order.append((h, seen[h]))
+                return True
+
+            win32gui.EnumWindows(cb, None)
+        except Exception:
+            return []
+        return order
+
+    #--------------------------------------------------------------
     # 질문처럼 보이는가 (가벼운 선검사)
     #=> 진짜 거르기는 app 의 query_filter 가 한다. 여기서는 Enter 폴링을 건너뛸지만 정한다.
     #   앞 공백을 뗀 첫 글자가 접두어(기본 ?, 전각 ？ 포함)인지만 본다.
