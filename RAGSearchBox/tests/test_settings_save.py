@@ -144,6 +144,19 @@ class TestSaveWindowWidth(unittest.TestCase):
         self.assertEqual(rsb_settings.load(p).win_width, 700)
 
 
+class TestRelevanceSetting(unittest.TestCase):
+    #--------------------------------------------------------------
+    # [SimpleRAG] RelevanceMin — 관련 근거 판정 문턱(워커에 환경변수로 넘긴다)
+    #--------------------------------------------------------------
+    def test_values(self):
+        self.assertEqual(rsb_settings.load(make_ini("[SimpleRAG]\n")).relevance_min, "-6")
+        self.assertEqual(rsb_settings.load(make_ini("[SimpleRAG]\nRelevanceMin = -3\n")).relevance_min, "-3.0")
+        self.assertEqual(rsb_settings.load(make_ini("[SimpleRAG]\nRelevanceMin = off\n")).relevance_min, "off")
+        s = rsb_settings.load(make_ini("[SimpleRAG]\nRelevanceMin = 99\n"))
+        self.assertEqual(s.relevance_min, "-6")
+        self.assertTrue(any("RelevanceMin" in w for w in s.warnings))
+
+
 class TestScopeSettings(unittest.TestCase):
     #--------------------------------------------------------------
     # [Panel] SearchScope — 폴더 한정 검색의 범위

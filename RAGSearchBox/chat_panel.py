@@ -622,7 +622,14 @@ class ChatPanel:
     # -out: error = 없음
     #--------------------------------------------------------------
     def show_raw(self, text):
-        self.append_token(text)
+        # 근거 없이 온 안내(관련 내용 없음·폴더에 문서 없음)는 "AI 요약 — 위 근거로" 머리 없이
+        # 안내 글로만 보인다 — 근거가 없는데 근거로 확인하라고 쓰면 헷갈린다
+        t = self._last_turn()
+        if not t or not text:
+            return
+        tk.Label(t.frame, text=text.strip(), font=self.f_base, bg="white", fg="#41485a",
+                 anchor="w", justify="left", wraplength=self._wrap()).pack(fill="x", pady=(6, 0))
+        self._scroll_bottom()
 
     #--------------------------------------------------------------
     # 오류 한 줄

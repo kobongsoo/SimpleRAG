@@ -23,6 +23,7 @@ INI_NAME = "RAGSearchBox.ini"
 #
 # -필드: simplerag_exe    = 워커로 띄울 SimpleRAG 실행 파일(빈 값이면 자동 탐색)
 # -필드: no_stream        = chat 에 --no-stream 을 붙일지
+# -필드: relevance_min    = 관련 근거 문턱(리랭커 점수). "off" 면 끔. 워커에 환경변수로 넘긴다
 # -필드: start_mode       = "boot"(시작 때 예열) | "lazy"(첫 질문 때)
 # -필드: idle_unload_min  = 이 분(分) 동안 질문이 없으면 모델을 내린다 (0=계속 유지)
 # -필드: start_timeout_s  = 워커 준비를 기다리는 한도(초)
@@ -65,6 +66,7 @@ class Settings:
     def __init__(self):
         self.simplerag_exe = ""
         self.no_stream = False
+        self.relevance_min = "-6"
         self.start_mode = "boot"
         self.idle_unload_min = 60
         self.start_timeout_s = 180
@@ -183,6 +185,18 @@ def load(path=None):
     w = s.warnings
     s.simplerag_exe = cp.get("SimpleRAG", "SimpleRagExe", fallback="").strip()
     s.no_stream = _bool(cp, "SimpleRAG", "NoStream", False, w)
+    # 관련 근거 문턱 — 가장 관련 있는 근거의 리랭커 점수가 이보다 낮으면 "답할 수 없음"
+    rel = cp.get("SimpleRAG", "RelevanceMin", fallback="").strip().lower()
+    if rel in ("off", "none"):
+        s.relevance_min = "off"
+    elif rel:
+        try:
+            v = float(rel)
+            if not -20.0 <= v <= 20.0:
+                raise ValueError(rel)
+            s.relevance_min = str(v)
+        except ValueError:
+            w.append("[SimpleRAG] RelevanceMin = {} 는 -20~20 사이 숫자나 off 여야 해 -6 을 씁니다".format(rel))
 
     mode = cp.get("Worker", "StartMode", fallback="").strip().lower()
     if mode in ("boot", "lazy"):

@@ -132,13 +132,15 @@ class RagWorker:
     # -in: restart_max     = 5분 안 자동 재시작 한도
     # -in: idle_unload_min = 이 분 동안 질문이 없으면 모델을 내린다(0=유지)
     # -in: tick_s          = 감시 주기(초)
+    # -in: env             = 워커 프로세스에 더할 환경변수 {이름: 값} (예: 관련 근거 문턱)
     #
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
     def __init__(self, cmd, on_event, *, no_stream=False, start_timeout_s=180,
-                 answer_timeout_s=60, restart_max=3, idle_unload_min=60, tick_s=0.2):
+                 answer_timeout_s=60, restart_max=3, idle_unload_min=60, tick_s=0.2, env=None):
         self.cmd = list(cmd)
+        self.env = dict(env or {})
         self.on_event = on_event
         self.no_stream = no_stream
         self.start_timeout_s = start_timeout_s
@@ -419,7 +421,8 @@ class RagWorker:
         try:
             proc = subprocess.Popen(
                 cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, bufsize=0, creationflags=flags)
+                stderr=subprocess.PIPE, bufsize=0, creationflags=flags,
+                env=dict(os.environ, **self.env) if self.env else None)
         except Exception as e:
             self._emit(("error", "SimpleRAG 를 실행하지 못했습니다: {}".format(e)))
             self._set_state(STOPPED, "실행 실패")

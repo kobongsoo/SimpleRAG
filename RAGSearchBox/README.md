@@ -147,6 +147,7 @@ RAGSearchBox.exe --autorun status   :: 확인 (종료 코드 0=등록됨, 1=안 
 |---|---|---|---|
 | SimpleRAG | `SimpleRagExe` | (자동) | 비우면 exe 옆 → `..\dist\simplerag` 순서로 찾습니다 |
 | | `NoStream` | 0 | 1 이면 답변을 한 번에 받습니다 |
+| | `RelevanceMin` | -6 | **관련 근거 판정.** 근거가 질문과 동떨어졌으면 근거를 보이지 않고 "질문에 대한 내용이 문서에 없습니다. 답변할 수 없습니다." 로 답합니다. 리랭커 최고 점수가 이 값 아래이거나, 1 미만이면서 질문의 핵심 낱말이 근거 후보에 하나도 없으면 "관련 없음". 높일수록 엄격, `off` 면 끔 |
 | Worker | `StartMode` | boot | `boot`=시작 때 예열 / `lazy`=첫 질문 때 |
 | | `IdleUnloadMin` | 60 | 이 시간(분) 질문이 없으면 모델을 내립니다 (0=유지) |
 | | `AnswerTimeoutSec` | 60 | 답변이 멈추면 워커를 다시 올립니다 |
@@ -182,6 +183,8 @@ RAGSearchBox.exe --autorun status   :: 확인 (종료 코드 0=등록됨, 1=안 
 | "SimpleRAG 를 찾지 못했습니다" | `RAGSearchBox.exe` 가 `simplerag.exe` 옆에 있는지, 아니면 INI 의 `SimpleRagExe` 를 지정 |
 | `simplerag index` 가 잠금 오류 | 트레이 → **모델 내리기** 후 인덱싱, 끝나면 **모델 다시 올리기** |
 | "SimpleRAG chat/index 가 실행 중입니다" | 다른 곳에서 chat/index 를 쓰는 중입니다. 끝낸 뒤 다시 질문하세요 |
+| 답이 있을 법한데 "답변할 수 없습니다" 가 나온다 | 범위가 너무 좁지 않은가(패널 머리 **범위** → 지정 폴더 전체) · 질문에 문서 속 낱말을 넣어 보기 · 그래도 자주면 `[SimpleRAG] RelevanceMin` 을 낮추거나(-8 등) `off` |
+| 관련 없는 근거로 엉뚱한 답을 한다 | `[SimpleRAG] RelevanceMin` 을 높이기(-4 등) — 너무 높이면 답할 수 있는 질문도 막힙니다 |
 | 고친 문서가 반영되지 않는다 | 트레이 툴팁에 "새 문서 N건 — 지금 인덱싱" / "멈춤" 이 보이는가 · 로그의 `rsb.autoindex` 줄(반영 실패 이유) · `[AutoIndex] Enabled` |
 | "simplerag.exe 가 인덱싱 명령을 모릅니다" | 옛 `simplerag.exe` 입니다. 새로 빌드한 것으로 바꾸세요(자동 인덱싱만 멈추고 질문은 됩니다) |
 | 두 번 실행해도 하나만 뜬다 | 정상입니다. 중복 실행을 막습니다(모델이 둘이 되지 않게) |

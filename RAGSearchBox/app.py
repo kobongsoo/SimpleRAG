@@ -77,7 +77,9 @@ class App:
                 cmd, lambda ev: self.q.put(ev),
                 no_stream=s.no_stream, start_timeout_s=s.start_timeout_s,
                 answer_timeout_s=s.answer_timeout_s, restart_max=s.restart_max,
-                idle_unload_min=s.idle_unload_min)
+                idle_unload_min=s.idle_unload_min,
+                # 관련 근거 문턱 — 가장 가까운 근거도 동떨어졌으면 답하지 않게(워커가 읽는다)
+                env={"SIMPLERAG_RELEVANCE_MIN": s.relevance_min})
         else:
             self.worker_error = why
             self.log.error("%s", why)
