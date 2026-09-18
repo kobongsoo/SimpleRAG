@@ -324,6 +324,18 @@ def test_rerank_search():
     os.environ.pop("SIMPLERAG_RELEVANCE_MIN", None)
     config.RERANK_POOL = saved_pool
 
+    # 둘째 신호 — 핵심 낱말 겹침 (사용자 화면: 비트코인 폴더에서 "출장시 숙박비는")
+    from simplerag.retrieve.hybrid import keyword_overlap, keywords
+    check("핵심 낱말: 조사를 뗀다", keywords("출장시 숙박비는") == ["출장", "숙박비"], keywords("출장시 숙박비는"))
+    check("핵심 낱말: 흔한 질문 말은 뺀다", keywords("얼마인가요 어떻게") == [], keywords("얼마인가요 어떻게"))
+    btc = ["[30_비트코인개요] 2023년 12월 4일 기준 5452만원", "1 BTC (비트코인, bitcoin)"]
+    check("비트코인 글에는 숙박비 낱말이 없다 → 겹침 0", keyword_overlap("출장시 숙박비는", btc) == 0)
+    reg = ["[25.출장여비규정] 숙박비는 실비로 정산한다"]
+    check("출장여비규정에는 겹친다 → 1", keyword_overlap("출장시 숙박비는", reg) == 1.0)
+    check("합성어는 앞 두 글자로도 든 것으로 본다",
+          keyword_overlap("숙박비용 기준", ["숙박 요금은 실비"]) == 1.0)
+    check("핵심 낱말이 없으면 판정에 안 쓴다(None)", keyword_overlap("얼마?", btc) is None)
+
 
 def main():
     tmp = tempfile.mkdtemp(prefix="simplerag_test_")

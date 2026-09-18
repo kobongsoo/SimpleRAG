@@ -105,28 +105,99 @@ def rrf(ranked_lists, k=None):
 
 
 #------------------------------------------------------------------
-# 관련도 문턱 (리랭커 점수)
-#=> 리랭커(크로스인코더)의 가장 높은 점수가 이보다 낮으면 "질문에 대한 내용이 없다" 로 본다.
-#   골든 질문 40개 실측(2026-09-18): 관련 없는 글과의 최고 점수는 -10.2~-0.2,
-#   정답 근거와의 점수는 -6.0~+7.3 으로 겹친다. -5 는 관련 있는 것을 거의 막지 않으면서
-#   (40개 중 2개 — 짧은 발췌문 기준이라 실제 청크는 더 높다) 뚜렷이 엉뚱한 것을 막는 값이다.
-#   환경변수 SIMPLERAG_RELEVANCE_MIN 으로 바꾼다("off" 면 끈다). RAGSearchBox 는 INI 값을 넘긴다.
-#   리랭커가 꺼져 있으면(CPU 백엔드 등) 문턱도 쓰지 않는다.
+# 관련도 문턱 (리랭커 점수) — "질문에 대한 내용이 없다" 판정의 첫째 신호
+#=> 리랭커(크로스인코더)의 가장 높은 점수가 이보다 낮으면 무조건 "관련 없음".
+#   리랭커 점수만으로는 가를 수 없었다(2026-09-18 실측, 운영 인덱스 복사본):
+#     관련 없는 "출장시 숙박비는" vs 비트코인 조각 = -2.45, 관련 있는 골든 질문 최저 = -3.20.
+#   그래서 이 문턱은 "누가 봐도 엉뚱한 것" 만 막게 낮게(-6) 두고, 애매한 구간은 둘째 신호
+#   (핵심 낱말 겹침, relevance_soft)로 가른다.
+#   환경변수 SIMPLERAG_RELEVANCE_MIN 으로 바꾼다("off" 면 판정 전체를 끈다).
+#   RAGSearchBox 는 INI [SimpleRAG] RelevanceMin 을 넘긴다. 리랭커가 꺼져 있으면 쓰지 않는다.
 #   (config.yaml 로 옮기는 것은 config.py 정리 뒤로 미뤘다)
 #
 # -in: 없음
 #
 # -out: 문턱 float 또는 None(끔)
-# -out: error = 없음 (잘못된 값이면 기본 -5)
+# -out: error = 없음 (잘못된 값이면 기본 -6)
 #------------------------------------------------------------------
 def relevance_min():
-    raw = os.environ.get("SIMPLERAG_RELEVANCE_MIN", "-5").strip().lower()
+    raw = os.environ.get("SIMPLERAG_RELEVANCE_MIN", "-6").strip().lower()
     if raw in ("", "off", "none"):
         return None
     try:
         return float(raw)
     except ValueError:
-        return -5.0
+        return -6.0
+
+
+#------------------------------------------------------------------
+# 애매한 구간의 윗선 — 이 점수 아래에서 핵심 낱말이 하나도 겹치지 않으면 "관련 없음"
+#=> 리랭커가 확신하는 점수(이 값 이상)면 낱말이 달라도(동의어 등) 믿는다.
+#   환경변수 SIMPLERAG_RELEVANCE_SOFT(기본 1).
+#
+# -in: 없음
+#
+# -out: float
+# -out: error = 없음 (잘못된 값이면 1)
+#------------------------------------------------------------------
+def relevance_soft():
+    try:
+        return float(os.environ.get("SIMPLERAG_RELEVANCE_SOFT", "1"))
+    except ValueError:
+        return 1.0
+
+
+# 질문 낱말 끝의 조사·어미 — 떼고 핵심 낱말만 본다(긴 것부터 맞춘다)
+_JOSA = sorted(["은", "는", "이", "가", "을", "를", "의", "에", "에서", "으로", "로", "와", "과", "도", "만",
+                "요", "까", "인가요", "인가", "입니까", "나요", "은요", "는요", "이란", "란", "에게", "께",
+                "부터", "까지", "보다", "처럼", "이나", "나", "하나요", "되나요", "있나요", "하면", "되면", "시"],
+               key=len, reverse=True)
+# 어느 문서에나 겹칠 수 있는 질문 말 — 핵심 낱말로 치지 않는다
+_GENERIC = {"얼마", "무엇", "어떻게", "어떤", "언제", "누가", "어디", "알려줘", "알려", "주세요", "방법", "경우",
+            "대한", "관련", "무엇인가", "뭔가", "있는", "하는", "되는", "기준", "내용", "얼마인가"}
+
+
+#------------------------------------------------------------------
+# 질문의 핵심 낱말
+#=> 한글·영문·숫자 덩어리로 자르고, 끝의 조사를 떼고, 두 글자 이상이며 흔한 질문 말이
+#   아닌 것만 남긴다. 예) "출장시 숙박비는" → ["출장", "숙박비"]
+#
+# -in: q = 질문
+#
+# -out: 낱말 목록
+# -out: error = 없음
+#------------------------------------------------------------------
+def keywords(q):
+    out = []
+    for w in re.findall(r"[가-힣A-Za-z0-9]+", q or ""):
+        for j in _JOSA:
+            if len(w) > len(j) + 1 and w.endswith(j):
+                w = w[: -len(j)]
+                break
+        if len(w) >= 2 and w not in _GENERIC:
+            out.append(w)
+    return out
+
+
+#------------------------------------------------------------------
+# 핵심 낱말이 근거 후보에 얼마나 들어 있나 (0~1)
+#=> 세 글자 이상 낱말은 앞 두 글자만 있어도 든 것으로 본다(합성어·띄어쓰기 차이).
+#   실측: 관련 있는 골든 질문 50개 가운데 겹침이 0 인 것은 하나도 없었고,
+#   비트코인 폴더의 "출장시 숙박비는" 은 0 이었다.
+#
+# -in: q     = 질문
+# -in: texts = 후보 본문들
+#
+# -out: 비율 또는 None(핵심 낱말이 없는 질문 — 판정에 쓰지 않는다)
+# -out: error = 없음
+#------------------------------------------------------------------
+def keyword_overlap(q, texts):
+    kws = keywords(q)
+    if not kws:
+        return None
+    blob = " ".join(texts)
+    hit = sum(1 for k in kws if k in blob or (len(k) >= 3 and k[:2] in blob))
+    return hit / len(kws)
 
 
 class HybridRetriever:
@@ -201,10 +272,15 @@ class HybridRetriever:
         top = float(scores[order[0]])
         timing["rerank_top"] = round(top, 2)
         # ⚠️ 가장 관련 있는 후보조차 질문과 동떨어졌으면 근거를 내지 않는다 — 억지로 붙인 근거로
-        #    모델이 엉뚱한 답을 지어낸다(실측: 비트코인 글만 있는 폴더에서 "숙박비" → -5.94)
-        if gate is not None and top < gate:
-            timing["no_relevant"] = True
-            return [], timing
+        #    모델이 엉뚱한 답을 지어낸다(사용자 화면: 비트코인 글만 있는 폴더에서 "출장시 숙박비는").
+        #    1) 점수가 문턱(-6) 아래면 무조건 관련 없음
+        #    2) 애매한 구간(문턱~소프트)에서는 질문의 핵심 낱말이 후보 어디에도 없으면 관련 없음
+        if gate is not None:
+            ov = keyword_overlap(query, [c["text"] for c in chunks])
+            timing["keyword_overlap"] = None if ov is None else round(ov, 2)
+            if top < gate or (top < relevance_soft() and ov == 0):
+                timing["no_relevant"] = True
+                return [], timing
         ranked = [chunks[i] for i in order]
         # 사본은 점수가 원본과 같아 나란히 올라온다 — 설정이 켜져 있으면 고유한 것부터 채운다
         picked = pick_unique(ranked, top_k) if config.DEDUP_EVIDENCE else ranked[:top_k]
