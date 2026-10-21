@@ -161,6 +161,19 @@ def test_md_html():
     check("HTML rowspan 자리 건너뛰기", rows == [["구분", "값"], ["가", "1"], ["가", "2"]], rows)
     check("HTML th 행 = 머리글", nh == 1)
 
+    # </head> 생략 · 본문이 <svg><foreignObject> 안에 든 슬라이드 HTML(Marp) — 본문을 잃으면 안 된다
+    import tempfile
+    from simplerag.docmodel.html_md import extract_html
+    html = ("<html><head><title>제안 비교표</title><style>p{}</style>"
+            "<body><svg viewBox='0 0 10 10'><foreignObject><section><h2>Q3. 경로 길이 제한</h2>"
+            "<p>자사는 260자 제한을 우회한다.</p></section></foreignObject></svg></body></html>")
+    with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
+        f.write(html)
+    texts = [b.text for b in extract_html(f.name).blocks]
+    os.unlink(f.name)
+    check("HTML <title> 살림", "제안 비교표" in texts, texts)
+    check("HTML svg 속 본문 살림", "자사는 260자 제한을 우회한다." in texts, texts)
+
 
 #------------------------------------------------------------------
 # 후처리 — 정규식 제목 폴백 · 목차 · 무손실 폴백

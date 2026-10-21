@@ -187,7 +187,8 @@ def chunk_params():
 #   2 = XLSX 옆으로 붙은 표 나누기 + 표 머리글 단위가 조각 끝에 홀로 남지 않게
 #   3 = 재설계서 Phase 2 — DOC(바이너리 PAPX·스타일) · PDF(쪽 경계·머리말·쪽번호) 블록 경로
 #   4 = DOC 표의 눕힌 행 펼치기(기존 normalize_tables 규칙)
-BLOCKS_VERSION = 4
+#   5 = D:\분류함 전수 점검 반영 — HTML <head>·<svg> 건너뛰기 제거(<title> 살림), XLSX 행 상한 해제
+BLOCKS_VERSION = 5
 
 
 #------------------------------------------------------------------

@@ -169,10 +169,15 @@ def extract_ipynb(path, title=""):
 
 
 # ── HTML ─────────────────────────────────────────────
-_SKIP = {"script", "style", "noscript", "template", "svg", "head"}
+# 글자를 버리는 요소. <head> 는 넣지 않는다 — HTML5 는 </head> 를 생략할 수 있어, 건너뛰기를
+# 시작한 뒤 닫히지 않으면 본문 전체가 사라진다(실측: 사이버다임_비교분석.html 낱말 97% 손실).
+# head 안의 script·style 은 여기서 따로 버리고, <title> 은 문단으로 살린다.
+# <svg> 도 넣지 않는다 — Marp 같은 슬라이드 HTML 은 본문 전체를 <svg><foreignObject> 안에 담는다
+# (실측: 사이버다임_비교분석.html). 도형(<path> 등)에는 글자가 없고 <text> 라벨은 살릴 만하다.
+_SKIP = {"script", "style", "noscript", "template"}
 _EXCLUDE = {"nav": B.HEADER, "header": B.HEADER, "footer": B.FOOTER}
 _BLOCK = {"p", "div", "section", "article", "main", "aside", "blockquote", "pre",
-          "dd", "dt", "figcaption", "address", "form", "fieldset", "br", "hr"}
+          "dd", "dt", "figcaption", "address", "form", "fieldset", "br", "hr", "title"}
 _HEAD = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 
 

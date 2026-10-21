@@ -23,8 +23,10 @@ _COMMENTS = re.compile(r"xl/comments(\d*)\.xml$", re.I)
 _TCOMMENTS = re.compile(r"xl/threadedComments/threadedComment(\d*)\.xml$", re.I)
 _SHEET = re.compile(r"xl/worksheets/sheet(\d+)\.xml$", re.I)
 
-# 비정상적으로 큰 시트 방어 — 이를 넘는 부분은 버리고 경고를 남긴다
-MAX_ROWS = 20000
+# 비정상적으로 큰 시트 방어 — 이를 넘는 부분은 버리고 경고를 남긴다.
+#   행은 엑셀 최대 행 수까지 받는다. 처음엔 2만으로 막았는데, 실측(D:\분류함 전수 점검)에서
+#   말뭉치 xlsx 한 건이 18만 낱말 중 40% 를 잃었다 — 기존 추출은 행 상한 없이 다 읽는다.
+MAX_ROWS = 1048576
 MAX_COLS = 256
 # 세로 병합을 펼칠 최대 행 수(서식용으로 수천 행을 묶은 병합 방어)
 MAX_MERGE_ROWS = 500
