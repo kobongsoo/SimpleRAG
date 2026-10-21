@@ -163,13 +163,31 @@ def save_state(state, path=None):
 # -in: 없음
 #
 # -out: dict = {tokens, overlap, mode, min_tokens, table_header_max_tokens, chunker_version}
+#       (+ blocks 엔진이면 extract_engine · overflow_ratio · sentence_split · hard_max · blocks_version)
 # -out: error = 없음
 #------------------------------------------------------------------
 def chunk_params():
-    return {"tokens": config.CHUNK_TOKENS, "overlap": config.CHUNK_OVERLAP,
-            "mode": config.CHUNK_MODE, "min_tokens": config.MIN_CHUNK_TOKENS,
-            "table_header_max_tokens": config.TABLE_HEADER_MAX_TOKENS,
-            "chunker_version": config.CHUNKER_VERSION}
+    params = {"tokens": config.CHUNK_TOKENS, "overlap": config.CHUNK_OVERLAP,
+              "mode": config.CHUNK_MODE, "min_tokens": config.MIN_CHUNK_TOKENS,
+              "table_header_max_tokens": config.TABLE_HEADER_MAX_TOKENS,
+              "chunker_version": config.CHUNKER_VERSION}
+    # blocks 엔진일 때만 키를 더한다 — legacy 인덱스의 기록은 예전과 똑같아야
+    # 이 변경만으로 기존 인덱스가 '설정이 다르다'며 재구축을 요구하지 않는다
+    if config.EXTRACT_ENGINE == "blocks":
+        params.update({"extract_engine": "blocks",
+                       "overflow_ratio": config.CHUNK_OVERFLOW_RATIO,
+                       "sentence_split": config.CHUNK_SENTENCE_SPLIT,
+                       "hard_max": config.CHUNK_HARD_MAX,
+                       "blocks_version": BLOCKS_VERSION})
+    return params
+
+
+# 블록 추출·청킹 결과가 달라지는 코드 변경마다 올린다(CHUNKER_VERSION 의 blocks 엔진판).
+#   1 = 재설계서 Phase 1 (docx·pptx·xlsx·hwpx·html·md·ipynb 구조 파서)
+#   2 = XLSX 옆으로 붙은 표 나누기 + 표 머리글 단위가 조각 끝에 홀로 남지 않게
+#   3 = 재설계서 Phase 2 — DOC(바이너리 PAPX·스타일) · PDF(쪽 경계·머리말·쪽번호) 블록 경로
+#   4 = DOC 표의 눕힌 행 펼치기(기존 normalize_tables 규칙)
+BLOCKS_VERSION = 4
 
 
 #------------------------------------------------------------------
@@ -239,6 +257,42 @@ class Progress:
 
 
 #------------------------------------------------------------------
+# blocks 엔진으로 문서 하나 추출·청킹 (재설계서 §13)
+#=> 구조화 추출기(docmodel)로 블록을 만들고 split_blocks 로 청킹한다. 구조 파서가 없는
+#   포맷·파서 실패는 docmodel 안에서 기존 추출기(extract_text)로 폴백하고, 그 경우 청킹도
+#   split_structured 를 그대로 타서 legacy 엔진과 같은 청크가 나온다.
+#
+# -in: path     = 문서 경로
+# -in: name     = 파일 이름
+# -in: ext      = build_extractor() 결과(legacy 폴백용)
+# -in: embedder = OnnxEmbedder (토크나이저)
+#
+# -out: (text, n_rows, metas) — 문서 전체 글자, 표 행 수, split_blocks 결과 목록
+# -out: error = 폴백 추출까지 실패하면 예외 전파(상위가 실패로 기록)
+#------------------------------------------------------------------
+def _extract_blocks(path, name, ext, embedder):
+    from ..chunk import split_blocks
+    from ..docmodel import dump_json, extract_document
+
+    # 파서가 없거나 실패하면 기존 추출기(extract_text)로 폴백한다
+    doc = extract_document(path, legacy=lambda p: extract_text(ext, p),
+                           title=os.path.splitext(name)[0])
+    if config.EXTRACT_DUMP:
+        try:
+            dump_json(doc, os.path.join(config.ROOT, "blocks_dump"), name)
+        except OSError:
+            pass          # 진단 파일을 못 써도 인덱싱은 계속한다
+    text = doc.full_text()
+    n_rows = sum(len(b.rows or []) for b in doc.blocks if b.type == "table")
+    if config.CHUNK_MODE == "structured":
+        metas = split_blocks(doc, embedder.tokenizer)
+    else:
+        # 고정 크기 모드 — 블록 경계는 쓰지 않고 전체 글자를 자른다(되돌리기용)
+        metas = [{"text": c} for c in split_text(text, embedder.tokenizer)]
+    return text, n_rows, metas
+
+
+#------------------------------------------------------------------
 # 문서 한 건을 인덱스에 반영 — 추가·수정 공통 (자동 인덱싱 설계서 §5)
 #=> 수정 문서는 "수정 전 청크를 지우고 수정 후 청크를 넣는다". 다만 그 순서대로 하면
 #   사이에 문서가 비고, 넣기가 실패하면 문서가 사라진다. 그래서 순서를 뒤집는다.
@@ -287,15 +341,20 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
     # 문서 1건의 실패가 전체 실행을 죽이면 안 된다. 추출뿐 아니라 청킹·임베딩까지
     # 통째로 감싼다(토크나이저가 서로게이트 문자에서 죽어 전체가 멈춘 적이 있다).
     n_rows = 0
+    metas = None
     try:
-        text, n_rows = extract_text(ext, path)
-        if config.CHUNK_MODE == "structured":
-            # 파일명을 문서 제목으로 쓴다 — 청크 접두에 들어가 검색과
-            # 생성 양쪽에 문맥을 준다(설계서 구조인식 §4.5).
-            chunks = split_structured(text, embedder.tokenizer,
-                                      title=os.path.splitext(name)[0])
+        if config.EXTRACT_ENGINE == "blocks":
+            text, n_rows, metas = _extract_blocks(path, name, ext, embedder)
+            chunks = [m["text"] for m in metas]
         else:
-            chunks = split_text(text, embedder.tokenizer)
+            text, n_rows = extract_text(ext, path)
+            if config.CHUNK_MODE == "structured":
+                # 파일명을 문서 제목으로 쓴다 — 청크 접두에 들어가 검색과
+                # 생성 양쪽에 문맥을 준다(설계서 구조인식 §4.5).
+                chunks = split_structured(text, embedder.tokenizer,
+                                          title=os.path.splitext(name)[0])
+            else:
+                chunks = split_text(text, embedder.tokenizer)
         if not chunks:
             raise ValueError("추출 텍스트 없음")
         vecs = embedder.embed_passages(chunks)
@@ -328,6 +387,13 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
                  # 어느 버전 문서에서 나온 청크인지(진단·고아 청소용)
                  "gen": fp, "content_hash": chash}
                 for i, c in enumerate(chunks)]
+    if metas:
+        # blocks 엔진 — 절 번호(Parent-Child 실험 A 에서 같은 절 청크를 모을 때 쓴다)·
+        # 제목 경로·출처·쪽 범위를 함께 남긴다. 값이 없는 키는 넣지 않는다.
+        for p, m in zip(payloads, metas):
+            for k in ("section_id", "path", "source", "page_from", "page_to"):
+                if m.get(k) not in (None, []):
+                    p[k] = m[k]
     store.upsert(ids, vecs, payloads)
 
     # ── 5) 방금 넣은 것 말고 이 문서의 청크를 모두 지운다 ──

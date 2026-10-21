@@ -10,6 +10,8 @@
 #   → OnnxEmbedder.ensure_loaded() 가 no_truncation() 을 호출한다.
 #------------------------------------------------------------------
 
+import re
+
 from . import config
 
 
@@ -195,3 +197,209 @@ def split_structured(text, tok, title=None, size=None, overlap=None):
     # 꼬리 조각은 검색 노이즈만 늘린다. 단 접두가 길이의 대부분이면
     # 내용이 없다는 뜻이므로 그것도 버린다.
     return [c for c in out if _tlen(tok, c) >= config.MIN_CHUNK_TOKENS]
+
+
+# ── 블록 기반 청킹 (plan/구조화추출_청킹_재설계서.html §11) ─────────────
+# 문장 경계 — 마침표·물음표·느낌표(와 한국어 종결 '다.') 뒤 공백에서 끊는다
+_SENT_END = re.compile(r"(?<=[.!?。])\s+")
+
+
+#------------------------------------------------------------------
+# 블록 기반 청킹 (핵심 — 재설계서 §11)
+#=> 구조화 추출기(docmodel)가 낸 Document 를 청크로 자른다. 규칙은 split_structured 와
+#   같고 입력만 다르다 — 정규식으로 추측한 절 대신 파일이 알려 준 절·블록·표 행을 쓴다.
+#    1) 폴백 문서(raw_text)는 split_structured 를 그대로 부른다 → 지금과 글자까지 같은 청크
+#    2) 절이 예산 안이면 앞 절들과 묶는다(겹침 없음)
+#    3) 절이 예산을 넘으면 '단위'(블록 · 표 행) 경계에서 끊는다
+#    4) 단위 하나가 예산을 넘으면 그 단위 안에서만 줄 → (문장) → 토큰 순으로 쪼갠다(이때만 겹침)
+#       단 예산 × overflow_ratio 이하면 쪼개지 않고 통째로 둔다(약한 초과 허용, 기본 1.0 = 끔)
+#    5) 표 행으로 시작하는 조각에는 그 표의 머리글 행을 다시 붙인다(파일이 알려 준 머리글,
+#       길이 상한 TABLE_HEADER_MAX_TOKENS 는 기존과 같다)
+#    6) 어떤 청크도 chunk.hard_max(e5 입력 한계)를 넘지 않게 마지막에 자른다
+#
+# -in: doc     = docmodel.Document
+# -in: tok     = tokenizers.Tokenizer (절단 해제 상태)
+# -in: title   = 문서 제목(접두에 쓴다). None 이면 doc.title
+# -in: size, overlap = None 이면 설정값
+#
+# -out: [dict, …] — {text, section_id, path, source, page_from, page_to}
+#       (폴백 문서는 section_id/page 가 None, source="legacy")
+# -out: error = 없음 (빈 문서는 [])
+#------------------------------------------------------------------
+def split_blocks(doc, tok, title=None, size=None, overlap=None):
+    from .docmodel.assemble import build_sections, make_prefix, section_units
+
+    title = doc.title if title is None else title
+    size = size or config.CHUNK_TOKENS
+    overlap = config.CHUNK_OVERLAP if overlap is None else overlap
+
+    if not doc.is_blocks:
+        return [{"text": c, "section_id": None, "path": [], "source": "legacy",
+                 "page_from": None, "page_to": None}
+                for c in split_structured(doc.raw_text, tok, title=title,
+                                          size=size, overlap=overlap)]
+
+    out = []
+    buf, buf_n, buf_secs = [], 0, []
+
+    # 모아 둔 작은 절들을 청크 하나로 내보낸다 — 메타는 첫 절 기준, 쪽은 합친 범위
+    def flush():
+        if buf:
+            out.append(_chunk_meta("\n\n".join(buf).strip(), buf_secs))
+            buf.clear()
+            buf_secs.clear()
+
+    for sec in build_sections(doc):
+        units = section_units(sec)
+        if not units:
+            continue
+        prefix = make_prefix(title, sec.path)
+        whole = (prefix + "\n".join(u for u, _ in units)).strip()
+        n = _tlen(tok, whole)
+
+        # (A) 절이 통째로 예산에 들어간다 — 앞의 절들과 묶을 수 있으면 묶는다
+        if n <= size:
+            if buf_n + n > size:
+                flush()
+                buf_n = 0
+            buf.append(whole)
+            buf_secs.append(sec)
+            buf_n += n
+            continue
+
+        # (B) 절 하나가 예산을 넘는다 — 모아 둔 것을 먼저 내보내고 단위 경계에서 쪼갠다
+        flush()
+        buf_n = 0
+        budget = max(config.MIN_CHUNK_TOKENS, size - _tlen(tok, prefix))
+        for piece in _pack_units(units, tok, budget, overlap):
+            if piece.strip():
+                out.append(_chunk_meta((prefix + piece).strip(), [sec]))
+    flush()
+
+    out = _enforce_hard_max(out, tok, overlap)
+    return [c for c in out if _tlen(tok, c["text"]) >= config.MIN_CHUNK_TOKENS]
+
+
+#------------------------------------------------------------------
+# 청크 메타 만들기
+#
+# -in: text = 청크 글자
+# -in: secs = 이 청크에 든 절 목록(첫 절이 대표)
+#
+# -out: dict = {text, section_id, path, source, page_from, page_to}
+# -out: error = 없음
+#------------------------------------------------------------------
+def _chunk_meta(text, secs):
+    first = secs[0]
+    pages = [p for s in secs for p in (s.page_from, s.page_to) if p is not None]
+    src = first.heading.source if first.heading is not None else "parser"
+    return {"text": text, "section_id": first.id, "path": list(first.path),
+            "source": src, "page_from": min(pages) if pages else None,
+            "page_to": max(pages) if pages else None}
+
+
+#------------------------------------------------------------------
+# 단위 묶기 — 큰 절을 블록·표 행 경계에서 자른다
+#=> 단위를 차례로 담다가 예산을 넘으면 조각을 끊는다. 표 행으로 새 조각이 시작되면
+#   그 표의 머리글을 앞에 붙인다(머리글 토큰은 예산에 세지 않는다 — 기존 규칙과 같다).
+#
+# -in: units   = [(글자, 머리글 또는 None), …] (assemble.section_units)
+# -in: tok     = 토크나이저
+# -in: budget  = 조각 하나의 토큰 예산(접두 제외)
+# -in: overlap = 단위 내부 분할 때의 겹침 토큰 수
+#
+# -out: [조각 글자, …]
+# -out: error = 없음
+#------------------------------------------------------------------
+def _pack_units(units, tok, budget, overlap):
+    pieces, cur, cur_n = [], [], 0
+    soft = budget * max(1.0, float(config.CHUNK_OVERFLOW_RATIO))
+
+    # 지금 조각을 끊어 낸다
+    def emit():
+        if cur:
+            pieces.append("\n".join(cur))
+            cur.clear()
+
+    for i, (text, header) in enumerate(units):
+        n = _tlen(tok, text)
+        hdr = header if (header and _tlen(tok, header) <= config.TABLE_HEADER_MAX_TOKENS) else None
+        # 표 머리글 단위(다음 단위가 이 글을 머리글로 갖는다) — 첫 행과 함께 들어갈 자리가 없으면
+        # 지금 조각을 먼저 끊는다. 머리글만 조각 끝에 홀로 남으면 다음 조각에 또 붙어 두 번 들어간다.
+        nxt = units[i + 1] if i + 1 < len(units) else None
+        if cur and nxt is not None and nxt[1] == text \
+                and cur_n + n + _tlen(tok, nxt[0]) > budget:
+            emit()
+            cur_n = 0
+        if n > budget:
+            emit()
+            cur_n = 0
+            if n <= soft and n <= config.CHUNK_HARD_MAX:
+                # 약한 초과 허용 — 단위를 쪼개지 않고 통째로 한 조각
+                pieces.append((hdr + "\n" + text) if hdr else text)
+            else:
+                subs = _split_unit(text, tok, budget, overlap)
+                if hdr and subs:
+                    subs[0] = hdr + "\n" + subs[0]
+                pieces.extend(subs)
+            continue
+        if cur_n + n > budget:
+            emit()
+            cur_n = 0
+        if not cur and hdr:
+            # 표 행으로 조각이 시작된다 — 머리글이 없으면 '5 가 일수인지 금액인지' 알 수 없다
+            cur.append(hdr)
+        cur.append(text)
+        cur_n += n
+    emit()
+    return pieces
+
+
+#------------------------------------------------------------------
+# 단위 하나를 쪼개기 (예산 초과 단위)
+#=> _split_oversized 와 같은 차례(줄 → 토큰)에, 설정이 켜져 있으면 줄과 토큰 사이에
+#   문장 경계를 끼운다. 블록 모델에서는 문단이 한 줄인 경우가 많아 줄 다음 곧바로
+#   토큰 중간에서 잘리기 쉽기 때문이다.
+#
+# -in: text, tok, budget, overlap
+#
+# -out: [조각 글자, …]
+# -out: error = 없음
+#------------------------------------------------------------------
+def _split_unit(text, tok, budget, overlap):
+    if not config.CHUNK_SENTENCE_SPLIT:
+        return _split_oversized(text, tok, budget, overlap)
+    lines = []
+    for ln in text.split("\n"):
+        if ln.strip() and _tlen(tok, ln) > budget:
+            # 예산을 넘는 줄은 문장으로 나눠 다시 담는다
+            lines.extend(s for s in _SENT_END.split(ln) if s.strip())
+        else:
+            lines.append(ln)
+    return _split_oversized("\n".join(lines), tok, budget, overlap)
+
+
+#------------------------------------------------------------------
+# 절대 상한 지키기
+#=> e5 는 512 토큰(특수토큰 2개 포함)까지만 본다. 넘는 뒷부분은 벡터에 반영되지 않아
+#   그 내용으로는 검색이 안 된다. 약한 초과·머리글 재부착이 겹쳐 상한을 넘은 청크는
+#   토큰으로 잘라 나눈다(같은 메타를 물려준다).
+#
+# -in: chunks  = [dict, …]
+# -in: tok     = 토크나이저
+# -in: overlap = 겹침 토큰 수
+#
+# -out: [dict, …]
+# -out: error = 없음
+#------------------------------------------------------------------
+def _enforce_hard_max(chunks, tok, overlap):
+    hard = config.CHUNK_HARD_MAX
+    out = []
+    for c in chunks:
+        if _tlen(tok, c["text"]) <= hard:
+            out.append(c)
+            continue
+        ids = tok.encode(c["text"], add_special_tokens=False).ids
+        for piece in chunk_ids(ids, hard, overlap):
+            out.append(dict(c, text=tok.decode(piece)))
+    return out

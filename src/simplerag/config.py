@@ -214,6 +214,29 @@ CHUNKER_VERSION = 2
 #   ⚠️ 바꾸면 전체 재인덱싱이 필요하다(증분은 옛 방식 청크를 그대로 둔다).
 CHUNK_MODE = _setting("chunk.mode", "structured", "SIMPLERAG_CHUNK_MODE", str)
 
+# ── 구조화 추출(블록 모델) — plan/구조화추출_청킹_재설계서.html ──────────
+# 추출 엔진.
+#   "legacy" — 기존 경로(csoclassify 추출기 → 평문 → 정규식 절 추측). 기본값이며 지금과 같다.
+#   "blocks" — SimpleRAG 전용 구조화 추출기(docmodel). 파서가 있는 포맷(docx·pptx·xlsx·hwpx·
+#              doc·pdf·html·md·ipynb)은 파일 안 구조(제목 수준·표·머리말·쪽)를 그대로 읽어 블록
+#              기반으로 청킹하고, 나머지 포맷(hwp·ppt·xls·txt 등)은 legacy 추출 + split_structured
+#              를 그대로 탄다. 골든셋 v2 비교: plan/골든셋v2_추출엔진_비교.html
+#   ⚠️ 바꾸면 전체 재인덱싱이 필요하다(청킹 설정 기록에 엔진이 들어간다).
+EXTRACT_ENGINE = str(_setting("extract.engine", "legacy", "SIMPLERAG_EXTRACT_ENGINE", str)).strip().lower()
+if EXTRACT_ENGINE not in ("legacy", "blocks"):
+    # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것
+    raise ConfigError("SIMPLERAG_EXTRACT_ENGINE={!r} — legacy | blocks 중 하나여야 합니다".format(
+        EXTRACT_ENGINE))
+# 문서별 블록 JSON 을 <데이터 루트>/blocks_dump 에 남긴다(진단용, 기본 끔)
+EXTRACT_DUMP = bool(_setting("extract.dump_blocks", False))
+# 약한 초과 허용 α — 단위(블록·표 행) 하나가 예산 × α 이하면 쪼개지 않고 통째로 둔다.
+#   1.0 = 끔(현행). 실험 후보 1.5. blocks 엔진에서만 쓴다(재설계서 §11 분할 규칙).
+CHUNK_OVERFLOW_RATIO = _setting("chunk.overflow_ratio", 1.0, "SIMPLERAG_CHUNK_OVERFLOW", float)
+# 예산을 넘는 단위를 쪼갤 때 줄과 토큰 사이에 문장 경계를 끼운다. blocks 엔진에서만 쓴다.
+CHUNK_SENTENCE_SPLIT = bool(_setting("chunk.sentence_split", False))
+# 청크 절대 상한(토큰) — e5 최대 입력 512 − 특수토큰 2. 넘는 뒷부분은 벡터에 반영되지 않는다.
+CHUNK_HARD_MAX = _setting("chunk.hard_max", 510)
+
 
 # ── 검색 ─────────────────────────────────────────────
 # sLLM 에 넣는 근거 수(리랭킹 후 상위 N). 실측 포화점 — 4 이상은 정답률 정체 + TTFT 만 증가

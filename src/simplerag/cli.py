@@ -464,6 +464,9 @@ def cmd_extract(args):
         print("파일 없음: " + args.path, file=sys.stderr)
         return 2
 
+    if getattr(args, "blocks", False):
+        return _extract_blocks_preview(args)
+
     ext = build_extractor()
     try:
         text, n_rows = extract_text(ext, args.path)
@@ -490,6 +493,76 @@ def cmd_extract(args):
     print(text[:args.chars])
     if len(text) > args.chars:
         print("\n... (이하 {:,}자 생략)".format(len(text) - args.chars))
+    return 0
+
+
+#------------------------------------------------------------------
+# 구조화 추출 미리보기 (extract --blocks)
+#=> blocks 엔진이 문서를 어떻게 나눴는지 본다 — 블록 종류별 개수, 제목 경로(절),
+#   그리고 실제 청크 몇 개. 설정의 extract.engine 과 상관없이 blocks 엔진으로 돌린다.
+#    1) docmodel 로 블록을 만든다(파서가 없으면 기존 추출기로 폴백 — 그렇다고 표시)
+#    2) 블록 통계와 절 목록(경로 · 쪽 · 블록 수)을 찍는다
+#    3) split_blocks 로 청크를 만들어 개수·길이 분포와 앞부분을 보여 준다
+#
+# -in: args = argparse 결과 (path, chars, dump)
+#
+# -out: int = 종료 코드(0 성공, 1 실패)
+# -out: error = 없음 (실패는 메시지와 종료 코드로)
+#------------------------------------------------------------------
+def _extract_blocks_preview(args):
+    import collections
+
+    from simplerag.chunk import _tlen, split_blocks
+    from simplerag.docmodel import dump_json, extract_document
+    from simplerag.docmodel.assemble import build_sections
+    from simplerag.embed.onnx_embedder import OnnxEmbedder
+    from simplerag.extract import build_extractor, extract_text
+
+    ext = build_extractor()
+    try:
+        # 파서가 없는 포맷은 기존 추출기로 폴백 — 경로 줄에 그렇다고 표시된다
+        doc = extract_document(args.path, legacy=lambda p: extract_text(ext, p))
+    except Exception as e:
+        print("추출 실패: {}: {}".format(type(e).__name__, e), file=sys.stderr)
+        return 1
+
+    print("파일    : {}".format(os.path.basename(args.path)))
+    print("경로    : {}".format("블록 (" + doc.format + ")" if doc.is_blocks
+                                  else "폴백 — 기존 추출 + 정규식 절 추측"))
+    for w in doc.warnings:
+        print("경고    : " + w)
+    if args.dump:
+        print("블록JSON: " + dump_json(doc, args.dump, os.path.basename(args.path)))
+    if doc.is_blocks:
+        kinds = collections.Counter("{}/{}".format(b.type, b.source) for b in doc.blocks)
+        print("블록    : {}개  {}".format(len(doc.blocks), dict(kinds)))
+        secs = build_sections(doc)
+        print("절      : {}개".format(len(secs)))
+        for s in secs[:30]:
+            pages = "" if s.page_from is None else " p{}-{}".format(s.page_from, s.page_to)
+            print("   [{:>3}] {}{} · 블록 {}".format(s.id, " > ".join(s.path) or "(머리말)",
+                                                  pages, len(s.blocks)))
+        if len(secs) > 30:
+            print("   ... (이하 {}개 생략)".format(len(secs) - 30))
+
+    emb = OnnxEmbedder()
+    emb.ensure_loaded()
+    chunks = split_blocks(doc, emb.tokenizer)
+    lens = sorted(_tlen(emb.tokenizer, c["text"]) for c in chunks)
+    if lens:
+        print("청크    : {}개 (토큰 최소 {} · 중앙 {} · 최대 {}, 예산 {})".format(
+            len(chunks), lens[0], lens[len(lens) // 2], lens[-1], config.CHUNK_TOKENS))
+    else:
+        print("청크    : 없음")
+    print("-" * 66)
+    shown = 0
+    for i, c in enumerate(chunks):
+        if shown >= args.chars:
+            print("\n... (청크 {}개 더)".format(len(chunks) - i))
+            break
+        print("── 청크 {} ──".format(i))
+        print(c["text"])
+        shown += len(c["text"])
     return 0
 
 
@@ -836,6 +909,10 @@ def main(argv=None):
     pe = sub.add_parser("extract", help="추출 미리보기(인덱싱 전 확인)")
     pe.add_argument("path", help="문서 파일 경로")
     pe.add_argument("--chars", type=int, default=1200, help="출력할 문자 수")
+    pe.add_argument("--blocks", action="store_true",
+                    help="구조화 추출(blocks 엔진) 결과 — 블록·절·청크를 보여 준다")
+    pe.add_argument("--dump", metavar="DIR",
+                    help="--blocks 와 함께: 블록 JSON 을 이 폴더에 저장")
     pe.set_defaults(func=cmd_extract)
 
     pse = sub.add_parser("search", help="검색만 수행(LLM 미적재)")

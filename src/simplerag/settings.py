@@ -137,6 +137,14 @@ SCHEMA = {
         "mode": _choice("structured", "fixed"),
         "min_tokens": _int(1, 510),
         "table_header_max_tokens": _int(0, 510),
+        # 구조화 추출(blocks 엔진)에서만 쓰는 분할 규칙 — 재설계서 §11
+        "overflow_ratio": _num(1, 4),              # 약한 초과 허용 α (1.0 = 끔)
+        "sentence_split": _bool,                   # 큰 단위를 문장 경계로도 나눔
+        "hard_max": _int(16, 510),                 # 청크 절대 상한(e5 입력 한계)
+    },
+    "extract": {
+        "engine": _choice("legacy", "blocks"),     # 추출 엔진(바꾸면 전체 재인덱싱)
+        "dump_blocks": _bool,                      # 문서별 블록 JSON 저장(진단용)
     },
     "retrieval": {
         "dense_top_k": _int(1, 1000),
