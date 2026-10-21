@@ -626,6 +626,9 @@ def cmd_status(args):
             config.CHUNK_TOKENS, config.CHUNK_OVERLAP, config.CHUNK_MODE,
             config.TABLE_HEADER_MAX_TOKENS))
         rec = state.get("chunk_params")
+        # 추출 엔진 — 설정값과 인덱스를 만든 엔진을 함께 보여 준다(기록에 키가 없으면 legacy 로 만든 것)
+        built = (rec or {}).get("extract_engine", "legacy") if rec is not None else "기록 없음"
+        print("추출엔진 : {} (인덱스: {})".format(config.EXTRACT_ENGINE, built))
         if state["docs"] and rec is None:
             print("  ⚠️ 인덱스에 청킹 설정 기록 없음(이전 버전에서 만듦)")
         elif rec is not None and rec != chunk_params():
