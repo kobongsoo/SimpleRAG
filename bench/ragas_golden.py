@@ -97,12 +97,13 @@ def save_json(path, obj):
 #=> jsonl 한 줄 = 문항 1건.
 #
 # -in: limit = 앞에서 N건만 (0 이면 전부)
+# -in: path  = 골든셋 경로(None 이면 기본 GOLDEN — 기존 100문항)
 #
 # -out: rows = 문항 dict 목록
 # -out: error = 파일 없으면 FileNotFoundError 전파
 #------------------------------------------------------------------
-def load_golden(limit=0):
-    rows = [json.loads(l) for l in io.open(GOLDEN, encoding="utf-8") if l.strip()]
+def load_golden(limit=0, path=None):
+    rows = [json.loads(l) for l in io.open(path or GOLDEN, encoding="utf-8") if l.strip()]
     return rows[:limit] if limit else rows
 
 
@@ -124,7 +125,7 @@ def stage_collect(args):
     from simplerag import config
     from simplerag.warmup import App
 
-    golden = load_golden(args.limit)
+    golden = load_golden(args.limit, args.golden or None)
     out_dir = exp_dir(args.exp)
     os.makedirs(out_dir, exist_ok=True)
     responses_path = os.path.join(out_dir, "responses.json")
@@ -163,6 +164,9 @@ def stage_collect(args):
                 "retrieved_contexts": [c["text"] for c in chunks],
                 "retrieved_docs": names, "doc_hit": hit, "cited": done.get("cited", []),
                 "doc_id": g["doc_id"], "question_type": g["question_type"], "difficulty": g["difficulty"],
+                # 골든셋 v2(포맷별 비교용)에만 있는 필드 — 없으면 None
+                "format": g.get("format"), "evidence_kind": g.get("evidence_kind"),
+                "must": g.get("must", []), "source_files": g["source_files"],
                 "ttft_s": done.get("ttft_s"), "total_s": done.get("total_s"),
                 "llm_ttft_s": done.get("llm_ttft_s"),
                 "retrieval_ms": done.get("timing", {}).get("total_ms"),
@@ -451,6 +455,7 @@ def main():
     p.add_argument("--exp", default="", help="실험 ID — results/ragas_golden/<ID>/ 에 저장(생략 시 기준선 폴더)")
     p.add_argument("--responses", default="", help="score 전용: 채점할 responses.json 경로(다른 실험 답변 재채점)")
     p.add_argument("--model", default="", help="collect 전용: 생성 모델 별칭(생략 시 config.DEFAULT_GEN_MODEL)")
+    p.add_argument("--golden", default="", help="collect 전용: 골든셋 jsonl 경로(생략 시 dataset/golden_dataset.jsonl)")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     return stage_collect(args) if args.stage == "collect" else stage_score(args)
