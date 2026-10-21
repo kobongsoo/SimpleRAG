@@ -55,6 +55,13 @@ HIDDEN = [
     "simplerag.generate.backend", "simplerag.retrieve.reranker",
 ]
 
+# 하위 모듈을 통째로 담을 패키지 — 구조화 추출기(docmodel)는 포맷별 파서를 함수 안에서
+# 필요할 때 가져온다(extract._parser_for). 하나라도 빠지면 그 포맷만 조용히 legacy 로
+# 폴백해 겉으로는 동작하는 것처럼 보이므로, 통째로 담아 빠질 여지를 없앤다.
+COLLECT_SUBMODULES = [
+    "simplerag.docmodel",
+]
+
 
 #------------------------------------------------------------------
 # 형제 프로젝트 src 경로 확인 (csoclassify 패키지가 들어 있는 곳)
@@ -97,6 +104,8 @@ def build(cso_src):
         cmd += ["--collect-all", pkg]
     for mod in HIDDEN:
         cmd += ["--hidden-import", mod]
+    for pkg in COLLECT_SUBMODULES:
+        cmd += ["--collect-submodules", pkg]
 
     # 진입점: CLI. src 를 paths 에 넣었으므로 simplerag 패키지가 잡힌다.
     cmd.append(os.path.join(SRC, "simplerag", "cli.py"))
