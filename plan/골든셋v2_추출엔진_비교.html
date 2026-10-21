@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>추출 엔진 비교 결과</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 800px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 46px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 22px; } li { margin: 4px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict > :first-child { margin-top: 0; } .verdict > :last-child { margin-bottom: 0; }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.note > :first-child { margin-top: 0; } .note > :last-child { margin-bottom: 0; }
+.good { background: var(--good-soft); border-left: 4px solid var(--good); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.good > :first-child { margin-top: 0; } .good > :last-child { margin-bottom: 0; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 600px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 11px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.n { font-family: var(--mono); text-align: right; white-space: nowrap; }
+td.up { color: var(--good); font-weight: 600; } td.dn { color: var(--bad); font-weight: 600; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); } .t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-mut { background: var(--sunken); color: var(--muted); } .t-acc { background: var(--accent-soft); color: var(--accent); }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+@media (max-width: 720px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.kpi .lab { font-size: 12.5px; color: var(--muted); }
+.kpi .val { font-size: 24px; font-weight: 700; font-family: var(--mono); }
+.kpi .sub { font-size: 12.5px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 12.5px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · 실험 보고 · 구조화 추출 Phase 1</div>
+  <h1>골든셋 v2 — 추출 엔진(legacy · blocks) × 답변 모델(0.6B · 1.7B) 비교</h1>
+  <p class="lede">기존 골든셋은 정답 문서가 DOC·DOCX 뿐이라 구조화 추출의 효과를 잴 수 없었다. <code>sample</code> 폴더 46파일로
+  포맷을 고르게 섞은 150문항(골든셋 v2)을 새로 만들고, 같은 문서를 두 추출 엔진으로 따로 색인해 검색·답변을 비교했다.</p>
+  <div class="meta">측정 2026-10-21 · 선행: <a href="구조화추출_청킹_재설계서.html">구조화 추출 재설계서</a> ·
+  원자료: <code>results/ragas_golden/g2_*</code> · 골든셋: <code>dataset/golden_v2.jsonl</code></div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결론</a></li>
+    <li><a href="#s2">실험 조건</a></li>
+    <li><a href="#s3">골든셋 v2</a></li>
+    <li><a href="#s4">검색 결과</a></li>
+    <li><a href="#s5">답변 결과 (0.6B · 1.7B)</a></li>
+    <li><a href="#s6">RAGAS 4지표</a></li>
+    <li><a href="#s7">포맷별 결과</a></li>
+    <li><a href="#s8">사례 — 왜 좋아지고 나빠졌나</a></li>
+    <li><a href="#s9">속도</a></li>
+    <li><a href="#s10">해석상 주의</a></li>
+    <li><a href="#s11">다음 단계</a></li>
+    <li><a href="#s12">추가 측정 — XLSX 옆 표 나누기 (blocks v2)</a></li>
+    <li><a href="#s13">Phase 2 — DOC·PDF 블록화 (blocks v4)</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="kpis">
+    <div class="kpi"><div class="lab">정답 문서 검색</div><div class="val">145→149</div><div class="sub">+4 / −0 (p=0.12)</div></div>
+    <div class="kpi"><div class="lab">정답 근거가 청크에 포함</div><div class="val">93→99</div><div class="sub">+8 / −2 (p=0.11)</div></div>
+    <div class="kpi"><div class="lab">핵심어 정답 · 1.7B</div><div class="val">67→77</div><div class="sub">+14 / −4 (<b>p=0.03</b>)</div></div>
+    <div class="kpi"><div class="lab">핵심어 정답 · 0.6B</div><div class="val">59→58</div><div class="sub">+7 / −8 (p=1.00)</div></div>
+  </div>
+  <div class="good">
+    <p><b>갱신 (2026-10-21 오후, §12)</b> — 유일한 후퇴였던 XLSX 옆 표 문제를 고친 blocks v2 로 다시 쟀다(규칙 지표만, RAGAS 생략).
+    legacy 대비 <b>근거 포함 93→100 (+8/−1, p=0.04)</b>, <b>1.7B 핵심어 정답 67→79 (+16/−4, p=0.01)</b> — 검색·답변 모두 유의하게 개선됐다.
+    아래 표들은 첫 측정(blocks v1) 기준이다.</p>
+  </div>
+  <div class="verdict">
+    <p><strong>blocks 엔진은 검색을 개선하고, 그 개선은 답변 모델이 충분히 클 때(1.7B) 답변 정답으로 이어진다.</strong></p>
+    <ul>
+      <li>검색 — 정답 문서·정답 근거 모두 blocks 가 더 많이 찾았다(방향 일관, 단독으로는 유의 경계 밖).</li>
+      <li>1.7B 답변 — 핵심어 정답 150문항 중 <b>+10(67→77), McNemar p=0.03</b>. 이번 실험에서 유일하게 통계적으로 유의한 차이다.</li>
+      <li>0.6B 답변 — 차이 없음. 근거를 더 잘 줘도 0.6B 가 답을 제대로 못 써 효과가 묻힌다(두 엔진 모두 약 39%).</li>
+      <li>RAGAS 4지표 — 평균은 모두 blocks 쪽이 같거나 조금 높지만 짝 비교 95% 구간이 모두 0 을 포함한다(판정 잡음 범위).</li>
+      <li>가장 큰 개선은 <b>PPTX</b>(근거 9→13, 1.7B 정답 5→9), 유일한 후퇴는 <b>표 여러 개가 옆으로 붙은 XLSX 시트</b>(§8).</li>
+    </ul>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>실험 조건</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>값</th></tr></thead>
+    <tbody>
+      <tr><td>문서</td><td><code>sample</code> 46파일 (하위폴더 포함) — 두 엔진이 같은 파일을 각자 색인</td></tr>
+      <tr><td>인덱스</td><td>legacy 4,029청크 · blocks 4,299청크. 운영 인덱스와 분리된 임시 데이터 폴더(<code>SIMPLERAG_HOME</code>)</td></tr>
+      <tr><td>blocks 엔진 적용 범위</td><td>구조 파서가 있는 DOCX·PPTX·XLSX·HWPX(+HTML·MD·IPYNB). <b>DOC·PDF·HWP·TXT 는 두 엔진 모두 같은 기존 추출 경로</b>(Phase 1 범위 밖)</td></tr>
+      <tr><td>검색·생성 설정</td><td>운영 <code>config.yaml</code> 그대로 — 128토큰 청크, dense 10 + BM25 10, 리랭커 풀 10 → 근거 3건, 답변 상한 200토큰</td></tr>
+      <tr><td>답변 모델</td><td>qwen3-0.6b-q4(운영 기본·빠름) · qwen3-1.7b-q4(정밀) — 노트북 iGPU(Iris Xe, Vulkan). 설정 파일은 바꾸지 않고 실험 옵션으로만 교체</td></tr>
+      <tr><td>판정</td><td>원격 GPU 서버 <code>10.10.19.50:18001</code> qwen3.6-35b-a3b(vLLM) · 임베딩 <code>:18002</code> qwen3-embedding:8b. F·AR·CR thinking 끔, CP thinking 켬(기존 §36 과 같은 방식)</td></tr>
+      <tr><td>근거 동일성</td><td>같은 엔진에서 0.6B·1.7B 의 근거 3건이 150/150 문항 완전히 같음을 확인 → CP·CR(근거만 보는 지표)은 0.6B 채점값을 1.7B 에도 쓴다</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>골든셋 v2 (150문항)</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>포맷</th><th>문항</th><th>blocks 경로</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>DOC</td><td class="n">15</td><td><span class="tag t-mut">기존</span></td><td>기존 골든셋에서 재사용</td></tr>
+      <tr><td>DOCX</td><td class="n">15</td><td><span class="tag t-acc">구조 파서</span></td><td>기존 골든셋에서 재사용</td></tr>
+      <tr><td>PDF</td><td class="n">40</td><td><span class="tag t-mut">기존</span></td><td>청탁금지법 해설집·상담사례집, ISMS 지침 2종, ISM 매뉴얼, OWASP</td></tr>
+      <tr><td>HWP</td><td class="n">25</td><td><span class="tag t-mut">기존</span></td><td>ISMP 제안요청서, 표준 취업규칙, 개인정보보호법 보도자료, 안랩 매뉴얼</td></tr>
+      <tr><td>HWPX</td><td class="n">15</td><td><span class="tag t-acc">구조 파서</span></td><td>개인정보 보도자료 2종, ICT R&amp;D 신청서</td></tr>
+      <tr><td>PPTX</td><td class="n">18</td><td><span class="tag t-acc">구조 파서</span></td><td>청탁금지법 교육자료, 개발 보안 교육자료 2종</td></tr>
+      <tr><td>XLSX</td><td class="n">12</td><td><span class="tag t-acc">구조 파서</span></td><td>안전점검표, MCCS 테스트 시나리오, 저작물 분류표</td></tr>
+      <tr><td>TXT</td><td class="n">10</td><td><span class="tag t-mut">기존</span></td><td>하위폴더 뉴스·용어 설명</td></tr>
+    </tbody>
+  </table></div>
+  <p>근거 종류: 본문 80 · <b>표 39</b> · 목록 17 · 슬라이드 12 · 노트 2. 유형: 단일 86 · 다중 38 · 절차 26.
+  서브에이전트 4개가 주제가 겹치는 문서끼리 묶어 전문을 읽고 작성했고, 발췌문이 원문에 글자 그대로 있는지·핵심어가 정답과 발췌문
+  양쪽에 있는지 기계 검증을 통과한 것만 넣었다(150문항 실패 0). 상세는 <code>dataset/README.md</code> 의 v2 절.</p>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>검색 결과 (답변 모델과 무관)</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>지표</th><th>legacy</th><th>blocks</th><th>blocks만 / legacy만</th><th>p</th></tr></thead>
+    <tbody>
+      <tr><td>정답 문서가 근거 3건에 있음</td><td class="n">145</td><td class="n up">149</td><td class="n">+4 / −0</td><td class="n">0.12</td></tr>
+      <tr><td>정답 발췌문이 근거 청크에 실제로 들어 있음</td><td class="n">93</td><td class="n up">99</td><td class="n">+8 / −2</td><td class="n">0.11</td></tr>
+      <tr><td>Context Precision (RAGAS)</td><td class="n">0.747</td><td class="n">0.761</td><td colspan="2">차이 +0.018, 95% [−0.034, +0.071]</td></tr>
+      <tr><td>Context Recall (RAGAS)</td><td class="n">0.713</td><td class="n">0.740</td><td colspan="2">차이 +0.027, 95% [−0.010, +0.064]</td></tr>
+    </tbody>
+  </table></div>
+  <p>네 지표가 모두 같은 방향(blocks 우세)이지만 각각은 유의 경계 밖이다. '근거 포함'은 정답 발췌문(공백·표 구분자 무시)이
+  sLLM 에 들어간 청크 안에 있는지를 본다 — 문서만 맞히고 엉뚱한 부분을 가져온 경우를 걸러 낸다.</p>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>답변 결과 — 핵심어 정답 (엔진 × 모델)</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>답변 모델</th><th>legacy</th><th>blocks</th><th>blocks만 / legacy만</th><th>McNemar p</th></tr></thead>
+    <tbody>
+      <tr><td>qwen3-0.6b-q4 (운영 기본)</td><td class="n">59 (39%)</td><td class="n">58 (39%)</td><td class="n">+7 / −8</td><td class="n">1.00</td></tr>
+      <tr><td><b>qwen3-1.7b-q4</b></td><td class="n">67 (45%)</td><td class="n up">77 (51%)</td><td class="n">+14 / −4</td><td class="n up">0.03</td></tr>
+    </tbody>
+  </table></div>
+  <p>핵심어 정답 = 답변에 그 문항의 must 핵심어(금액·기간·명칭 등 1~3개)가 모두 들어 있음. 판정 LLM 없이 매기므로 판정 잡음이 없다.</p>
+  <div class="good">
+    <p><b>왜 0.6B 에서는 안 보이고 1.7B 에서 보이나</b> — 검색이 같아도(근거 150/150 동일) 0.6B 는 같은 근거에서 답이 흔들려
+    양쪽이 서로 엇갈려 맞히는 문항(+7/−8)이 많다. 1.7B 는 받은 근거를 더 충실히 옮겨, 검색 개선분이 정답 증가로 거의 그대로 이어졌다
+    (순증 +10 = PPTX +4, DOC +2, DOCX·HWP·HWPX·XLSX 각 +1, PDF·TXT 0).</p>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>RAGAS 4지표</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>실행</th><th>Faithfulness</th><th>Answer Relevancy</th><th>Context Precision</th><th>Context Recall</th></tr></thead>
+    <tbody>
+      <tr><td>0.6B · legacy</td><td class="n">0.721</td><td class="n">0.693</td><td class="n">0.747</td><td class="n">0.713</td></tr>
+      <tr><td>0.6B · blocks</td><td class="n">0.719</td><td class="n">0.704</td><td class="n">0.761</td><td class="n">0.740</td></tr>
+      <tr><td>1.7B · legacy</td><td class="n">0.713</td><td class="n">0.720</td><td class="n">= 0.747</td><td class="n">= 0.713</td></tr>
+      <tr><td>1.7B · blocks</td><td class="n">0.717</td><td class="n">0.732</td><td class="n">= 0.761</td><td class="n">= 0.740</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>짝 비교 (blocks − legacy)</th><th>평균 차이</th><th>95% 구간</th><th>n</th></tr></thead>
+    <tbody>
+      <tr><td>0.6B Faithfulness</td><td class="n">+0.011</td><td class="n">[−0.047, +0.068]</td><td class="n">128</td></tr>
+      <tr><td>1.7B Faithfulness</td><td class="n">−0.009</td><td class="n">[−0.054, +0.035]</td><td class="n">128</td></tr>
+      <tr><td>0.6B Answer Relevancy</td><td class="n">+0.010</td><td class="n">[−0.006, +0.026]</td><td class="n">139</td></tr>
+      <tr><td>1.7B Answer Relevancy</td><td class="n">+0.011</td><td class="n">[−0.004, +0.026]</td><td class="n">135</td></tr>
+      <tr><td>Context Precision</td><td class="n">+0.018</td><td class="n">[−0.034, +0.071]</td><td class="n">149</td></tr>
+      <tr><td>Context Recall</td><td class="n">+0.027</td><td class="n">[−0.010, +0.064]</td><td class="n">150</td></tr>
+    </tbody>
+  </table></div>
+  <p>모두 구간이 0 을 포함한다. n 이 150 보다 작은 것은 판정 LLM 이 형식을 어겨 점수가 빈 문항을 양쪽 모두 점수가 있는 문항으로만
+  짝지었기 때문이다. Faithfulness 는 '답이 근거에 충실한가'라 정답 여부와 다르다 — 핵심어 정답이 오른 1.7B 에서도 평평한 이유다.</p>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>포맷별 결과</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>포맷 (n)</th><th>경로</th><th>문서 적중</th><th>근거 포함</th><th>정답 0.6B</th><th>정답 1.7B</th><th>CP</th><th>CR</th></tr></thead>
+    <tbody>
+      <tr><td><b>PPTX</b> (18)</td><td><span class="tag t-acc">파서</span></td><td class="n">18→18</td><td class="n up">9→13</td><td class="n">7→7</td><td class="n up">5→9</td><td class="n">0.69→0.68</td><td class="n up">0.64→0.78</td></tr>
+      <tr><td>DOCX (15)</td><td><span class="tag t-acc">파서</span></td><td class="n">15→15</td><td class="n">12→12</td><td class="n">6→7</td><td class="n">7→8</td><td class="n">0.84→0.90</td><td class="n">0.87→0.93</td></tr>
+      <tr><td>HWPX (15)</td><td><span class="tag t-acc">파서</span></td><td class="n">15→15</td><td class="n">8→9</td><td class="n">6→5</td><td class="n">7→8</td><td class="n">0.78→0.77</td><td class="n">0.70→0.70</td></tr>
+      <tr><td><b>XLSX</b> (12)</td><td><span class="tag t-acc">파서</span></td><td class="n up">10→12</td><td class="n">6→6 (+2/−2)</td><td class="n dn">3→2</td><td class="n">5→6</td><td class="n dn">0.68→0.55</td><td class="n">0.62→0.58</td></tr>
+      <tr><td>DOC (15)</td><td><span class="tag t-mut">기존</span></td><td class="n">14→15</td><td class="n">11→12</td><td class="n">8→9</td><td class="n">9→11</td><td class="n">0.63→0.80</td><td class="n">0.77→0.83</td></tr>
+      <tr><td>HWP (25)</td><td><span class="tag t-mut">기존</span></td><td class="n">24→25</td><td class="n">21→21</td><td class="n">10→10</td><td class="n">13→14</td><td class="n">0.82→0.83</td><td class="n">0.78→0.78</td></tr>
+      <tr><td>PDF (40)</td><td><span class="tag t-mut">기존</span></td><td class="n">39→39</td><td class="n">18→18</td><td class="n">14→13</td><td class="n">16→16</td><td class="n">0.74→0.76</td><td class="n">0.61→0.61</td></tr>
+      <tr><td>TXT (10)</td><td><span class="tag t-mut">기존</span></td><td class="n">10→10</td><td class="n">8→8</td><td class="n">5→5</td><td class="n">5→5</td><td class="n">0.80→0.80</td><td class="n">0.90→0.90</td></tr>
+    </tbody>
+  </table></div>
+  <p>'기존' 포맷(DOC·HWP·PDF·TXT)은 두 엔진의 추출이 같다. 그래도 값이 조금 움직이는 것은 <b>같은 인덱스 안의 다른 문서 청크가
+  바뀌어</b> 검색 점수 분포가 달라졌기 때문과 판정 잡음이다. 예: DOC 문서 적중 +1(h012)은 legacy 인덱스에서 리랭커 점수가 관련 근거
+  문턱(RelevanceMin)을 넘지 못해 근거를 하나도 내지 않았던 문항이다 — 경쟁 청크 구성이 바뀌며 blocks 인덱스에서는 문턱을 넘었다.
+  포맷별 n 이 작아 포맷 단위 차이는 모두 유의하지 않다 — 방향만 본다.</p>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>사례 — 왜 좋아지고 나빠졌나</h2>
+  <h3>개선 ① PPTX — 슬라이드 경로가 바로잡혔다</h3>
+  <p>legacy 는 슬라이드 구분 없이 평문을 받은 뒤 번호절 정규식으로 제목을 추측한다. 청탁금지법 교육자료에서는 8번 슬라이드의
+  <code>8. 위반 시 제재사항</code> 이 제목으로 잡힌 뒤 <b>뒤의 40여 장 슬라이드 전체가 그 절</b>에 묶였다. blocks 는 슬라이드마다 절을 연다.</p>
+  <pre>질문 h127: 공무원 부친상에 회사 명의 15만원 조화 + 개인 명의 조의금 10만원은?
+legacy 1위 근거: [37_김영란법_2016.09.28 교육자료 > 8. 위반 시 제재사항] . Q. 공무원 부친상에 …   ← 엉뚱한 경로, 정답 문단 일부만
+blocks 1위 근거: [37_김영란법_2016.09.28 교육자료 > 슬라이드 40] A. 10만원까지만 허용되는 '경조사비'에는 …</pre>
+  <h3>개선 ② XLSX·HWPX 표 — 행이 머리글·번호와 함께 온전히 온다</h3>
+  <pre>질문 h133: MCCS 이중화 테스트에서 UTP 케이블 연결 상태가 정상인 조건은?
+legacy: [MCCS 이중화 테스트 시나리오] 위치에 연결된 UTP 케이블이 있는지 확인 | 다음 조건을 …   ← 행 중간부터 잘림
+blocks: [MCCS 이중화 테스트 시나리오 > MCCS 테스트 시나리오] | 4 | 이중화 서버 네트워크 포트 UTP 케이블 연결 상태 | …</pre>
+  <h3>후퇴 — 한 시트에 표 여러 개가 옆으로 붙은 XLSX</h3>
+  <p><code>저작물분류표.xlsx</code> 는 한 시트에 분류표 3~4개가 좌우로 나란히 있다. blocks 는 시트를 하나의 넓은 표로 읽어
+  <code>| no. | 권리분류 | 대분류 | 대분류 | 중분류 | no. | 소분류 | …</code> 같은 <b>뒤섞인 머리글</b>을 조각마다 다시 붙였고,
+  그 잡음 때문에 근거 2문항을 놓쳤다(legacy 는 같은 2문항을 맞힘). XLSX 의 CP 0.68→0.55 하락의 주원인이다.</p>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>속도 (TTFT — 질문부터 첫 글자까지)</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>실행</th><th>중앙값</th><th>p90</th><th>3초 이내</th></tr></thead>
+    <tbody>
+      <tr><td>0.6B · legacy</td><td class="n">2.60초</td><td class="n">3.49초</td><td class="n">75%</td></tr>
+      <tr><td>0.6B · blocks</td><td class="n">2.72초</td><td class="n">3.23초</td><td class="n">81%</td></tr>
+      <tr><td>1.7B · legacy</td><td class="n">2.88초</td><td class="n">3.75초</td><td class="n">57%</td></tr>
+      <tr><td>1.7B · blocks</td><td class="n">3.02초</td><td class="n">4.44초</td><td class="n">48%</td></tr>
+    </tbody>
+  </table></div>
+  <p>근거 글자 수 중앙값이 611자(legacy)·603자(blocks)로 거의 같아 엔진 차이로 볼 근거는 약하다. 1.7B·blocks 의 p90 +0.7초는
+  한 번 측정이라 잡음일 수 있으나, 접두 경로가 길어진 영향인지 반복 측정으로 확인할 필요가 있다.</p>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>해석상 주의</h2>
+  <ul>
+    <li><b>한 번 측정</b> — 각 조합을 한 번씩 돌렸다. 0.6B 의 엇갈림(+7/−8)이 보여 주듯 생성 잡음이 작지 않다.</li>
+    <li><b>문항 작성자</b> — 사람이 아니라 에이전트가 작성·기계 검증했다. 결과가 이상하면 문항부터 의심한다.</li>
+    <li><b>표본 크기</b> — blocks 경로가 실제로 다른 문항은 DOCX·PPTX·XLSX·HWPX 60문항뿐이다. 나머지 90문항은 같은 추출이라 차이가 희석된다.</li>
+    <li><b>핵심어 정답의 한계</b> — 핵심어가 들어 있으면 맞힘으로 본다. 표현이 달라 핵심어를 피해 간 정답은 오답이 된다(양쪽 엔진에 같게 작용).</li>
+    <li><b>RAGAS 결측</b> — 판정 형식 오류로 F 는 132~143/150, AR 은 139~146/150 만 유효했다.</li>
+  </ul>
+</section>
+
+<section id="s11">
+  <h2><span class="no">11</span>다음 단계</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>순서</th><th>할 일</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1</td><td><s>XLSX 옆으로 붙은 표 분리</s> — <b>완료(§12)</b></td><td>이번 유일한 후퇴(§8)</td></tr>
+      <tr><td class="n">2</td><td><b>Phase 2 — DOC 블록화 + 스타일 번호 스파이크</b>, PDF 쪽 경계·머리말·목차</td><td>DOC·PDF 55문항이 아직 기존 경로. 골든셋 v1 의 58% 가 DOC</td></tr>
+      <tr><td class="n">3</td><td>blocks 엔진을 기본값으로 바꿀지 결정 — 1·2 반영 후 v2 로 다시 재서 판단</td><td>지금도 1.7B 기준 유의한 개선, 0.6B 기준 손해 없음</td></tr>
+      <tr><td class="n">4</td><td>TTFT 반복 측정(1.7B·blocks p90)</td><td>§9 — §12 재측정에서 같은 조건 TTFT 가 ±0.7초 흔들려 잡음으로 보인다</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s12">
+  <h2><span class="no">12</span>추가 측정 — XLSX 옆 표 나누기 (blocks v2)</h2>
+  <h3>바꾼 것</h3>
+  <ul>
+    <li><b>시트 안 표 나누기</b>(<code>docmodel/ooxml_xlsx.py _sheet_tables</code>) — 모든 행이 빈 열을 경계로 시트를 여러 표로 나눈다.
+      2열 미만 구간(여백·주석 칸)은 이웃 표에 붙여 한 표가 여백 열 하나 때문에 쪼개지지 않게 했다.
+      <code>저작물분류표.xlsx</code> 는 한 시트 → 표 15개로 나뉘고 표마다 제 머리글(<code>| no. | 권리분류 | 대분류 |</code>,
+      <code>| 대분류 | 중분류 | no. | 소분류 | 세분류 |</code> …)을 갖는다. 빈 열이 없는 안전점검표·MCCS 시트는 그대로 한 표다.</li>
+    <li><b>표 머리글이 조각 끝에 홀로 남지 않게</b>(<code>chunk._pack_units</code>) — 다음 표의 머리글 줄이 첫 행과 함께 들어갈 자리가 없으면
+      조각을 먼저 끊는다(이전엔 머리글 한 줄이 앞 조각 끝에 붙고 다음 조각에도 다시 붙어 두 번 들어갔다).</li>
+    <li>회귀 테스트 <code>bench/test_docmodel.py</code> 68/68 통과(새 검사 5개 포함), <code>BLOCKS_VERSION</code> 1→2, blocks 인덱스 4,299 → 4,198청크.</li>
+  </ul>
+  <h3>결과 (legacy 대비, 규칙 지표 — RAGAS 채점은 생략)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>지표</th><th>legacy</th><th>blocks v1</th><th>blocks v2</th><th>legacy → v2 (v2만 / legacy만)</th><th>p</th></tr></thead>
+    <tbody>
+      <tr><td>정답 문서 검색</td><td class="n">145</td><td class="n">149</td><td class="n">149</td><td class="n">+4 / −0</td><td class="n">0.12</td></tr>
+      <tr><td>정답 근거가 청크에 포함</td><td class="n">93</td><td class="n">99</td><td class="n up">100</td><td class="n">+8 / −1</td><td class="n up">0.04</td></tr>
+      <tr><td>핵심어 정답 · 0.6B</td><td class="n">59</td><td class="n">58</td><td class="n">58</td><td class="n">+7 / −8</td><td class="n">1.00</td></tr>
+      <tr><td>핵심어 정답 · 1.7B</td><td class="n">67</td><td class="n">77</td><td class="n up">79</td><td class="n">+16 / −4</td><td class="n up">0.01</td></tr>
+      <tr><td>XLSX 근거 포함 (12문항)</td><td class="n">6</td><td class="n">6</td><td class="n">7</td><td class="n">+2 / −1</td><td class="n">1.00</td></tr>
+      <tr><td>XLSX 정답 · 1.7B (12문항)</td><td class="n">5</td><td class="n">6</td><td class="n up">8</td><td class="n">+5 / −2</td><td class="n">0.45</td></tr>
+    </tbody>
+  </table></div>
+  <p>저작물분류표 6문항 중 v1 에서 놓쳤던 '제어프로그램(OS)' 문항(h139)의 근거가 돌아왔고, '저작인접권 대분류'(h137)·'실연 중분류'(h140)는
+  1.7B 정답으로 바뀌었다. v1→v2 사이 근거가 달라진 다른 문항은 DOCX 1건(+)·PPTX 1건(−)으로, 인덱스 구성 변화에 따른 순위 흔들림으로 보인다.</p>
+  <div class="note">
+    <p><b>TTFT 는 이번 측정에서 크게 흔들렸다</b> — 같은 0.6B 가 2.72초(v1) → 1.98초(v2), 1.7B 가 3.02초 → 3.38초. 근거 길이는 거의 같으므로
+    추출 엔진보다 노트북 상태(발열·백그라운드 작업)의 영향이다. §9 의 1.7B·blocks p90 +0.7초도 같은 잡음으로 본다 — 속도 비교는 반복 측정이 필요하다.</p>
+  </div>
+  <p class="meta">원자료: <code>results/ragas_golden/g2_blocks_v2</code> · <code>g2_blocks_v2_17</code>, 비교 JSON <code>g2_legacy_vs_g2_blocks_v2.json</code> · <code>g2_legacy_17_vs_g2_blocks_v2_17.json</code></p>
+</section>
+
+<section id="s13">
+  <h2><span class="no">13</span>Phase 2 — DOC·PDF 블록화 (blocks v4, 2026-10-21~22)</h2>
+  <h3>바꾼 것</h3>
+  <ul>
+    <li><b>DOC</b>(<code>docmodel/doc_bin.py</code>) — Word 97 바이너리를 직접 읽는다: piece table · 문단 속성(PAPX: 스타일 번호·표 안·행 끝·목록·개요 수준)
+      · 스타일 시트(STSH) · 본문/각주/머리말/글상자 영역. 필드는 <b>명령문을 버리고 결과만</b> 남긴다(기존 경로는 <code>TOC \o …</code> 같은 명령까지 본문에 남겼다).
+      DOC 표의 '눕힌 행'(한 칸에 여러 행을 줄바꿈으로 넣은 표)은 기존 <code>normalize_tables</code> 규칙으로 펼친다.</li>
+    <li><b>스타일 번호 스파이크</b> — 동작은 하지만 sample DOC 9개 모두 제목 스타일이 <b>정의조차 없다</b>(전부 <code>표준</code>·<code>바탕글</code>, 한글 변환 문서로 보임).
+      이 코퍼스에서 DOC 제목은 계속 정규식 폴백이 잡는다.</li>
+    <li><b>PDF</b>(<code>docmodel/pdf.py</code>) — 쪽마다 줄 블록 + 쪽 번호(payload page_from/to) · 쪽번호 줄 표시 · 같은 가장자리에 3쪽 이상 되풀이되는 줄을
+      머리말/꼬리말로 표시(처음 1개는 본문에 남김, 60자 이하·숫자 뺀 글자 4자 이상만 후보) · 목차는 공통 후처리. 텍스트층이 없으면 기존 추출로.
+      해설집 머리말 275줄, 상담사례집 169줄·목차 158줄 등이 청크에서 빠진다.</li>
+    <li>회귀 테스트 77/77, 블록 경로 문서 전부 낱말 덮음 0.98 이상(빠진 낱말은 DOC 필드 명령어뿐). <code>BLOCKS_VERSION</code> 4.</li>
+  </ul>
+  <h3>결과 (규칙 지표 · legacy 대비)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>지표</th><th>legacy</th><th>blocks v2</th><th>blocks v4</th><th>legacy → v4 (v4만 / legacy만)</th><th>p</th></tr></thead>
+    <tbody>
+      <tr><td>정답 문서 검색</td><td class="n">145</td><td class="n">149</td><td class="n">149</td><td class="n">+5 / −1</td><td class="n">0.22</td></tr>
+      <tr><td>정답 근거가 청크에 포함</td><td class="n">93</td><td class="n">100</td><td class="n up">101</td><td class="n">+13 / −5</td><td class="n">0.10</td></tr>
+      <tr><td>핵심어 정답 · 0.6B</td><td class="n">59</td><td class="n">58</td><td class="n">57</td><td class="n">+10 / −12</td><td class="n">0.83</td></tr>
+      <tr><td>핵심어 정답 · 1.7B</td><td class="n">67</td><td class="n">79</td><td class="n up">80</td><td class="n">+23 / −10</td><td class="n up">0.04</td></tr>
+      <tr><td>PDF 근거 포함 (40문항)</td><td class="n">18</td><td class="n">18</td><td class="n up">21</td><td class="n">+6 / −3</td><td class="n">0.51</td></tr>
+      <tr><td>PDF 정답 · 1.7B (40문항)</td><td class="n">16</td><td class="n">16</td><td class="n up">18</td><td class="n">+6 / −4</td><td class="n">0.75</td></tr>
+      <tr><td>DOC 정답 · 1.7B (15문항)</td><td class="n">9</td><td class="n">11</td><td class="n">11</td><td class="n">+3 / −1</td><td class="n">0.62</td></tr>
+    </tbody>
+  </table></div>
+  <p>v2→v4 에서 바뀐 것은 DOC·PDF 경로뿐이다. PDF 는 근거·정답이 함께 올랐고(머리말·목차 제거 효과), DOC 는 v2 와 같은 수준을 유지했다
+  (중간 버전 v3 은 눕힌 행을 펼치지 못해 경조사 표 문항을 잃었다 → v4 에서 복구).</p>
+  <div class="note">
+    <p><b>관련 근거 문턱(−6) 경계 문항</b> — h010(출장 인정 거리 50km)은 v4 에서 정답 청크가 1위로 올라왔지만 리랭커 점수 −6.27 로 문턱에 0.27 모자라
+    "근거 없음"이 됐다. v2 에서 맞힌 것은 엉뚱한 청크(−4.74)가 문턱을 넘겨 정답 청크(2위)를 끌고 들어온 덕분이었다. 리랭커가 모든 후보에 낮은 점수를 주는
+    질문은 문턱 근처에서 결과가 뒤집히므로, 엔진 비교에서 ±1 문항은 이 잡음으로 본다. 문턱 조정은 별도 과제다.</p>
+  </div>
+  <div class="note">
+    <p><b>RAGAS 채점 보류</b> — 2026-10-21 18:26 에 시작한 v4 채점이 판정 서버(<code>10.10.19.50:18001</code>, vLLM)가 멈춰 진행되지 않았다
+    (처리 중 요청 14건에서 생성 토큰 수가 늘지 않음, 짧은 요청도 60초 무응답). 로컬 채점 프로세스는 정리했다.
+    <b>2026-10-22 결정: v4 RAGAS 채점은 보류</b> — Phase 2 판단은 위 규칙 지표로 한다. 다시 잴 때는
+    <code>bench/ragas_golden.py score --exp g2_blocks_v4 …</code> (1.7B 는 <code>g2_blocks_v4_17</code>, F·AR 만).</p>
+  </div>
+  <p class="meta">원자료: <code>results/ragas_golden/g2_blocks_v4</code> · <code>g2_blocks_v4_17</code> (근거 150/150 동일), 비교 JSON <code>g2_legacy_vs_g2_blocks_v4.json</code> · <code>g2_legacy_17_vs_g2_blocks_v4_17.json</code></p>
+</section>
+
+<footer>
+  재현: 두 엔진 인덱스를 <code>SIMPLERAG_HOME</code> 으로 분리해 <code>index --dir sample --rebuild</code> →
+  <code>bench/ragas_golden.py collect --golden dataset/golden_v2.jsonl --exp g2_&lt;engine&gt;[_17] [--model qwen3-1.7b-q4]</code> →
+  <code>score</code> → <code>bench/golden_v2_compare.py g2_legacy g2_blocks</code>.
+  원자료 <code>results/ragas_golden/g2_legacy · g2_blocks · g2_legacy_17 · g2_blocks_17</code>, 비교 JSON <code>…/g2_legacy_vs_g2_blocks.json</code>.
+</footer>
+
+</div>
+</body>
+</html>

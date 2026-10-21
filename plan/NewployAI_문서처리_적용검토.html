@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NewployAI 문서처리 적용 검토</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+.gap { color: var(--bad); font-weight: 600; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.prio { font-family: var(--mono); font-weight: 600; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · 검토 문서 (구현 없음)</div>
+  <h1>NewployAI 문서처리 방식 — SimpleRAG 텍스트 추출 적용 검토</h1>
+  <p class="lede">MpowerClassify 의 <code>NewployAI-종합보고서-20261020.html</code> 에 정리된 문서 처리 흐름·청킹·OCR 파이프라인을
+  SimpleRAG 의 현재 추출·청킹 코드(<code>extract.py</code> · <code>structure.py</code> · <code>chunk.py</code> · <code>tableflat.py</code> · <code>index/indexer.py</code>)와
+  하나씩 맞대어, 가져올 것과 가져오지 않을 것을 가렸다.</p>
+  <div class="meta">작성 2026-10-20 · 대상: SimpleRAG master (6a45b9c 기준 + 작업 중 변경) · 근거: 보고서 본문 + 소스 코드 열람</div>
+  <div class="verdict" style="margin-top:16px"><p style="margin:0"><strong>후속:</strong> 이 검토를 바탕으로 '추출 결과를 블록 목록으로 받아 청킹하는' 방향의 재설계를 별도 문서로 정리했다 —
+  <a href="구조화추출_청킹_재설계서.html">구조화 추출(블록 모델) 기반 청킹 재설계서</a>. 추출기는 MpowerClassify 와 공유하지 않고 SimpleRAG 전용으로 새로 만든다.</p></div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결론 요약</a></li>
+    <li><a href="#s2">두 시스템의 문서 처리 흐름 비교</a></li>
+    <li><a href="#s3">항목별 검토</a></li>
+    <li><a href="#s4">OCR 파이프라인 도입 검토</a></li>
+    <li><a href="#s5">가져오지 않을 것</a></li>
+    <li><a href="#s6">적용 우선순위와 순서</a></li>
+    <li><a href="#s7">착수 전 측정 항목</a></li>
+    <li><a href="#s8">위험과 제약</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>결론 요약</h2>
+  <div class="verdict">
+    <p style="margin-top:0"><strong>OCR 엔진이 아니라, Newploy 가 텍스트를 '페이지·영역 목록'으로 다루는 방식이 SimpleRAG 에 바로 쓸모 있다.</strong></p>
+    <p style="margin-bottom:0">SimpleRAG 는 추출 결과를 한 덩어리 문자열로 받는다. 그래서 PDF 의 쪽 경계가 <code>"\n".join(parts)</code> 에서 사라지고,
+    머리말·쪽번호·목차 같은 잡음이 본문과 섞인 채 청킹된다. Newploy 의 핵심 아이디어인 <em>쪽 보존 · 영역 종류로 잡음 구분 · 찾은 뒤 주변으로 확장</em>은
+    레이아웃 모델 없이 규칙만으로도 상당 부분 흉내 낼 수 있고, 비용이 낮다.</p>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Newploy 요소</th><th>판정</th><th>한 줄 이유</th></tr></thead>
+    <tbody>
+      <tr><td>쪽 단위 결과 보존 (document_result.json)</td><td><span class="tag t-good">적용 권장</span></td><td>출처 쪽번호 표시 · 쪽 경계 청킹 · 아래 두 항목의 전제</td></tr>
+      <tr><td>머리말·꼬리말·각주 영역 구분</td><td><span class="tag t-good">규칙으로 대체 적용</span></td><td>쪽마다 반복되는 줄 제거로 레이아웃 모델 없이 대부분 해결</td></tr>
+      <tr><td>목차(색인표) 페이지 문제</td><td><span class="tag t-good">적용 권장</span></td><td>Newploy 적중률 55%의 원인으로 지목됨 — 같은 함정을 미리 피한다</td></tr>
+      <tr><td>small-to-big (자식 300자로 찾고 → 부모 페이지 전체를 LLM 에)</td><td><span class="tag t-good">방식은 적용 · 부모 크기 조정</span></td><td>Parent-Child 자체는 맞다. 다만 SimpleRAG 생성 컨텍스트(2048)에 페이지 3장은 안 들어가므로 부모를 '절'로 줄인다</td></tr>
+      <tr><td>표 TSV 별도 청크</td><td><span class="tag t-acc">이미 대등 이상</span></td><td><code>normalize_tables</code> + 머리글 재부착 + <code>tableflat</code> 로 처리 중</td></tr>
+      <tr><td>구조 단위 청킹 (300자 누적, 겹침 없음)</td><td><span class="tag t-acc">이미 대등 이상</span></td><td>SimpleRAG 는 조문/번호절/마크다운/부속서 + 토큰 예산 + 필요한 곳만 겹침</td></tr>
+      <tr><td>PDF 표 구조 복원</td><td><span class="tag t-warn">측정 후 결정</span></td><td>pdfium 텍스트층은 표를 글자 나열로 흘린다. 영향 크기부터 재야 함</td></tr>
+      <tr><td>OCR 파이프라인 (레이아웃+검출+인식+표)</td><td><span class="tag t-warn">선택 기능 · 후순위</span></td><td>스캔 문서 비율이 낮으면 비용 대비 효과 없음. 하면 '스캔 쪽만' 선택 OCR</td></tr>
+      <tr><td>LLM 검색어 재작성 · LLM 맞춤법 보정</td><td><span class="tag t-bad">비채택</span></td><td>Newploy 에서도 10초 제한에 걸리는 병목. iGPU 환경에 부적합</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>두 시스템의 문서 처리 흐름 비교</h2>
+  <div class="flow">
+    <div class="card">
+      <h3>Newploy AI Desktop</h3>
+      <ol>
+        <li><b>입력 분기</b> — 텍스트층 PDF → 그대로(뷰어 모드) · HWPX/DOCX → 전용 파서 · 스캔/이미지 → OCR</li>
+        <li><b>추출</b> — 레이아웃(영역 20종) → 줄 검출 → 글자 인식 → 표 행·열 복원 → 맞춤법/LLM 보정</li>
+        <li><b>구조화 저장</b> — 페이지 → 영역 {type, bbox, text, source}</li>
+        <li><b>청킹</b> — 영역을 읽기 순서로 쌓아 300자 이상 또는 <b>페이지 변경 시</b> 끊음 · 표는 TSV 별도 · 겹침 없음</li>
+        <li><b>색인</b> — 키워드(FTS5) + e5-small 벡터, RRF 결합, 리랭커 없음</li>
+        <li><b>질의</b> — LLM 검색어 재작성 → 후보 64 → 문서당 4 → 최대 16 → <b>해당 페이지 전체로 확장</b></li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>SimpleRAG (현재)</h3>
+      <ol>
+        <li><b>입력 분기</b> — 포맷 감지(OLE 보정) → CSO 전용 파서 11종 · 실패 시 사이냅 폴백 · <span class="gap">스캔 PDF 는 "추출 텍스트 없음"으로 건너뜀</span></li>
+        <li><b>추출</b> — 텍스트층/파서 결과 문자열 · <span class="gap">PDF 쪽 경계는 <code>"\n".join</code> 으로 소실</span></li>
+        <li><b>정제</b> — 비문자·서로게이트 제거(<code>sanitize</code>) → Word 탭 표를 마크다운 표로(<code>normalize_tables</code>, 무손실 검사)</li>
+        <li><b>청킹</b> — 제목 문법 1종 + 부속서 표지로 절 분할 → 128토큰 예산 패킹 → 큰 절만 겹침 분할 · 표 머리글 재부착 · <code>[문서 &gt; 절]</code> 접두</li>
+        <li><b>색인</b> — e5 dense + BM25, 리랭커 있음 · payload 에 <code>chunk_idx</code> 있음, <span class="gap">쪽 정보 없음</span></li>
+        <li><b>질의</b> — 후보 10+10 → 리랭크 → 상위 3 · 관련 근거 문턱(RelevanceMin)</li>
+      </ol>
+    </div>
+  </div>
+  <p>정리하면 차이는 <b>2단계(추출)의 출력 형태</b>에 몰려 있다. Newploy 는 청킹이 '긴 문자열'이 아니라 '종류·쪽이 붙은 영역 목록'을 받는다.
+  SimpleRAG 의 청킹(4단계)은 이미 구조를 인식하지만, 그 구조를 <em>문자열에서 다시 추측</em>해야 한다. 쪽 경계처럼 추출기는 알고 있었는데
+  문자열로 합치면서 버린 정보가 있다는 점이 가장 큰 개선 여지다.</p>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>항목별 검토</h2>
+
+  <h3>3-1. 쪽 경계 보존 <span class="tag t-good">적용 권장 · P1</span></h3>
+  <div class="card">
+    <p style="margin-top:0"><b>현재</b> — MpowerClassify 의 <code>PdfiumExtractor.extract</code> 가 쪽마다 <code>get_text_range()</code> 로 읽은 뒤
+    <code>"\n".join(parts)</code> 로 합친다. 쪽 구분이 줄바꿈 하나와 구별되지 않는다.</p>
+    <p><b>Newploy 에서 배울 점</b> — 청크가 쪽을 넘지 않게 해서 출처 쪽을 정확히 남기고, 답변 아래 "참조 원문 N페이지"를 보여 준다.</p>
+    <p><b>적용 방안</b></p>
+    <ul>
+      <li>쪽 사이에 폼피드 <code>\f</code> 를 넣어 경계를 남긴다. 다만 <code>PdfiumExtractor</code> 는 MpowerClassify 분류 엔진과 공유하므로
+        <b>그쪽을 바꾸지 않고</b> SimpleRAG <code>extract.py</code> 에서 PDF 만 pypdfium2 로 직접 읽는 얇은 래퍼를 두는 편이 안전하다
+        (분류 쪽 회귀 위험 0, 상한 G5 로직은 복제 필요).</li>
+      <li>청킹은 <code>\f</code> 를 <b>절보다 약한 경계</b>로 다룬다: 절이 쪽을 넘어가면 그대로 잇되, 청크마다 시작 쪽·끝 쪽을 기록한다.
+        조문이 쪽을 넘는 경우가 흔해서, Newploy 처럼 '쪽이 바뀌면 무조건 끊기'를 하면 SimpleRAG 가 애써 지킨 조문 경계(설계서 결정3)가 다시 깨진다.</li>
+      <li>payload 에 <code>page_from</code>/<code>page_to</code> 를 추가 → RAGSearchBox 출처 표시에 쪽 번호.</li>
+      <li>HWP/DOCX 는 쪽 개념이 렌더링 의존이라 대상에서 뺀다(쪽 정보 없음 = 현행 유지).</li>
+    </ul>
+    <p style="margin-bottom:0"><b>비용</b> — 작음. <code>CHUNKER_VERSION</code> 을 올려 PDF 재색인이 필요하다.
+    Newploy 보고서의 "근거 쪽번호 1쪽 밀림 버그"를 교훈 삼아 0/1 기준을 처음부터 테스트로 고정한다.</p>
+  </div>
+
+  <h3>3-2. 머리말·꼬리말·쪽번호 제거 <span class="tag t-good">규칙으로 대체 · P1</span></h3>
+  <div class="card">
+    <p style="margin-top:0"><b>Newploy</b> — 레이아웃 모델이 영역을 '머리말·각주·쪽번호·도장' 등으로 분류하므로 잡음 영역을 따로 다룰 수 있다.</p>
+    <p><b>SimpleRAG</b> — 레이아웃 모델이 없다. 하지만 3-1 로 쪽 경계가 생기면 <b>여러 쪽에 똑같이 반복되는 첫·마지막 몇 줄</b>을 찾아 지울 수 있다.</p>
+    <pre>쪽 N 머리 2줄 / 꼬리 2줄 수집
+→ 숫자를 # 로 정규화 ("- 12 -" → "- # -", "회사규정 2024.3" 은 그대로)
+→ 전체 쪽의 50% 이상에서 반복되는 줄 = 머리말/꼬리말 → 제거</pre>
+    <p style="margin-bottom:0"><b>효과</b> — 128토큰 청크에서 "OO주식회사 내부용 · - 12 -" 같은 10~20토큰이 빠지면 본문 비중이 크게 오른다.
+    BM25 에서 문서명 단어가 모든 청크에 깔려 변별력을 떨어뜨리는 현상도 줄어든다. 제거 전·후 문자 수를 로그로 남기고, 문서의 일정 비율 이상을 지우면
+    원문으로 되돌리는 안전장치를 둔다(<code>normalize_tables</code> 의 무손실 검사와 같은 철학).</p>
+  </div>
+
+  <h3>3-3. 목차 페이지 문제 <span class="tag t-good">적용 권장 · P2</span></h3>
+  <div class="card">
+    <p style="margin-top:0">Newploy 보고서는 "색인표 페이지가 근거로 자주 끌려와 정답 페이지 적중률 약 55%"라고 적었다. 목차는 모든 절 제목을 한곳에 모아 두므로
+    BM25·dense 모두에서 점수가 높게 나오지만 답이 없다. SimpleRAG 도 같은 위험이 있다 — 특히 <code>structure.py</code> 의 번호절 문법이
+    목차 줄(<code>1.2 정의 ........ 3</code>)을 제목으로 잡아 목차가 짧은 절 수십 개로 쪼개질 수 있다.</p>
+    <p style="margin-bottom:0"><b>방안</b> — 점선/가운데점 리더 뒤 쪽번호로 끝나는 줄(<code>…{3,}\s*\d+$</code>)이 연속 N줄 이상이면 목차 블록으로 표시하고
+    ① 제목 문법 감지 대상에서 빼고 ② 청크로 만들지 않거나 별도 표식을 달아 검색에서 감점한다. 쪽 경계가 있으면 '목차 쪽' 단위로 판정할 수 있어 더 정확하다.</p>
+  </div>
+
+  <h3>3-4. small-to-big → Parent-Child (부모 = 절) <span class="tag t-good">방식 적용 · 부모 크기 조정 · P2</span></h3>
+  <div class="card">
+    <p style="margin-top:0"><b>Newploy 의 실제 구조</b> — 검색과 LLM 입력의 단위가 다르다.</p>
+    <div class="tbl" style="margin:8px 0 12px"><table style="min-width:520px">
+      <thead><tr><th></th><th>Newploy</th><th>SimpleRAG 현재</th></tr></thead>
+      <tbody>
+        <tr><td>자식 (검색 단위)</td><td>약 300<b>자</b> 영역 누적 청크</td><td rowspan="2">128토큰 구조 청크 하나가 <b>둘 다</b> 맡음</td></tr>
+        <tr><td>부모 (LLM 입력)</td><td>그 청크가 속한 <b>페이지 전체</b>(고정 크기 아님)</td></tr>
+        <tr><td>LLM 컨텍스트</td><td>4096토큰 (앱 설정)</td><td>2048토큰 (<code>config.GEN_N_CTX</code>)</td></tr>
+        <tr><td>그 대가</td><td>TTFT 13초(1.7B) / 28초(4B)</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>"작게 찾고 크게 읽힌다"는 방식 자체는 SimpleRAG 에도 맞다.</b> 작은 조각일수록 임베딩이 한 주제에 모여 질문과 정확히 맞고,
+    큰 조각일수록 LLM 이 앞뒤 문맥(무엇이 3만원인지, 어느 조문의 ①항인지)을 본다. 막는 것은 방식이 아니라 <b>부모 크기와 컨텍스트 예산</b>이다.</p>
+    <pre>생성 컨텍스트 2048
+ − 답변 자리   200  (generation.max_tokens)
+ − 지시문·질문 ~100
+ = 근거 자리 ~1,700토큰
+
+현재    : 128토큰 × 3       ≈   400토큰   여유
+페이지  : 수백~2천토큰 × 3  →  초과      gguf_generator 가 뒷부분을 잘라 냄
+절      : 128~400토큰 × 3   ≈ 400~1,200  들어감</pre>
+    <p>페이지 부모를 그대로 쓰려면 ① 컨텍스트를 4096 이상으로 키우거나(내장 GPU 에서 prefill 이 길어져 Newploy 와 같은 TTFT 비용)
+    ② 부모를 1개만 넣어야 한다(1위가 틀리면 답도 틀림). 둘 다 SimpleRAG 의 목표와 맞지 않는다.
+    대신 <b>부모를 페이지보다 작고 의미가 정확한 '절'로 잡는다.</b> SimpleRAG 는 <code>structure.py</code> 가 조문·번호절·부속서 경계를 이미 알고 있어,
+    페이지(인쇄상의 우연한 경계)보다 나은 부모를 쓸 수 있다 — Newploy 보다 유리한 조건이다.</p>
+    <p><b>방안</b></p>
+    <pre>자식 (검색 · 색인) : 문장 또는 작은 조각  ~32–64토큰   ← 새로 추가
+부모 (LLM 입력)    : 절, 또는 현재의 구조 청크  ~128–400토큰  ← 이미 만들고 있음
+payload           : 자식마다 parent_id</pre>
+    <ul>
+      <li>검색·리랭크는 자식으로 하고, 상위 자식의 <b>부모를 중복 없이</b> 모아 최대 3개를 LLM 에 넣는다(같은 부모의 자식이 여러 개 오르면 한 번만).</li>
+      <li>부모가 예산을 넘는 큰 절(약 15%)은 지금처럼 내부 분할된 조각을 부모로 쓰고, 넘치면 절 전체 대신 자식 주변 조각만 넣는다.</li>
+      <li>더 가벼운 1단계로, 새 색인 없이 payload 의 <code>chunk_idx</code> 로 <b>같은 절의 ±1 청크</b>만 붙이는 <em>이웃 청크 확장</em>을 먼저 실험할 수 있다.
+        같은 방향의 축소판이라, 효과가 보이면 본격 Parent-Child 로 넘어간다.</li>
+    </ul>
+    <p style="margin-bottom:0"><b>참고 기록</b> — 이전에 청크 128/192/256 을 비교했을 때 정답률은 평평하고 TTFT 만 늘었다(<code>structure.py</code> 상단 주석).
+    그러나 그 실험은 검색 단위와 LLM 입력 단위를 <b>함께</b> 키운 것이라, '작게 찾고 크게 읽히는' 구조의 효과는 아직 검증되지 않았다.
+    평가는 RAGAS Context Recall·Faithfulness, 정답 근거 적중률, TTFT 를 함께 본다. 128토큰 청크에서 '질문은 이 청크, 답은 다음 청크'로 갈리는
+    경우(Newploy 상담사례집 사례)가 주 겨냥이다.</p>
+  </div>
+
+  <h3>3-5. 표 처리 <span class="tag t-acc">현행 유지 + PDF 만 측정</span></h3>
+  <div class="card">
+    <p style="margin-top:0">Newploy 의 표 처리(TATR + 격자 후보 랭커 + 셀 OCR)는 <b>이미지 속 표</b>를 위한 것이다. 디지털 문서의 표에 대해서는
+    SimpleRAG 가 이미 ① Word 탭 표 → 마크다운 표(눕힌 행/셀 안 줄바꿈 구분, 무손실 검사) ② 표 행 청크에 머리글 재부착(길이 상한) ③ <code>tableflat</code> 의
+    "머리글: 값" 평문화·밀린 행 보정까지 하고 있어 Newploy 의 "[표] TSV 별도 청크"보다 정교하다.</p>
+    <p style="margin-bottom:0">남는 구멍은 <b>PDF 의 표</b>다. pdfium 텍스트층은 표를 읽기 순서의 글자 나열로 흘려 보내 셀 대응이 끊긴다.
+    대안은 pdfplumber(MIT) 의 표 검출로 표 영역만 따로 뽑는 것이다(PyMuPDF 는 AGPL 이라 exe 배포 시 라이선스 검토 필요).
+    단, PDF 표 문서가 질문 실패에 얼마나 기여하는지 먼저 재야 한다(§7).</p>
+  </div>
+
+  <h3>3-6. 청킹 방식 자체 <span class="tag t-acc">현행 유지</span></h3>
+  <div class="card">
+    <p style="margin-top:0">Newploy 세 경로(300자 영역 누적 / 문단 500자 / 문장)는 모두 구조 기반·겹침 없음이다. SimpleRAG 는</p>
+    <ul>
+      <li>문자 수가 아니라 <b>토큰</b> 예산(한국어 토큰 편차 대응),</li>
+      <li>제목 문법을 <b>문서마다 하나만</b> 채택(조문 안의 <code>1.</code> 로 과분할 방지) + 부속서 표지 합집합,</li>
+      <li>절 경계에서는 겹침 없이, <b>큰 절 내부 분할에만 겹침</b>,</li>
+      <li>절 경로 접두 <code>[문서 &gt; 제5조(지급 금액)]</code> 로 BM25·dense·생성 모두에 문맥 제공</li>
+    </ul>
+    <p style="margin-bottom:0">를 이미 하고 있어 Newploy 보다 앞서 있다. Newploy '지식 폴더' 경로의 <b>제목 경로(heading path) 기록</b>은 SimpleRAG 접두와 같은 발상이라
+    추가로 가져올 것이 없다. 바꿀 것은 청킹 알고리즘이 아니라 <b>입력에 쪽 경계·잡음 표식을 넣어 주는 것</b>(3-1~3-3)이다.</p>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>OCR 파이프라인 도입 검토</h2>
+  <p>Newploy 는 PaddleOCR 공식 모델(레이아웃 PP-DocLayout_plus-L 129MB, 줄 검출 PP-OCRv5_server_det 88MB) 위에
+  자체 한국어 인식기(text_ocr_ctc_v3, 암호화)와 자체 표 모델을 얹었다. 런타임으로 PyTorch·PaddlePaddle·ONNX Runtime 을 모두 동봉한다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>관점</th><th>평가</th></tr></thead>
+    <tbody>
+      <tr><td>재사용 가능성</td><td><span class="tag t-bad">불가</span> 한국어 품질의 핵심인 인식기·표 모델은 암호화된 자체 모델. 라이선스 파일도 'placeholder'. 가져다 쓸 수 있는 것은 PaddleOCR 공식 모델뿐이다.</td></tr>
+      <tr><td>배포 크기</td><td><span class="tag t-bad">큼</span> Paddle/PyTorch 런타임만 GB 단위. SimpleRAG 는 ONNX Runtime 하나로 임베딩·리랭커를 돌리는 경량 exe 구조다.</td></tr>
+      <tr><td>속도</td><td><span class="tag t-warn">느림</span> CPU 전용 PC 에서 쪽당 수 초 수준(레이아웃+검출+인식). 자동 인덱싱이 백그라운드에서 오래 붙잡힌다.</td></tr>
+      <tr><td>필요성</td><td><span class="tag t-warn">미측정</span> 현재 대상 코퍼스(회사규정·서식 등 디지털 문서) 중 스캔 PDF 비율을 모른다. MpowerClassify 는 이미 쪽마다 <code>_is_scan_page</code> 로 스캔 쪽 수를 센다 — 재료는 있다.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="verdict">
+    <p style="margin:0"><strong>권장: 지금은 도입하지 않고, 필요가 확인되면 '스캔 쪽만 선택 OCR'을 옵션으로.</strong>
+    ① 측정으로 스캔 문서·스캔 쪽 비율과 그 문서에 대한 질문 수요를 확인한다 ②
+    의미 있는 수준이면 ONNX 로 변환된 PP-OCRv5 계열(예: RapidOCR 방식 — 검출+인식만, 레이아웃 모델 생략)을 <b>별도 설치 옵션</b>으로 붙여
+    기존 ONNX Runtime 을 재사용한다 ③ 텍스트층 PDF 안에 섞인 스캔 쪽(Newploy 보고서의 "글자 30자 미만 17쪽" 사례)만 골라 OCR 한다.
+    한국어 인식 품질은 공식 모델 기준으로 따로 검증해야 한다 — Newploy 가 인식기를 자체 모델로 갈아 끼운 것 자체가 공식 모델 품질이 부족했다는 신호다.</p>
+  </div>
+  <div class="note">레이아웃 모델(영역 20종)은 OCR 을 도입하더라도 생략을 권한다. 디지털 문서에서 그 역할(머리말·목차·표 구분)은 3-2·3-3·3-5 의 규칙과
+  파서가 대신하고, 스캔 쪽은 수가 적을 것이므로 '본문 줄 나열'만으로 충분할 가능성이 높다.</div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>가져오지 않을 것</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Newploy 방식</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>300자 고정 누적 + 페이지 변경 시 무조건 끊기</td><td>SimpleRAG 의 조문/절 경계 보존(72% 조문 분할 문제 해결)을 되돌린다. 쪽은 '기록'만 하고 '경계'로는 약하게 쓴다.</td></tr>
+      <tr><td>겹침 전면 제거</td><td>Newploy 보고서 스스로 질문·답 분리의 원인 후보로 꼽았다. 현행(큰 절 내부만 겹침) 유지.</td></tr>
+      <tr><td>LLM 검색어 재작성</td><td>4B 에서 10초 제한에 자주 걸린다. iGPU 에서 TTFT 를 직접 늘린다.</td></tr>
+      <tr><td>OCR 결과 LLM 맞춤법 보정</td><td>OCR 이 없으면 대상이 없고, 있어도 인덱싱 시간을 크게 늘린다. 환각 위험.</td></tr>
+      <tr><td>리랭커 없이 RRF 만</td><td>SimpleRAG 는 리랭커 + 관련 근거 문턱을 이미 갖고 있다. 퇴보.</td></tr>
+      <tr><td>페이지 전체를 부모로 LLM 에 넣기</td><td>SimpleRAG 생성 컨텍스트 2048 의 근거 자리(~1,700토큰)에 페이지 3장이 들어가지 않는다. Parent-Child 방식은 가져오되 부모는 '절'로 한다(§3-4).</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>문장 단위 색인(Pro)에 대하여</b> — 초안에서는 "문장 하나로는 뜻이 안 통한다"는 이유로 비채택했으나, 이 이유는 문장을 <b>그대로</b> LLM 에 넣을 때만 성립한다.
+  찾은 문장의 부모(절)를 LLM 에 넣는 Parent-Child 구조와 함께라면 문장 색인은 '자식' 후보로 검토 가치가 있다(§3-4).
+  남는 비용은 임베딩 개수 증가(색인 크기·인덱싱 시간)다. 참고로 보고서는 Newploy Pro 가 찾은 문장의 부모를 LLM 에 넣는지까지는 확인하지 않았다 —
+  부모 확장이 확인된 것은 무료 AI 채팅 경로(청크 → 페이지)뿐이다.</div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>적용 우선순위와 순서</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>순위</th><th>항목</th><th>변경 위치(예상)</th><th>비용</th><th>기대 효과</th><th>재색인</th></tr></thead>
+    <tbody>
+      <tr><td class="prio">P1</td><td>PDF 쪽 경계 보존 + 청크 쪽 범위 기록</td><td><code>extract.py</code>(PDF 래퍼) · <code>chunk.py</code> · <code>indexer.py</code> payload</td><td>작음</td><td>출처 쪽 표시, 아래 항목의 전제</td><td>PDF</td></tr>
+      <tr><td class="prio">P1</td><td>반복 머리말·꼬리말·쪽번호 제거</td><td><code>extract.py</code> (정제 단계)</td><td>작음</td><td>청크 본문 밀도↑, BM25 잡음↓</td><td>PDF</td></tr>
+      <tr><td class="prio">P2</td><td>목차 블록 감지·제외</td><td><code>structure.py</code> · <code>chunk.py</code></td><td>작음</td><td>엉뚱한 근거(목차) 감소</td><td>전체</td></tr>
+      <tr><td class="prio">P2-a</td><td>이웃 청크 ±1 확장 (같은 절 · 예산 상한)</td><td><code>retrieve/</code> · <code>pipeline.py</code></td><td>작음</td><td>Parent-Child 효과의 빠른 확인</td><td>불필요</td></tr>
+      <tr><td class="prio">P2-b</td><td>Parent-Child — 자식(문장/작은 조각) 검색, 부모(절) 입력</td><td><code>chunk.py</code> · <code>index/indexer.py</code> · <code>retrieve/</code> · <code>pipeline.py</code></td><td>중간</td><td>검색 정밀도와 문맥 동시 확보. 대신 근거 토큰·TTFT↑, 색인 수배</td><td>전체</td></tr>
+      <tr><td class="prio">P3</td><td>PDF 표 영역 별도 추출</td><td><code>extract.py</code> + pdfplumber</td><td>중간</td><td>PDF 표 질문 정답률</td><td>PDF</td></tr>
+      <tr><td class="prio">P3</td><td>스캔 쪽 선택 OCR (옵션)</td><td>신규 모듈 + 모델 배포</td><td>큼</td><td>스캔 문서 검색 가능</td><td>스캔 PDF</td></tr>
+    </tbody>
+  </table></div>
+  <p>P1 두 항목은 함께 하는 것이 좋다(같은 재색인 한 번). 각 단계는 기존 골든셋 RAGAS 4지표 + 정답 근거 적중률로 전·후를 비교하고,
+  효과가 없으면 설정 스위치로 끌 수 있게 둔다.</p>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>착수 전 측정 항목</h2>
+  <ol>
+    <li><b>포맷 분포</b> — 인덱싱 대상 중 PDF 비율, 그중 텍스트층 PDF / 스캔 PDF / 스캔 쪽이 섞인 PDF 수. (MpowerClassify <code>notes.set_layout</code> 의 쪽 수·스캔 쪽 수 재사용)</li>
+    <li><b>머리말·꼬리말 잡음량</b> — PDF 문서별로 반복 줄이 차지하는 토큰 비율. 5% 미만이면 P1-2 의 우선순위를 낮춘다.</li>
+    <li><b>목차 오염</b> — 골든셋 질문 상위 3 근거 중 목차 청크가 차지하는 비율.</li>
+    <li><b>경계 분리 실패</b> — 오답 사례 중 '정답이 1위 근거의 이웃 청크에 있었던' 비율. 이 값이 이웃 확장(P2-a)의 상한 효과다. 같은 질문에서 '정답이 1위 근거와 같은 절 안에 있었던' 비율은 Parent-Child(P2-b)의 상한 효과다.</li>
+    <li><b>절 길이 분포 (토큰)</b> — 부모를 절로 잡았을 때 상위 3개가 근거 자리 ~1,700토큰에 들어가는 비율. 넘치는 절의 처리 규칙을 정하는 근거다.</li>
+    <li><b>PDF 표 실패</b> — 정답이 PDF 표 안에 있는 질문의 정답률.</li>
+    <li><b>현재 건너뛰는 문서</b> — <code>cli.py</code> 의 "추출 텍스트 없음" 경로로 빠지는 문서 수(=OCR 수요의 하한).</li>
+  </ol>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>위험과 제약</h2>
+  <ul>
+    <li><b>공유 추출기</b> — <code>csoclassify.extract</code> 는 MpowerClassify 분류 엔진과 공유한다. 쪽 경계·잡음 제거를 그쪽에 넣으면 분류 결과가 바뀔 수 있으므로 SimpleRAG 쪽 래퍼/후처리로 한정한다.</li>
+    <li><b>재색인 비용</b> — <code>CHUNKER_VERSION</code> 상향 시 PDF 전체 재색인. 자동 인덱싱과 겹치지 않게 한 번에 묶는다.</li>
+    <li><b>무손실 원칙</b> — 반복 줄·목차 제거는 '지우는' 변경이다. <code>normalize_tables</code> 처럼 제거량을 측정해 상한을 넘으면 원문으로 되돌린다.</li>
+    <li><b>쪽 번호 기준</b> — 0 기반/1 기반, 표지 유무로 인쇄 쪽번호와 PDF 쪽 순번이 다르다. 표시는 'PDF 쪽 순번'으로 통일하고 테스트로 고정한다(Newploy +1 밀림 버그 교훈).</li>
+    <li><b>OCR 도입 시</b> — 배포 크기·인덱싱 시간·한국어 인식 품질 세 가지가 모두 미검증이다. 공개 모델 라이선스(Apache-2.0 계열)는 문제없으나 Newploy 자체 모델은 어떤 형태로도 사용 불가.</li>
+  </ul>
+</section>
+
+<footer>
+  근거 자료: <code>D:\Project\MpowerClassify\doc\NewployAI-종합보고서-20261020.html</code> (Newploy AI Desktop v1.4.1 분석) ·
+  SimpleRAG <code>src/simplerag/extract.py</code>, <code>structure.py</code>, <code>chunk.py</code>, <code>tableflat.py</code>, <code>index/indexer.py</code>,
+  MpowerClassify <code>src/csoclassify/extract/pdf_pdfium.py</code>. 이 문서는 검토만 담았고 코드 변경은 없다.
+</footer>
+
+</div>
+</body>
+</html>

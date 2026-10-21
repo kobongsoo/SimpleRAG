@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>구조화 추출 청킹 재설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3, h4 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 800px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 22px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 48px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 26px 0 8px; }
+h4 { font-size: 15.5px; margin: 18px 0 6px; }
+p { margin: 10px 0; }
+ul, ol { padding-left: 22px; }
+li { margin: 4px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.card > :first-child { margin-top: 0; }
+.card > :last-child { margin-bottom: 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict > :first-child { margin-top: 0; } .verdict > :last-child { margin-bottom: 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.note > :first-child { margin-top: 0; } .note > :last-child { margin-bottom: 0; }
+.good { background: var(--good-soft); border-left: 4px solid var(--good); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.good > :first-child { margin-top: 0; } .good > :last-child { margin-bottom: 0; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--mono); text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.t-mut { background: var(--sunken); color: var(--muted); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; margin: 12px 0; }
+.bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; margin: 10px 0 6px; font-size: 12px; font-weight: 600; }
+.bar span { display: flex; align-items: center; justify-content: center; color: #fff; white-space: nowrap; overflow: hidden; }
+.legend { font-size: 13px; color: var(--muted); }
+.phase { border-left: 3px solid var(--accent); padding: 2px 0 2px 14px; margin: 18px 0; }
+.phase h4 { margin-top: 0; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · 재설계서 (구현 전)</div>
+  <h1>구조화 추출(블록 모델) 기반 청킹 재설계서</h1>
+  <p class="lede">추출 결과를 '한 덩어리 문자열'이 아니라 <b>종류·제목 수준·쪽이 붙은 블록 목록</b>으로 받아 청킹한다.
+  Newploy AI 의 '영역 목록으로 청킹' 발상을 가져오되, 영역을 그림으로 추측하는 대신 <b>파일 안에 이미 들어 있는 구조를 직접 읽는</b>
+  SimpleRAG 전용 추출기를 새로 만든다.</p>
+  <div class="meta">작성 2026-10-20 · 선행 문서: <a href="NewployAI_문서처리_적용검토.html">NewployAI 문서처리 적용 검토</a> ·
+  관련: <a href="구조인식_청킹_설계.md">구조인식_청킹_설계.md</a> · 상태: 설계 (코드 변경 없음)</div>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결정 사항과 요약</a></li>
+    <li><a href="#s2">왜 재설계하나</a></li>
+    <li><a href="#s3">Newploy 는 실제로 어떻게 했나</a></li>
+    <li><a href="#s4">코퍼스 구성과 기대 효과</a></li>
+    <li><a href="#s5">목표 구조</a></li>
+    <li><a href="#s6">블록 모델</a></li>
+    <li><a href="#s7">포맷별 추출기</a></li>
+    <li><a href="#s8">DOC · HWP5 처리 방안</a></li>
+    <li><a href="#s9">PDF 처리 단계</a></li>
+    <li><a href="#s10">블록 후처리</a></li>
+    <li><a href="#s11">블록 → 청크</a></li>
+    <li><a href="#s12">Parent-Child 결합</a></li>
+    <li><a href="#s13">모듈 구성과 전환 방식</a></li>
+    <li><a href="#s14">단계별 계획</a></li>
+    <li><a href="#s15">측정과 평가</a></li>
+    <li><a href="#s16">위험과 대응</a></li>
+    <li><a href="#s17">범위 밖</a></li>
+  </ol>
+</nav>
+
+<!-- ───────────────────────────── 1 ───────────────────────────── -->
+<section id="s1">
+  <h2><span class="no">1</span>결정 사항과 요약</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>결정</th></tr></thead>
+    <tbody>
+      <tr><td>추출기 소유</td><td><b>SimpleRAG 전용 추출기를 새로 만든다.</b> MpowerClassify(<code>csoclassify.extract</code>)는 참고·이식 대상일 뿐 공유하지 않는다. 분류 엔진에 영향을 주지 않고, 청킹에 필요한 구조 정보를 자유롭게 뽑기 위해서다.</td></tr>
+      <tr><td>추출 결과 형태</td><td>문자열 → <b>블록 목록</b> <code>{종류, 제목 수준, 제목 경로, 쪽, 텍스트, 표 행렬, 출처}</code></td></tr>
+      <tr><td>구조를 얻는 방법</td><td>1순위 <b>파일 안의 구조를 그대로 읽기</b>(DOCX 스타일·HWPX 개요 수준·표 요소) → 2순위 글자 크기 등 서식 추정(PDF) → 3순위 기존 정규식 추측(<code>structure.py</code>) → 선택 레이아웃 모델·OCR</td></tr>
+      <tr><td>청킹 규칙</td><td><b>기존 SimpleRAG 규칙을 유지</b>한다(절 경계 · 토큰 예산 패킹 · 큰 절만 겹침 · 표 머리글 재부착 · 경로 접두). Newploy 의 300자·쪽 단위 끊기는 가져오지 않는다.</td></tr>
+      <tr><td>LLM 입력</td><td>Parent-Child — 부모는 페이지가 아니라 절. 첫 실험은 <b>자식(검색 단위)을 128토큰 그대로</b> 두고 LLM 입력만 절로 키운다. 자식 축소(64·96)는 그 뒤 별도 실험(§12).</td></tr>
+      <tr><td>전환 방식</td><td>설정 스위치로 새 추출기/기존 경로를 고를 수 있게 두고, 포맷 단위로 하나씩 넘긴다. 구조 파서가 없는 포맷은 기존 텍스트 경로를 블록으로 감싸 같은 청킹기를 탄다.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="verdict">
+    <p><strong>가장 중요한 발견</strong> — 골든셋 100문항의 정답 문서가 <b>DOC 58 · DOCX 42</b> 다. 측정 기준이 되는 질문의 절반 이상이 구 바이너리 DOC 에 있으므로,
+    DOCX 파서만 잘 만들어서는 점수가 크게 오르지 않는다. <b>DOC 의 구조(제목 스타일)를 읽는 일이 이 재설계의 성패를 가른다</b>(§8).
+    동시에, 지금 골든셋에는 PDF·HWP·PPTX 질문이 없어 그 포맷의 개선은 측정조차 안 된다 — 평가셋 보강이 선행 과제다(§15).</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 2 ───────────────────────────── -->
+<section id="s2">
+  <h2><span class="no">2</span>왜 재설계하나</h2>
+  <p>현재 SimpleRAG 는 글자 수로만 자르지 않는다. <code>structure.py</code> 가 조문·번호절·마크다운·부속서 경계를 찾아 절로 나누고,
+  <code>chunk.py</code> 가 128토큰 예산 안에서 절을 묶는다. 문제는 <b>자르는 규칙이 아니라 구조를 얻는 방법</b>에 있다.</p>
+  <pre>현재   : 파서가 구조를 버림 → 평문 문자열 → 정규식으로 구조를 '다시 추측' → 청킹
+재설계 : 파서가 구조를 남김 → 블록 목록 {종류, 수준, 쪽 …}           → 청킹</pre>
+  <div class="tbl"><table>
+    <thead><tr><th>현재 경로에서 버려지는 정보</th><th>어디서</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>문단 스타일(제목 1·2·3)</td><td>DOCX 추출기가 <code>&lt;w:t&gt;</code> 글자만 모으고 <code>pStyle</code> 은 읽지 않음</td><td>제목을 정규식으로 추측. 조문(<code>제N조</code>) 문서는 표본의 6% 뿐이라 나머지는 번호 형식·폴백에 의존</td></tr>
+      <tr><td>표의 행·열·병합</td><td>셀 구분이 탭·줄바꿈으로 흩어짐</td><td><code>normalize_tables</code> 가 '눕힌 행/셀 안 줄바꿈'을 추측해 복원(§20.6 붕괴 사례). 머리글 판정도 추측이라 목차 필드가 머리글로 잡힌 사고(§35)</td></tr>
+      <tr><td>머리말·꼬리말 구분</td><td>본문 뒤에 이어 붙임</td><td>청크에 문서명·쪽번호 잡음이 섞임</td></tr>
+      <tr><td>목차</td><td>본문과 구분 없음</td><td>번호절 문법이 목차 줄을 제목으로 잡아 목차가 짧은 절 수십 개로 쪼개질 수 있음</td></tr>
+      <tr><td>PDF 쪽 경계</td><td>쪽 텍스트를 <code>"\n".join</code></td><td>출처 쪽번호를 못 보여 줌</td></tr>
+    </tbody>
+  </table></div>
+  <p>워드 파일 안에는 "이 문단은 제목 2단계"라는 <b>정답</b>이 들어 있다. 그것을 버리고 정규식으로 다시 맞히는 구조를 바꾸자는 것이 이 재설계다.</p>
+</section>
+
+<!-- ───────────────────────────── 3 ───────────────────────────── -->
+<section id="s3">
+  <h2><span class="no">3</span>Newploy 는 실제로 어떻게 했나</h2>
+  <p>Newploy 보고서(2026-10-20)를 다시 보면, "영역 목록으로 청킹"이라는 장점은 <b>OCR 파이프라인을 탈 때만</b> 작동한다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>입력</th><th>Newploy 처리 경로</th><th>구조 분석</th></tr></thead>
+    <tbody>
+      <tr><td>텍스트층 PDF (일반 PDF)</td><td><b>뷰어 모드</b> — OCR 생략, 텍스트층 그대로(282쪽 1초)</td><td><span class="tag t-bad">사실상 없음</span> 영역 전부 <code>text</code>, 글자 길이로만 끊김, 이미지 속 글자 미색인</td></tr>
+      <tr><td>텍스트층 PDF + "문서 전체 이해"</td><td>모든 쪽을 OCR 파이프라인으로 재처리(사용자가 누를 때만)</td><td><span class="tag t-good">있음</span> 레이아웃 모델 20종 분류</td></tr>
+      <tr><td>스캔 PDF · 이미지</td><td>OCR 파이프라인</td><td><span class="tag t-good">있음</span></td></tr>
+      <tr><td>DOCX · HWPX</td><td>전용 파서</td><td><span class="tag t-mut">보고서에 상세 없음</span></td></tr>
+      <tr><td>DOC · HWP(구) · PPT</td><td>—</td><td><span class="tag t-bad">지원 목록에 없음</span> (PDF·DOCX·HWPX·PNG·JPG 만)</td></tr>
+    </tbody>
+  </table></div>
+  <h3>OCR 파이프라인에서 구조가 나오는 곳</h3>
+  <pre>① 쪽을 이미지로 렌더링 (200dpi)
+② 레이아웃 모델 PP-DocLayout_plus-L — 이미지를 보고 영역 박스와 종류를 추정   ← 구조는 여기서
+③ 줄 검출 PP-OCRv5_det                                                         ← 여기부터 OCR
+④ 글자 인식 (자체 CTC 모델)
+⑤ 표 구조 (Table Transformer + 자체 랭커)</pre>
+  <p>구조를 알아내는 것은 OCR(글자 인식)이 아니라 그 앞의 <b>레이아웃 모델</b>이다. 사람이 종이를 보고 "큰 글씨는 제목, 격자는 표"라고 판단하듯
+  생김새로 추정한다. 포맷과 무관하게 동작하지만 <b>추측이라 틀릴 수 있고</b>(보고서: "레이아웃이 영역을 잘못 나누면 청크도 어긋난다") 쪽당 수 초가 든다.
+  게다가 Newploy 는 그렇게 얻은 영역을 300자 누적·쪽 단위로 단순하게 끊어 정답 쪽 적중률이 약 55% 였다 — 측정도 구조 분석이 없는 뷰어 모드 문서로 이뤄졌다.</p>
+  <div class="good">
+    <p><b>가져올 것</b> — '청킹기는 문자열이 아니라 종류가 붙은 블록을 받는다'는 입력 형태. <b>가져오지 않을 것</b> — 디지털 문서까지 그림으로 추측하는 방식, 300자·쪽 단위 끊기.
+    DOCX·HWPX·PPTX·XLSX 는 파일 안 구조를 읽으면 레이아웃 모델보다 <b>정확</b>하고 <b>빠르다</b>. 그림 기반 분석은 PDF·스캔에만 선택적으로 쓴다(§9).</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 4 ───────────────────────────── -->
+<section id="s4">
+  <h2><span class="no">4</span>코퍼스 구성과 기대 효과</h2>
+  <p>구조화 추출은 <b>파일 안에 구조 정보가 들어 있는 포맷에서만</b> 효과가 난다. 같은 "제5조(지급 금액)"도 포맷마다 저장 방식이 다르다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>포맷</th><th>파일에 저장된 모습</th><th>구조 획득</th></tr></thead>
+    <tbody>
+      <tr><td>DOCX · HWPX</td><td><code>&lt;w:pStyle w:val="Heading2"/&gt;</code> — "이 문단은 제목 2단계"라고 직접 표시</td><td>읽기만 하면 정답</td></tr>
+      <tr><td>PDF</td><td>"맑은고딕 14pt 굵게, 좌표 (72,540)에 '제5조(지급 금액)'을 그려라" — 제목이라는 표시 없음</td><td>쪽 경계만 확실, 제목·표는 추측</td></tr>
+      <tr><td>DOC · HWP5</td><td>구조 정보는 있으나 XML 이 아닌 바이너리 레코드</td><td>가능하지만 어려움</td></tr>
+      <tr><td>TXT</td><td>글자뿐</td><td>없음 (정규식 추측만)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>실측 — 2026-09-14 색인 백업 368건</h3>
+  <p class="legend">출처: <code>backup_index_20260914_368docs/index_state.json</code> 확장자 집계</p>
+  <div class="bar" role="img" aria-label="A 21%, B 27%, C 19%, D 20%, E 13%">
+    <span style="width:21%;background:#2a7a57">A 21%</span>
+    <span style="width:27%;background:#5b7fb8">B 27%</span>
+    <span style="width:19%;background:#a8701a">C 19%</span>
+    <span style="width:20%;background:#b0463b">D 20%</span>
+    <span style="width:13%;background:#7d8696">E 13%</span>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>묶음</th><th>포맷 (건수)</th><th>합계</th><th>구조화 추출 효과</th></tr></thead>
+    <tbody>
+      <tr><td><b>A</b> 구조가 정답으로 들어 있음</td><td>PPTX 30 · DOCX 25 · HWPX 9 · XLSX 9 · HTML 4</td><td class="num">77 (21%)</td><td><span class="tag t-good">큼</span> 주 수혜자</td></tr>
+      <tr><td><b>B</b> 구조가 텍스트에 드러남</td><td>IPYNB 66 · MD 35</td><td class="num">101 (27%)</td><td><span class="tag t-mut">작음</span> <code>#</code> 제목을 지금도 잡음</td></tr>
+      <tr><td><b>C</b> PDF</td><td>PDF 71</td><td class="num">71 (19%)</td><td><span class="tag t-warn">중간</span> 쪽 경계 확실, 제목·표 추측</td></tr>
+      <tr><td><b>D</b> 구 바이너리</td><td>DOC 45 · HWP 18 · PPT 6 · XLS 4</td><td class="num">73 (20%)</td><td><span class="tag t-warn">방안에 따라</span> DOC·HWP 를 풀면 큼(§8)</td></tr>
+      <tr><td><b>E</b> 구조 없음</td><td>TXT 43 · PY 3</td><td class="num">46 (13%)</td><td><span class="tag t-mut">없음</span> 현행 유지</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>질문 기준으로 보면 — 골든셋 100문항</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>정답 문서 포맷</th><th>문항 수</th><th>의미</th></tr></thead>
+    <tbody>
+      <tr><td>DOC</td><td class="num">58</td><td>DOC 구조를 못 읽으면 과반 문항은 개선 대상에서 빠진다</td></tr>
+      <tr><td>DOCX</td><td class="num">42</td><td>Phase 1 효과가 바로 측정되는 구간</td></tr>
+      <tr><td>PDF · HWP · HWPX · PPTX · XLSX</td><td class="num">0</td><td>개선해도 측정 불가 → 평가셋 보강 필요</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">
+    <p>문서 건수보다 <b>질문이 어느 문서에 몰리느냐</b>가 효과를 정한다. 또 이 368건은 9월 백업 시점의 문서이고(현재 색인은 DOCX 11 · DOC 9 = 20건),
+    실제 사용처 회사의 구성은 다를 수 있다 — 국내 회사라면 HWP·HWPX 비중이 훨씬 높을 가능성이 크다. 사용처 코퍼스의 포맷 분포를 Phase 0 에서 다시 잰다.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 5 ───────────────────────────── -->
+<section id="s5">
+  <h2><span class="no">5</span>목표 구조</h2>
+  <pre>파일
+ │
+ ├─ 포맷 감지 (OLE 매직 보정 포함 — 기존 extract.make_detector 로직 이식)
+ │
+ ├─ 포맷별 블록 추출기 ───────────────────────────────────────────────
+ │    DOCX · HWPX · PPTX · XLSX · HTML · MD · IPYNB   → 구조를 그대로 읽음     (source=parser)
+ │    DOC · HWP5                                      → 바이너리 레코드에서 읽음 (source=parser)
+ │    PDF                                             → 쪽 + 서식 추정          (source=inferred)
+ │    TXT · PY · 구조 파서 실패                        → 기존 텍스트 + 정규식 추측 (source=regex)
+ │    (선택) 스캔 쪽                                   → OCR                     (source=ocr)
+ │
+ ├─ 블록 후처리 : 머리말·꼬리말·쪽번호 제거 · 목차 표시 · 정제(sanitize) · 표 정리
+ │
+ ├─ 절 조립   : 제목 블록의 수준으로 제목 경로 스택을 만들고, 다음 같은/상위 제목까지를 한 절로
+ │
+ ├─ 청킹      : 기존 규칙 — 토큰 예산 패킹 · 큰 절은 블록 경계 → 줄 → 토큰 순 분할(이때만 겹침)
+ │              표 행 조각에 표 블록의 머리글 행 재부착 · [문서 > 경로] 접두 · 쪽 범위 기록
+ │
+ └─ 색인      : 청크(128토큰) — payload 에 section_id · path · page_from/to · source
+                (Phase 3 실험 A: 같은 section_id 청크를 모아 부모로 / 실험 B: 작은 자식 + parent_id)</pre>
+  <p>핵심은 <b>모든 포맷이 같은 블록 형태로 모인 뒤 하나의 청킹기를 탄다</b>는 점이다. 구조 파서가 없는 포맷도 기존 정규식 추측 결과를 블록으로 바꿔 넣으므로,
+  청킹 코드가 두 벌로 갈라지지 않는다.</p>
+</section>
+
+<!-- ───────────────────────────── 6 ───────────────────────────── -->
+<section id="s6">
+  <h2><span class="no">6</span>블록 모델</h2>
+  <pre>Document
+  format    : "docx" | "hwpx" | "pdf" | …
+  title     : 문서 제목(파일명 또는 문서 속성 제목)
+  pages     : 쪽 수 (쪽 개념이 없는 포맷은 None)
+  blocks    : [Block, …]               ← 읽기 순서
+  warnings  : ["표 3개 병합 셀 해석 실패", …]
+
+Block
+  type      : heading | paragraph | list_item | table | caption | code
+              | header | footer | page_number | toc | note | figure_text
+  level     : 제목 수준 1~9 (heading 만) · 목록 깊이 (list_item)
+  text      : 블록 글자 (표는 행렬을 평문으로 편 것)
+  rows      : 표만 — [[셀, …], …], 병합 셀은 펼쳐 채움
+  header_rows: 표만 — 머리글 행 수 (파일이 표시한 값, 없으면 추정)
+  page      : 시작 쪽 (PDF·PPTX 슬라이드·XLSX 시트 번호, 없으면 None)
+  path      : 이 블록이 속한 제목 경로 ["제3장 근무", "제12조(근로시간)"]  ← 절 조립 단계가 채움
+  source    : parser | inferred | regex | ocr     ← 진단·평가에서 출처별 성능을 가르기 위해</pre>
+  <div class="tbl"><table>
+    <thead><tr><th>블록 종류</th><th>청킹에서의 처리</th></tr></thead>
+    <tbody>
+      <tr><td><code>heading</code></td><td>절 경계 + 제목 경로. 청크 본문에도 남긴다(내용이 있는 긴 제목 대응 — 기존 <code>_label</code> 규칙 유지)</td></tr>
+      <tr><td><code>paragraph</code> · <code>list_item</code> · <code>caption</code> · <code>code</code></td><td>본문. 큰 절 분할 시 블록 경계를 1순위 절단점으로</td></tr>
+      <tr><td><code>table</code></td><td>행 단위로 분할 가능. 조각마다 <code>header_rows</code> 를 재부착(추측이 아니라 파일 값)</td></tr>
+      <tr><td><code>header</code> · <code>footer</code> · <code>page_number</code></td><td>청크에서 제외 (원문 보존용으로만 기록)</td></tr>
+      <tr><td><code>toc</code></td><td>청크에서 제외 — 목차가 근거로 끌려오는 문제 차단</td></tr>
+      <tr><td><code>note</code> (PPTX 발표자 노트 · 각주)</td><td>본문 뒤 별도 절로. 검색은 되되 본문과 섞이지 않게</td></tr>
+      <tr><td><code>figure_text</code> (그림 속 글자, OCR 시)</td><td>본문으로 취급하되 <code>source=ocr</code> 로 표시</td></tr>
+    </tbody>
+  </table></div>
+  <p>디버깅을 위해 문서별 블록 목록을 JSON 으로 남길 수 있게 한다(Newploy 의 <code>document_result.json</code> 에 해당).
+  기본은 끄고, 진단 명령(<code>python -m simplerag extract --blocks &lt;파일&gt;</code> 형태)으로 확인한다.</p>
+</section>
+
+<!-- ───────────────────────────── 7 ───────────────────────────── -->
+<section id="s7">
+  <h2><span class="no">7</span>포맷별 추출기</h2>
+  <p>원칙: MpowerClassify 처럼 <b>표준 라이브러리(zipfile + ElementTree)만</b> 쓴다(python-docx 등 미사용 → exe 크기 유지).
+  MpowerClassify 의 검증된 처리(텍스트 상자 중복 방지, 탭 정의 오인 방지, 페이지·시간 상한 등)는 코드째 이식해 출발점으로 삼는다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>포맷</th><th>제목</th><th>표</th><th>머리말·목차 등</th><th>난이도</th><th>단계</th></tr></thead>
+    <tbody>
+      <tr><td><b>DOCX</b></td><td><code>styles.xml</code> 의 <code>w:outlineLvl</code> 또는 스타일 이름(Heading N · 제목 N · 개요 N) → 수준. 문단 직접 지정 <code>outlineLvl</code> 도 반영</td><td><code>w:tbl</code> → 행렬. <code>gridSpan</code>(가로 병합) · <code>vMerge</code>(세로 병합) 펼침. <code>tblHeader</code> 행 = 머리글</td><td><code>header*.xml</code>/<code>footer*.xml</code> 은 header/footer 블록. TOC 필드·<code>docPartGallery="Table of Contents"</code> → toc</td><td><span class="tag t-good">낮음</span></td><td>1</td></tr>
+      <tr><td><b>HWPX</b></td><td><code>header.xml</code> 문단 모양의 개요 수준(heading type OUTLINE + level), 스타일 이름(개요 1~7)</td><td><code>hp:tbl</code> → 행렬. <code>cellSpan colSpan/rowSpan</code> 펼침</td><td><code>hp:header</code>/<code>hp:footer</code>, 쪽번호 컨트롤 제외</td><td><span class="tag t-good">낮음~중간</span></td><td>1</td></tr>
+      <tr><td><b>PPTX</b></td><td>슬라이드 = 절, 제목 자리표시자(<code>type="title"/"ctrTitle"</code>) = 제목. 본문 도형 들여쓰기 수준 = 목록 깊이</td><td><code>a:tbl</code> → 행렬, 첫 행 머리글</td><td>발표자 노트 → note. 슬라이드 번호 자리표시자 제외</td><td><span class="tag t-good">낮음</span></td><td>1</td></tr>
+      <tr><td><b>XLSX</b></td><td>시트 이름 = 절 제목</td><td>시트 = 표. 첫 비어 있지 않은 행을 머리글로 추정(숫자 칸 비율로 판정 — 기존 <code>_looks_like_header</code> 규칙). 행 묶음 단위 분할</td><td>셀 메모 → note. 날짜 서식 처리(기존 xlsdate) 이식</td><td><span class="tag t-good">낮음</span></td><td>1</td></tr>
+      <tr><td><b>HTML</b></td><td><code>h1~h6</code></td><td><code>table</code> (<code>th</code> = 머리글, colspan/rowspan)</td><td><code>nav</code>·<code>header</code>·<code>footer</code> 요소 제외</td><td><span class="tag t-good">낮음</span></td><td>1</td></tr>
+      <tr><td><b>MD · IPYNB</b></td><td><code>#</code> 수준</td><td>파이프 표</td><td>코드 블록·코드 셀 → code. 노트북 출력은 계속 제외</td><td><span class="tag t-good">낮음</span></td><td>1</td></tr>
+      <tr><td><b>DOC</b></td><td colspan="3">§8 참조 — 골든셋 과반의 정답 문서</td><td><span class="tag t-warn">중간~높음</span></td><td>2</td></tr>
+      <tr><td><b>HWP5</b></td><td colspan="3">§8 참조</td><td><span class="tag t-warn">높음</span></td><td>3</td></tr>
+      <tr><td><b>PDF</b></td><td colspan="3">§9 참조 — 단계적</td><td><span class="tag t-warn">중간~높음</span></td><td>2~4</td></tr>
+      <tr><td>PPT · XLS</td><td colspan="3">건수가 적다(6·4). 기존 텍스트 추출 이식 + 정규식 추측 폴백</td><td><span class="tag t-mut">—</span></td><td>2</td></tr>
+      <tr><td>TXT · PY</td><td colspan="3">구조 정보 없음. 정규식 추측 폴백(현행과 동일 결과)</td><td><span class="tag t-mut">—</span></td><td>1</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">
+    <p><b>제목 스타일을 안 쓰는 문서</b> — 국내 문서는 제목을 스타일 대신 '굵게 + 크게' 직접 서식으로 만드는 경우가 흔하다. 파서가 찾은 제목이 적으면(예: 3개 미만)
+    ① 문단 직접 서식(굵기·글자 크기)으로 제목을 추정하고 ② 그래도 없으면 본문 텍스트에 기존 <code>structure.py</code> 정규식을 적용한다.
+    파서 제목과 정규식 제목은 섞지 않는다 — 문서마다 하나만 채택한다는 기존 원칙(<code>detect_grammar</code>)을 이어 간다.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 8 ───────────────────────────── -->
+<section id="s8">
+  <h2><span class="no">8</span>DOC · HWP5 처리 방안</h2>
+  <p>Newploy 는 두 포맷을 아예 지원하지 않으므로 배울 것이 없다. SimpleRAG 는 이미 글자를 뽑고 있고(DOC 는 셀 구분자 0x07 로 표까지 살림),
+  여기에 <b>제목 수준</b>을 더하는 것이 과제다.</p>
+
+  <h3>DOC — 후보 비교</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>방안</th><th>방법</th><th>장점</th><th>단점</th><th>판정</th></tr></thead>
+    <tbody>
+      <tr><td><b>(a) 바이너리 직접 읽기</b></td><td>Word97 구조: FIB → piece table 로 글자 + 문단 속성(PAPX)의 스타일 번호(istd) → 스타일 시트(STSH)에서 이름·개요 수준</td><td>외부 의존 0, 빠름, 가장 정확</td><td>구현 난도 높음(공개 명세 [MS-DOC] 기반). 버그 시 디버깅 어려움</td><td><span class="tag t-acc">스파이크 후 결정</span></td></tr>
+      <tr><td>(b) DOCX 로 변환</td><td>LibreOffice headless 로 변환 → DOCX 파서</td><td>DOCX 파서 재사용, 정확</td><td>LibreOffice 동봉 시 배포 수백 MB, 문서당 수 초. exe 배포 구조와 맞지 않음</td><td><span class="tag t-bad">비권장</span></td></tr>
+      <tr><td>(c) Word COM 자동화</td><td>설치된 MS Word 로 DOCX 저장</td><td>정확</td><td>Word 가 깔린 PC 에서만, 느림, 백그라운드 인덱싱 중 Word 프로세스 문제</td><td><span class="tag t-bad">비권장</span></td></tr>
+      <tr><td>(d) 현행 + 블록화</td><td>글자·0x07 표는 이식, 제목은 정규식 추측 → 블록</td><td>즉시 가능, 회귀 없음</td><td>제목 정확도는 지금과 같음</td><td><span class="tag t-good">Phase 2 기본</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="verdict">
+    <p><strong>권장</strong> — Phase 2 에서 (d)로 DOC 를 블록 경로에 먼저 태워 표 블록(0x07 기반, 이미 신뢰도 높음)과 머리말 분리 이득을 얻고,
+    같은 단계에서 (a)의 <b>스타일 번호만 읽는 최소 스파이크</b>를 해 본다. 글자 추출은 이식 코드를 그대로 쓰고 문단마다 스타일 번호만 붙이면 되므로
+    전체 Word 파서를 만드는 것보다 범위가 훨씬 작다. 골든셋 DOC 58문항에서 정규식 제목 대비 개선이 확인되면 채택한다.</p>
+  </div>
+
+  <h3>HWP5</h3>
+  <p>OLE 안의 <code>BodyText/Section*</code> 스트림(zlib 압축)에 문단 레코드가 있고, 문단 헤더(<code>HWPTAG_PARA_HEADER</code>)가 문단 모양 번호를 가진다.
+  <code>DocInfo</code> 의 문단 모양(<code>HWPTAG_PARA_SHAPE</code>)에 개요 수준이 들어 있으므로 원리상 DOC 와 같은 방식으로 제목 수준을 얻을 수 있다.
+  표는 표 컨트롤(<code>HWPTAG_TABLE</code>)과 셀 목록으로 행렬을 만든다. 한컴 공개 명세가 있어 가능하지만 레코드 종류가 많아 난도가 높다.
+  368건 중 18건이고 골든셋에 0문항이므로 <b>Phase 3</b> 에 두되, 사용처 코퍼스에 HWP 가 많다고 확인되면(Phase 0) 앞당긴다.</p>
+</section>
+
+<!-- ───────────────────────────── 9 ───────────────────────────── -->
+<section id="s9">
+  <h2><span class="no">9</span>PDF 처리 단계</h2>
+  <p>PDF 에는 '제목'이라는 표시가 없다. 가볍고 확실한 것부터 쌓는다.</p>
+
+  <div class="phase">
+    <h4>P-1 쪽 경계 · 머리말/꼬리말 · 목차 <span class="tag t-good">Phase 2</span></h4>
+    <ul>
+      <li>pypdfium2 로 쪽마다 읽어 블록에 <code>page</code> 를 단다(기존 페이지·시간 상한 이식).</li>
+      <li>쪽마다 첫·마지막 2줄을 모아 숫자를 <code>#</code> 로 정규화한 뒤, 전체 쪽의 50% 이상에서 반복되는 줄을 header/footer/page_number 로 표시.</li>
+      <li>점선·가운데점 리더 뒤 쪽번호로 끝나는 줄(<code>…{3,}\s*\d+$</code>)이 연속되면 toc 로 표시.</li>
+      <li>제목은 아직 정규식 추측(<code>source=regex</code>).</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <h4>P-2 서식으로 제목 추정 · 표 영역 추출 <span class="tag t-warn">Phase 3</span></h4>
+    <ul>
+      <li>pdfium 글자 정보(글꼴 크기·굵기)로 줄마다 서식을 얻고, 본문보다 확연히 큰/굵은 짧은 줄을 제목으로, 크기 순위로 수준을 매긴다(<code>source=inferred</code>).</li>
+      <li>표는 선·글자 배치로 표 영역을 찾는 라이브러리(pdfplumber, MIT)를 검토한다. PyMuPDF 는 AGPL 이라 exe 배포 시 제외.
+        의존이 늘어나므로 PDF 표 질문의 실패 비중을 먼저 잰 뒤 결정.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <h4>P-3 (선택) 레이아웃 모델 + 텍스트층 결합 <span class="tag t-mut">Phase 4</span></h4>
+    <p>Newploy 에서 힌트를 얻되 OCR 은 뺀 조합이다.</p>
+    <pre>쪽 이미지 → 레이아웃 모델(PP-DocLayout 계열, ONNX) → 영역 박스 + 종류 (제목·본문·표·그림·머리말…)
+          + 글자는 OCR 하지 않고 PDF 텍스트층에서 박스 좌표 안의 글자를 꺼냄</pre>
+    <ul>
+      <li>장점: 글자 인식 오류 0(텍스트층은 정확), OCR 모델 두 개(검출·인식) 불필요, 기존 ONNX Runtime 재사용.</li>
+      <li>비용: 모델 약 129MB, CPU 에서 쪽당 수백 ms~수 초. 별도 설치 옵션으로 두고 P-1·P-2 로 부족할 때만.</li>
+    </ul>
+  </div>
+  <div class="phase">
+    <h4>P-4 (선택) 스캔 쪽 OCR <span class="tag t-mut">Phase 4</span></h4>
+    <ul>
+      <li>현재 스캔 PDF 는 "추출 텍스트 없음"으로 건너뛴다. 텍스트층이 거의 없는 쪽만 골라 OCR(줄 검출 + 인식, ONNX 변환 PP-OCRv5 계열).</li>
+      <li>Newploy 의 한국어 인식기·표 모델은 암호화된 자체 모델이라 사용 불가 — 공개 모델의 한국어 품질을 별도 검증해야 한다.</li>
+      <li>스캔 문서 비율과 수요가 확인될 때만 진행.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 10 ───────────────────────────── -->
+<section id="s10">
+  <h2><span class="no">10</span>블록 후처리</h2>
+  <ol>
+    <li><b>정제</b> — 기존 <code>sanitize</code>(비문자·사용자정의영역·짝 없는 서로게이트 제거)를 블록마다 적용. 토크나이저 방어는 그대로 필수.</li>
+    <li><b>제외 블록 표시</b> — header · footer · page_number · toc. 지우지 않고 표시만 해서 진단 JSON 에는 남긴다.</li>
+    <li><b>표 정리</b> — 병합 셀을 펼친 행렬을 마크다운 표 줄(<code>| 셀 | 셀 |</code>)로 렌더링. 지금의 <code>normalize_tables</code>(탭 추측 복원)는 DOC 0x07 경로와 regex 폴백에만 남는다.
+      생성 단계의 <code>tableflat</code>("머리글: 값" 평문화)은 그대로 쓴다.</li>
+    <li><b>무손실 검사</b> — 제외 블록을 뺀 본문 글자 수가 원문 대비 비정상적으로 줄면(예: 30% 이상) 경고하고 해당 문서는 regex 폴백으로 처리한다.
+      <code>normalize_tables</code> 의 93% 손실 사고(ARIA-WISC.pdf)에서 얻은 원칙을 이어 간다.</li>
+  </ol>
+</section>
+
+<!-- ───────────────────────────── 11 ───────────────────────────── -->
+<section id="s11">
+  <h2><span class="no">11</span>블록 → 청크</h2>
+  <h3>절 조립</h3>
+  <pre>제목 경로 스택 = []
+블록을 읽기 순서로 돌며:
+  heading(level=n) → 스택을 n-1 까지 줄이고 이 제목을 push → 새 절 시작
+  그 외           → 현재 절에 추가, block.path = 스택 복사
+
+예) [취업규칙] 제3장 근무 (L1) > 제12조(근로시간) (L2) > 본문·표 …
+    → 절 path = ["제3장 근무", "제12조(근로시간)"]</pre>
+
+  <h3>청킹 — 기존 규칙 재사용</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>규칙</th><th>현재 (<code>chunk.split_structured</code>)</th><th>재설계</th></tr></thead>
+    <tbody>
+      <tr><td>절 ≤ 남은 예산</td><td>현재 청크에 이어 붙임</td><td>동일</td></tr>
+      <tr><td>절 &gt; 남은 예산</td><td>청크를 끊고 새로 시작(겹침 없음)</td><td>동일. 단 <b>상위 제목이 바뀌면</b> 예산이 남아도 끊는 옵션 검토(장이 다른 조문끼리 섞이지 않게)</td></tr>
+      <tr><td>절 &gt; 예산</td><td>문단 → 줄 → 토큰 순 분할, 이때만 겹침</td><td><b>블록 경계 → 표 행 → 줄 → 문장 → 토큰</b> 순. 겹침 규칙 동일 (아래 '분할 규칙')</td></tr>
+      <tr><td>표 머리글</td><td>머리글을 추측해 재부착(64토큰 상한)</td><td>표 블록의 <code>header_rows</code> 를 재부착 — 추측이 아니므로 §35 같은 오판이 원천적으로 줄어든다. 상한은 유지</td></tr>
+      <tr><td>접두</td><td><code>[문서 &gt; 절 제목]</code></td><td><code>[문서 &gt; 상위 제목 &gt; 절 제목]</code> — 경로 전체. 접두가 길면 가운데 경로부터 생략(접두 최대 토큰 설정)</td></tr>
+      <tr><td>쪽</td><td>없음</td><td>청크마다 <code>page_from/page_to</code>. 쪽 경계는 <b>끊는 기준이 아님</b>(조문이 쪽을 넘는 경우가 흔함) — 기록만</td></tr>
+      <tr><td>제외 블록</td><td>없음</td><td>header · footer · page_number · toc 는 청크에 넣지 않음</td></tr>
+    </tbody>
+  </table></div>
+  <h3>분할 규칙 — 128토큰은 '자르는 길이'가 아니라 '상한'</h3>
+  <p><code>chunk.tokens: 128</code> 은 <b>글자 수가 아니라 e5 토크나이저 토큰 수</b>이고, <code>[문서 &gt; 경로]</code> 접두를 포함한다
+  (실측 근거 청크 중앙값 약 223자). 128 에 맞춰 기계적으로 자르지 않는다 — 블록을 온전히 담는 것이 1순위다.</p>
+  <pre>① 블록(또는 절) ≤ 128            → 통째로. 작은 블록 여러 개는 128 까지 묶는다
+② 절 > 128                       → 블록 경계에서 끊는다 (문단 사이 · 표 행 사이)
+③ 블록 하나 > 128                → 그 블록 안에서만 쪼갠다: 줄 → 문장 → 토큰, 이때만 겹침(16토큰)
+   (약한 초과 허용 — 실험 설정)  → 128 < 블록 ≤ 128 × α 이면 쪼개지 않고 통째로 둔다
+④ 표 조각                         → 머리글 행 재부착 (최대 64토큰 초과 허용 — 현행)
+⑤ 절대 상한 512                   → 어떤 경우에도 넘지 않는다 (e5 최대 입력 길이)</pre>
+  <p>예 — 절 "제12조(근로시간)" = 문단A 40 + 문단B 60 + 표C 300토큰</p>
+  <pre>청크1: [취업규칙 &gt; 제12조] 문단A + 문단B             (~110토큰 · 블록 2개를 온전히 묶음)
+청크2: [취업규칙 &gt; 제12조] 표 머리글 + 표 행 1~6     (~128)
+청크3: [취업규칙 &gt; 제12조] 표 머리글 + 표 행 7~12    (~128)   ← 표는 행 경계에서 끊고 머리글을 다시 붙임</pre>
+  <p>블록 중간을 자르는 일은 <b>블록 하나가 상한보다 클 때만</b> 일어난다. 현재 문서에서 절의 85% 가 128 안에 들어가므로(<code>chunk.py</code> 주석) 대부분의 블록은 잘리지 않는다.</p>
+
+  <div class="tbl"><table>
+    <thead><tr><th>결정</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>큰 블록에 맞춰 청크를 무한정 키우지 않는다</td><td>
+        ① e5 는 최대 <b>512토큰</b>만 본다 — 넘는 뒷부분은 벡터에 반영되지 않아 그 내용으로는 검색이 안 된다<br>
+        ② 긴 청크는 벡터가 여러 주제의 평균이 되어 흐려진다<br>
+        ③ 그런 청크 하나가 근거로 뽑히면 생성 컨텍스트 2048 을 혼자 차지한다 — 실제로 2,768토큰 청크 때문에 파이프라인이 죽었다(REPORT §35)</td></tr>
+      <tr><td>약한 초과 허용 α 를 설정값으로 둔다 (기본 1.0 = 현행, 실험 후보 1.5)</td><td>128 에서 칼같이 자르면 블록의 마지막 몇 토큰만 다음 청크로 넘어가는 어색한 분할이 생긴다.
+        이전 128/192/256 비교에서 정답률은 평평하고 TTFT 만 늘었으므로 소폭 허용은 손해가 작을 가능성이 크다.
+        단 그 실험은 고정 크기 분할이었으므로 이 방식에서 다시 잰다</td></tr>
+      <tr><td>큰 블록 분할에 <b>문장 경계</b>(<code>. ! ? 다.</code> 등)를 줄과 토큰 사이에 추가</td><td>블록 모델에서는 문단이 한 줄인 경우가 많아, 현행(줄 → 토큰)으로는 곧바로 토큰 중간에서 잘리기 쉽다</td></tr>
+    </tbody>
+  </table></div>
+  <pre># config.yaml (추가 예정)
+chunk:
+  tokens: 128          # 상한 (현행 유지)
+  overflow_ratio: 1.0  # 약한 초과 허용 α — 1.0 이면 현행과 같음. 실험 후보 1.5
+  hard_max: 512        # 절대 상한 (e5 최대 입력)</pre>
+
+  <div class="good">
+    <p><b>회귀 기준</b> — regex 폴백 경로(TXT 등)는 현재 <code>split_structured</code> 와 <b>글자까지 같은 청크</b>를 내야 한다. 이것을 테스트로 고정하면
+    블록 경로 도입이 기존 포맷 결과를 흔들지 않았음을 증명할 수 있다.
+    이 비교는 <code>overflow_ratio: 1.0</code> · 문장 경계 분할 끔 상태에서 한다 — 두 변경은 회귀 확인 뒤 각각 켜서 효과를 따로 잰다.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 12 ───────────────────────────── -->
+<section id="s12">
+  <h2><span class="no">12</span>Parent-Child 결합</h2>
+  <p>블록 모델이 생기면 '작게 찾고 크게 읽히기'(검색 단위와 LLM 입력 단위를 나누기)가 자연스럽게 된다.
+  다만 <b>자식(검색 단위)을 바로 줄이지 않는다.</b> 먼저 검색은 그대로 두고 LLM 입력만 키워 본 뒤, 자식 크기는 따로 실험한다.</p>
+
+  <h3>단계별 단위</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>자식 (검색 · 색인 · 리랭크)</th><th>부모 (LLM 입력)</th><th>재색인</th></tr></thead>
+    <tbody>
+      <tr><td>현재 · Phase 1~2</td><td>128토큰 청크</td><td>같은 128토큰 청크 (구분 없음)</td><td>—</td></tr>
+      <tr><td><b>실험 A</b> (Phase 3 첫 실험)</td><td><b>128토큰 그대로</b></td><td>그 청크가 속한 <b>절 전체</b> (상한 ~400토큰)</td><td>불필요 — payload 의 절 id 로 같은 절 청크를 모음</td></tr>
+      <tr><td><b>실험 B</b> (A 효과 확인 후)</td><td>64 · 96토큰 (경로 접두 포함)</td><td>절 전체</td><td>필요 — 자식 색인 + <code>parent_id</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>왜 자식을 바로 32~64토큰으로 줄이지 않나</h3>
+  <p>SimpleRAG 에 이미 반대 증거가 있다. 실측한 절 413개의 길이 중앙값이 <b>36토큰</b>이었고, 그대로 청크로 쓰면 "변별력 없는 조각이 쏟아진다"는 이유로
+  절을 묶어 128토큰으로 만들었다(<code>chunk.py</code> 구조 인식 청킹 주석). 그 판단은 바로 '검색 단위로서의 짧은 조각'에 대한 것이고,
+  Parent-Child 에서 자식이 하는 일이 정확히 검색이다.</p>
+  <ul>
+    <li><b>임베딩</b> — e5 는 너무 짧은 글에서 의미가 흐려진다. "다만 3만원을 넘으면 안 된다"만으로는 무엇에 관한 문장인지 벡터에 실리지 않는다.</li>
+    <li><b>BM25</b> — 짧은 조각은 핵심어 한두 개에 점수가 좌우된다.</li>
+    <li><b>완화 수단</b> — 자식에도 <code>[문서 &gt; 경로]</code> 접두를 붙이면 짧은 조각에 문맥이 실린다. 효과는 실험 B 에서 잰다.</li>
+  </ul>
+
+  <h3>실험 A 를 먼저 하는 이유</h3>
+  <ul>
+    <li><b>검색이 전혀 바뀌지 않는다.</b> 색인·임베딩·리랭크가 지금과 같으므로 점수 변화는 순수하게 'LLM 에 문맥을 더 줬을 때'의 효과다.</li>
+    <li><b>재색인이 필요 없다.</b> 이전 검토의 '이웃 청크 ±1 확장'을 절 단위로 정리한 형태다.</li>
+    <li><b>비용 확인이 쉽다.</b> 근거 토큰이 늘어난 만큼 TTFT 가 얼마나 느는지를 같이 잰다.</li>
+  </ul>
+  <p>실험 A 에서 Context Recall · Faithfulness 가 오르면, 실험 B 로 '작게 찾으면 검색 정밀도가 더 오르는가'를 따로 확인한다.
+  크기 비교에는 기존 <code>bench/sweep_chunk.py</code> 를 확장해 쓴다. 자식 크기는 실험 결과로 정하고, 이 문서에서 미리 고정하지 않는다.</p>
+
+  <h3>공통 규칙</h3>
+  <ul>
+    <li>검색·리랭크는 자식으로, 상위 자식의 부모를 <b>중복 없이</b> 모아 최대 3개를 LLM 에 넣는다(같은 절의 자식이 여러 개 오르면 부모는 한 번만).</li>
+    <li>예산: 생성 컨텍스트 2048 − 답변 200 − 특수토큰 16 = 프롬프트 1,832토큰(지시문·질문 포함). 절 3개(400~1,200토큰)는 들어가고, 페이지 3장은 안 들어간다.
+      부모가 상한(~400토큰)을 넘는 큰 절은 자식 청크와 그 앞뒤 청크만 넣는다. 그래도 넘치면 기존 <code>_fit_prompt</code> 가 가장 긴 근거를 깎는다.</li>
+    <li>부모가 커질수록 prefill 이 늘어 TTFT 가 늘어난다(이 비용은 <code>n_ctx</code> 값이 아니라 실제 근거 토큰 수에서 온다).</li>
+    <li>Parent-Child 는 블록 경로가 안정된 뒤(Phase 3) 별도 실험으로 다룬다 — 추출 변경과 검색 변경을 한꺼번에 하면 어느 쪽 효과인지 가를 수 없다.</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────────── 13 ───────────────────────────── -->
+<section id="s13">
+  <h2><span class="no">13</span>모듈 구성과 전환 방식</h2>
+  <pre>src/simplerag/docmodel/          ← 새 패키지 (SimpleRAG 전용 추출기)
+  blocks.py       Document · Block 정의
+  detect.py       포맷 감지 (OLE 매직 보정 이식)
+  ooxml_docx.py   DOCX
+  ooxml_pptx.py   PPTX
+  ooxml_xlsx.py   XLSX (+ 날짜 서식)
+  hwpx.py         HWPX
+  html_md.py      HTML · MD · IPYNB
+  doc_bin.py      DOC (MpowerClassify DocExtractor 이식 + 스타일 번호)
+  hwp5.py         HWP5 (이식 → Phase 3 에 개요 수준)
+  legacy_bin.py   PPT · XLS (이식, 텍스트만)
+  pdf.py          PDF (P-1 ~ P-2)
+  fallback.py     텍스트 → structure.py 추측 → 블록
+  postprocess.py  정제 · 머리말/목차 표시 · 표 렌더링 · 무손실 검사
+  assemble.py     블록 → 절 (제목 경로)
+  extract.py      진입점: extract_document(path) → Document
+
+src/simplerag/chunk.py            ← split_blocks(document, tok) 추가. split_structured 는 폴백 경로가 내부적으로 재사용
+src/simplerag/index/indexer.py    ← payload 에 section_id · path · page_from/to · source (실험 B 에서 parent_id)
+src/simplerag/extract.py          ← 전환 기간 동안 유지(legacy 경로)</pre>
+
+  <h3>전환 스위치</h3>
+  <pre># config.yaml
+extract:
+  engine: blocks        # blocks | legacy   — legacy 는 현재 csoclassify 경로
+  formats: [docx, pptx, xlsx, hwpx, html, md, ipynb]   # 블록 경로로 처리할 포맷. 나머지는 legacy
+  dump_blocks: false    # 문서별 블록 JSON 저장(진단용)</pre>
+  <ul>
+    <li>포맷 단위로 블록 경로로 옮기고, 각 단계에서 골든셋으로 비교한 뒤 목록에 추가한다.</li>
+    <li>블록 추출이 예외를 내면 그 문서만 legacy 경로로 처리하고 이유를 기록한다(인덱싱 전체가 멈추지 않게 — 현 indexer 의 실패 기록 방식과 동일).</li>
+    <li><code>CHUNKER_VERSION</code> 을 올려 재색인을 유도한다. 포맷별로 넘어갈 때마다 해당 포맷 문서만 재색인되면 이상적(청크 파라미터에 엔진·포맷 목록을 포함).</li>
+    <li>마지막 단계에서 모든 포맷이 블록 경로로 넘어오면 <code>csoclassify</code> 의존을 제거한다. 이때 사이냅 외부 실행 폴백을 유지할지 결정한다.</li>
+  </ul>
+  <div class="note">
+    <p>새 모듈은 프로젝트 공통 규칙에 따라 모든 함수·클래스에 한글 헤더 주석(제목 · 설명 · -in · -out · error)을 단다.
+    이식 코드도 출처(MpowerClassify 파일·함수)를 헤더에 남겨 이후 양쪽 수정 이력을 추적할 수 있게 한다.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── 14 ───────────────────────────── -->
+<section id="s14">
+  <h2><span class="no">14</span>단계별 계획</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>범위</th><th>완료 기준</th></tr></thead>
+    <tbody>
+      <tr><td><b>Phase 0</b><br>측정</td><td>
+        · 사용처 코퍼스 포맷 분포(문서 수 · 질문 수)<br>
+        · 골든셋 보강: PDF · HWP/HWPX · PPTX · XLSX 정답 문항 추가<br>
+        · 현재 경로 기준선: 정답 근거 적중률, RAGAS 4지표, 포맷별 분리<br>
+        · DOCX 25 · DOC 45 문서 중 제목 스타일을 실제로 쓰는 비율</td>
+        <td>포맷별 기준선 표와 '제목 스타일 사용률'이 나옴</td></tr>
+      <tr><td><b>Phase 1</b><br>블록 골격 + 쉬운 포맷<br>+ 블록 기반 청킹</td><td>
+        · <code>docmodel</code> 골격, 블록 정의, 진단 JSON<br>
+        · DOCX · PPTX · XLSX · HWPX · HTML · MD · IPYNB 파서<br>
+        · regex 폴백(TXT 등)<br>
+        · <b>청킹</b>: 절 조립 + <code>split_blocks</code>(제외 블록 · 블록 경계 분할 · 파일 머리글 재부착 · 경로 접두). 청크 크기 128토큰은 그대로<br>
+        · payload 에 section_id · path · source</td>
+        <td>regex 폴백이 현재와 같은 청크를 냄(회귀 0) · DOCX 42문항에서 기준선 이상</td></tr>
+      <tr><td><b>Phase 2</b><br>DOC · PDF 기본</td><td>
+        · DOC 이식 + 블록화 (d) + 스타일 번호 스파이크 (a)<br>
+        · PPT · XLS 이식<br>
+        · PDF P-1 (쪽 · 머리말 · 목차) + 쪽 범위 payload · 출처 쪽 표시</td>
+        <td>DOC 58문항에서 기준선 이상 · (a) 채택 여부 결정 · PDF 출처 쪽 표시</td></tr>
+      <tr><td><b>Phase 3</b><br>심화</td><td>
+        · HWP5 개요 수준 · 표<br>
+        · PDF P-2 (서식 제목 · 표 영역)<br>
+        · Parent-Child 실험 A (자식 128 그대로 · 부모 = 절, 재색인 없음)<br>
+        · 실험 A 효과가 있으면 실험 B (자식 64 · 96 + parent_id)</td>
+        <td>보강된 평가셋에서 포맷별 개선 확인 · 실험 A 채택 여부 · 자식 크기 결정</td></tr>
+      <tr><td><b>Phase 4</b><br>선택</td><td>
+        · PDF P-3 레이아웃 모델<br>
+        · P-4 스캔 쪽 OCR<br>
+        · <code>csoclassify</code> 의존 제거</td>
+        <td>수요가 확인된 항목만</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────── 15 ───────────────────────────── -->
+<section id="s15">
+  <h2><span class="no">15</span>측정과 평가</h2>
+  <h3>지표</h3>
+  <ul>
+    <li><b>정답 근거 적중률</b> — 상위 3 근거에 정답 문서·정답 절이 들어가는 비율. 추출 변경의 1차 지표.</li>
+    <li><b>RAGAS 4지표</b> — Faithfulness · Answer Relevancy · Context Precision · Context Recall (기존 <code>bench/ragas_golden.py</code>).</li>
+    <li><b>청크 통계</b> — 개수, 토큰 길이 분포, 표 조각 중 머리글 붙은 비율, 제외된 블록 토큰(머리말·목차).</li>
+    <li><b>운영 비용</b> — 문서당 추출 시간, 전체 인덱싱 시간, TTFT(Parent-Child 시).</li>
+    <li>모든 지표를 <b>포맷별 · source 별</b>(parser / inferred / regex)로 나눠 본다.</li>
+  </ul>
+  <h3>평가셋 보강이 선행 과제인 이유</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>개선 대상</th><th>현재 골든셋 문항</th><th>필요</th></tr></thead>
+    <tbody>
+      <tr><td>DOCX 구조 파서</td><td class="num">42</td><td>충분</td></tr>
+      <tr><td>DOC 블록화 · 스타일</td><td class="num">58</td><td>충분</td></tr>
+      <tr><td>PDF 쪽 · 머리말 · 제목</td><td class="num">0</td><td>최소 30문항 (표 질문 포함)</td></tr>
+      <tr><td>HWP · HWPX</td><td class="num">0</td><td>최소 20문항</td></tr>
+      <tr><td>PPTX · XLSX</td><td class="num">0</td><td>각 10문항 이상</td></tr>
+    </tbody>
+  </table></div>
+  <p>506문항 대형 평가셋(<code>bench/eval_cases_v3.py</code> 등)의 정답 문서 포맷 분포는 아직 확인하지 않았다 — Phase 0 에서 같이 집계한다.</p>
+</section>
+
+<!-- ───────────────────────────── 16 ───────────────────────────── -->
+<section id="s16">
+  <h2><span class="no">16</span>위험과 대응</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>위험</th><th>대응</th></tr></thead>
+    <tbody>
+      <tr><td>새 추출기가 기존 추출기보다 글자를 덜 뽑음(텍스트 상자·각주·병합 셀 누락)</td><td>문서별로 legacy 대비 본문 글자 수를 비교하는 회귀 벤치(<code>bench/bench_extract.py</code> 확장). 일정 비율 이상 줄면 경고·폴백</td></tr>
+      <tr><td>제목 스타일 남용·미사용 (본문을 '제목'으로 쓰거나 아예 안 씀)</td><td>파서 제목 수가 너무 적거나 너무 많으면(본문 대비 비율) 서식 추정 → regex 순으로 물러남</td></tr>
+      <tr><td>한글 스타일 이름 다양성(제목 1 · 개요 1 · 장제목 · 사용자 정의)</td><td>이름보다 <code>outlineLvl</code>(개요 수준)을 1순위로, 이름 매칭은 보조</td></tr>
+      <tr><td>DOC 바이너리 파서 버그</td><td>스파이크로 범위를 '스타일 번호'에 한정, 실패 시 (d) 경로로 자동 폴백</td></tr>
+      <tr><td>이식 코드와 MpowerClassify 코드의 분기</td><td>이식 출처를 헤더에 기록. 양쪽 버그 수정은 수동으로 대조(공유하지 않기로 한 결정의 비용)</td></tr>
+      <tr><td>재색인 시간</td><td>포맷 단위 전환 · 해당 포맷 문서만 재색인 · 자동 인덱싱과 겹치지 않게 일괄 실행</td></tr>
+      <tr><td>exe 크기 증가 (pdfplumber · 레이아웃 모델)</td><td>표준 라이브러리 원칙 유지. 무거운 것은 Phase 4 선택 설치로 분리</td></tr>
+      <tr><td>추출·검색 변경을 함께 해 효과 귀속 불가</td><td>Parent-Child 는 블록 경로 안정 후 별도 단계로</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────────── 17 ───────────────────────────── -->
+<section id="s17">
+  <h2><span class="no">17</span>범위 밖 — 이번 재설계에서 다루지 않는 것</h2>
+  <p>원칙: <b>한 번에 한 가지만 바꾼다.</b> 추출과 다른 단계를 함께 바꾸면 점수 변화가 어느 쪽 때문인지 가를 수 없다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>판정</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td><b>Newploy 임베딩 모델</b></td><td><span class="tag t-bad">비채택</span></td><td>
+        multilingual-e5-small 계열로 추정 — 384차원 · 512토큰 · XLM-R 토크나이저 · 평균 풀링 · ONNX int8 로 <b>SimpleRAG 현재 모델과 구조가 같다</b>.
+        SimpleRAG 는 그 한국어 파인튜닝판(<code>dragonkue/multilingual-e5-small-ko</code>)을 쓰고 있어 오히려 한국어에 유리할 가능성이 높다.
+        Newploy 번들은 암호화돼 있고 모델 라이선스 파일이 'placeholder' 라 제품에 넣을 수 없다. 무료판은 임베딩을 쓰지도 않는다(Pro 스킬).</td></tr>
+      <tr><td>더 큰 한국어 임베딩 모델 (bge-m3 계열 · multilingual-e5-base 등)</td><td><span class="tag t-mut">별도 실험</span></td><td>
+        블록 경로가 안정된 뒤 따로 잰다. 파일 크기(수백 MB~1GB+) · 인덱싱 시간 · 질의 지연이 수 배로 늘어 사무용 노트북 대상 구조와 맞는지 따로 따져야 한다.
+        또 §11 의 절대 상한 512 는 e5 한계에서 나온 값이라, 모델을 바꾸면 청크 제약도 달라진다. 교체 시 전체 재색인 필요</td></tr>
+      <tr><td>형태소 분석 BM25 (Newploy Pro '문서검색' 스킬)</td><td><span class="tag t-bad">기존 실험으로 비채택</span></td><td>
+        REPORT §28 Kiwi 실험 — 검색 Recall@3 88%→90% 이지만 답변 정답률 70.1%→69.1% 로 방향이 엇갈렸다. 고유명사(회사·제품명) 분해 손해</td></tr>
+      <tr><td>단어벡터 질의 확장 (Newploy Pro, SGNS)</td><td><span class="tag t-mut">후순위</span></td><td>BM25 + 의미 검색 + 리랭커 구성에서는 추가 이득이 작을 것으로 본다. 미실험</td></tr>
+      <tr><td>LLM 검색어 재작성 · LLM 맞춤법 보정</td><td><span class="tag t-bad">비채택</span></td><td>LLM 을 한 번 더 돌려 TTFT 가 직접 늘어난다(Newploy 4B 는 재작성만으로 10초 제한에 자주 걸림)</td></tr>
+      <tr><td>Parent-Child</td><td><span class="tag t-acc">Phase 3</span></td><td>범위 안이지만 블록 경로 안정 후 별도 실험(§12)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer>
+  근거: Newploy AI 종합 분석 보고서(<code>D:\Project\MpowerClassify\doc\NewployAI-종합보고서-20261020.html</code>) ·
+  SimpleRAG <code>extract.py</code> · <code>structure.py</code> · <code>chunk.py</code> · <code>tableflat.py</code> · <code>index/indexer.py</code> · <code>generate/gguf_generator.py</code> ·
+  MpowerClassify <code>csoclassify/extract/office_ooxml.py</code> · <code>pdf_pdfium.py</code> ·
+  색인 백업 <code>backup_index_20260914_368docs/index_state.json</code> · <code>dataset/golden_dataset.jsonl</code>.
+  이 문서는 설계만 담았고 코드 변경은 없다.
+</footer>
+
+</div>
+</body>
+</html>
