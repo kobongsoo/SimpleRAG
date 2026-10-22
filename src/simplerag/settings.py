@@ -164,6 +164,8 @@ SCHEMA = {
         "prompt": _choice("v0", "v4"),            # 시스템 지시문(generate/prompts.py PROMPTS)
         # 기본 생성 모델 — 빠름(0.6B) | 정밀(1.7B). 정밀은 답이 정확하지만 TTFT 가 3초를 넘는다(§42)
         "model": _choice("qwen3-0.6b-q4", "qwen3-1.7b-q4"),
+        # 근거 표를 "머리글: 값" 평문으로 펴서 넣는다(계획서 3-3, tableflat.py)
+        "flatten_tables": _bool,
     },
 }
 

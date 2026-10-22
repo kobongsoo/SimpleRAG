@@ -327,6 +327,13 @@ if PROMPT not in ("v0", "v4"):
     from .settings import ConfigError as _ConfigError
     raise _ConfigError("SIMPLERAG_PROMPT={!r} — v0 | v4 중 하나여야 합니다".format(PROMPT))
 GEN_TEMPERATURE = 0.0
+# 근거 표를 "머리글: 값" 행 단위 평문으로 펴서 모델에 넣는다(계획서 3-3, tableflat.py).
+#   Word 병합 셀 탓에 값 행이 한 칸씩 밀려 모델이 옆 칸 값을 집는 실패가 있다(g048).
+#   색인은 그대로 두고 **모델에 보여 줄 때만** 편다 — 재인덱싱이 필요 없고 검색 지표도 안 바뀐다.
+#   끄려면 SIMPLERAG_FLATTEN_TABLES=0.
+FLATTEN_TABLES = ((os.environ["SIMPLERAG_FLATTEN_TABLES"] != "0")
+                  if os.environ.get("SIMPLERAG_FLATTEN_TABLES")
+                  else bool(_YAML.get("generation.flatten_tables", False)))
 
 # ── 생성 백엔드 (CPU / iGPU) ─────────────────────────
 # 내장 GPU(Vulkan)로 prefill 을 넘기면 LLM 구간이 2.25→0.80초(506문항 실측,

@@ -67,6 +67,11 @@ def active_system_prompt(name=None):
 # -out: user_msg = 사용자 메시지 본문
 #------------------------------------------------------------------
 def build_user_message(query, chunks):
+    # 표가 든 근거는 "머리글: 값" 행 평문으로 펴서 넣는다(계획서 3-3).
+    #   색인은 건드리지 않고 모델에 보여 줄 때만 바꾸므로 검색 결과는 그대로다.
+    if config.FLATTEN_TABLES:
+        from ..tableflat import flatten_tables
+        chunks = [flatten_tables(c) for c in chunks]
     blocks = ["[{}] {}".format(i + 1, c) for i, c in enumerate(chunks)]
     return "[근거]\n" + "\n\n".join(blocks) + "\n\n[질문]\n" + query
 

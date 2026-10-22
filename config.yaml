@@ -20,6 +20,11 @@ chunk:
   min_tokens: 16                # 이보다 짧은 꼬리 조각은 버린다
   table_header_max_tokens: 64   # 표 조각에 다시 붙이는 머리글 줄의 최대 길이. 넘으면 붙이지 않는다(0 = 안 붙임)
 
+extract:
+  engine: blocks                # 추출 엔진. blocks(문서 구조를 블록으로 읽음, 2026-10-22 전환) | legacy(예전 평문 추출)
+                                #   골든셋 v2: 근거 포함 93→101, 1.7B 정답 67→80 (plan/골든셋v2_추출엔진_비교.html)
+                                #   ⚠️ 바꾸면 전체 재인덱싱 필요:  index --dir <폴더> --rebuild
+
 retrieval:
   dense_top_k: 10               # 코사인(dense) 검색 후보 수
   bm25_top_k: 10                # BM25 검색 후보 수 (0 이면 BM25 를 쓰지 않고 dense 만)
@@ -39,3 +44,5 @@ generation:
   model: qwen3-0.6b-q4          # 기본 생성 모델. qwen3-0.6b-q4(빠름, TTFT 1.9초) |
                                 #   qwen3-1.7b-q4(정밀, 정답 +4.4%p 이지만 TTFT 2.7~3.4초 — REPORT §42)
                                 #   한 번만 정밀하게 묻고 싶으면 명령에 --precise 를 붙인다
+  flatten_tables: false         # 근거 표를 "머리글: 값" 행 평문으로 펴서 모델에 넣는다(계획서 3-3).
+                                #   색인은 그대로라 재인덱싱이 필요 없다. 측정 중이라 기본은 꺼 둔다
