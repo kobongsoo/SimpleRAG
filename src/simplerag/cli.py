@@ -249,6 +249,29 @@ class StreamWriter:
 
 
 #------------------------------------------------------------------
+# 답변 설정 한 줄 — 소요 블록에 "어떤 모델·근거 방식으로 만든 답인가"를 적는다
+#=> 같은 질문이라도 모델(--model)과 parent 설정에 따라 답이 달라진다. 화면만 보고도
+#   알 수 있게 소요 블록에 한 줄로 남긴다.
+#    1) 답변모델 — 이번 명령에서 실제로 쓰는 생성기 별칭과 모드 이름(빠름/정밀/한국어)
+#    2) parent — off 또는 section(상한 N토큰)
+#   형식은 RAGSearchBox chat_parser.RE_SETUP 과 맞춰 둔다(바꾸면 양쪽 함께).
+#
+# -in: app = 실행 중인 App (pipeline.generator.alias 를 읽는다)
+#
+# -out: str = 예) "답변모델 qwen3-1.7b-q4 (정밀) · parent off"
+# -out: error = 없음 (생성기 별칭을 못 읽으면 설정 기본 모델로 적는다)
+#------------------------------------------------------------------
+def _answer_setup_line(app):
+    gen = getattr(getattr(app, "pipeline", None), "generator", None)
+    # --model / --precise 로 바꾼 경우까지 반영하려고 생성기에 실제로 붙은 별칭을 쓴다
+    alias = getattr(gen, "alias", None) or config.DEFAULT_GEN_MODEL
+    parent = config.PARENT_MODE
+    if parent == "section":
+        parent = "section(상한 {}토큰)".format(config.PARENT_MAX_TOKENS)
+    return "답변모델 {} ({}) · parent {}".format(alias, _model_mode(alias), parent)
+
+
+#------------------------------------------------------------------
 # 질의 1건 화면 출력 (ask / chat 공용)
 #=> 2단계 응답을 그대로 화면에 옮긴다 — 근거를 먼저 찍고 답변을 흘린다.
 #   생성 중 Ctrl+C 는 그 답변만 취소하고 호출자에게 알린다(앱은 안 죽는다).
@@ -327,6 +350,8 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                             t["rerank_error"]))
                     print("  첫 글자 {:.2f}s / 완료 {:.2f}s".format(
                         d["ttft_s"], d["total_s"]))
+                    # 어떤 모델·근거 방식으로 만든 답인지 함께 남긴다(RAGSearchBox chat_parser 가 읽는다)
+                    print("  " + _answer_setup_line(app))
                     if d["cited"]:
                         print("  인용 근거: {}".format(
                             ", ".join("[{}]".format(n) for n in d["cited"])))

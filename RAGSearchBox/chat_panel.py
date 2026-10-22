@@ -19,6 +19,7 @@ from tkinter import font as tkfont
 import dock as rsb_dock
 import log as rsb_log
 import settings as rsb_settings
+from chat_parser import setup_bits
 
 MAX_TURNS = 20          # 이보다 오래된 대화는 지운다(메모리·그리기 비용)
 # 검색 범위(폴더 한정 검색 설계서 §3) — 인덱싱 폴더 = 패널 폴더라 "인덱스 전체" 는 두지 않는다
@@ -593,6 +594,8 @@ class ChatPanel:
             bits.append("첫 글자 {:.2f}s".format(info["ttft_s"]))
         if info.get("total_s") is not None:
             bits.append("완료 {:.2f}s".format(info["total_s"]))
+        # 답을 만든 모델과 parent 설정 — 예전 simplerag.exe 면 줄이 없어 건너뛴다
+        bits.extend(setup_bits(info))
         if bits:
             tk.Label(t.frame, text=" · ".join(bits), font=self.f_small, bg="white",
                      fg="#8b93a7", anchor="w").pack(fill="x", pady=(4, 0))

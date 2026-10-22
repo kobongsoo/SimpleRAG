@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from chat_parser import ChatParser  # noqa: E402
+from chat_parser import ChatParser, setup_bits  # noqa: E402
 
 STARTUP = (
     "모델 적재 중...\n"
@@ -146,6 +146,37 @@ class TestChatParser(unittest.TestCase):
         done = [e for e in events if e[0] == "done"][-1][1]
         self.assertEqual(done["answer"], "요약한 답변 문장입니다. [1]")
         self.assertEqual(len(done["evidence"]), 3)
+
+    #--------------------------------------------------------------
+    # 소요 블록의 '답변모델 · parent' 줄을 읽는다 — 어디서 잘려 들어와도 같다
+    #--------------------------------------------------------------
+    def test_setup_line(self):
+        answer = ANSWER.replace(
+            "  첫 글자 1.24s / 완료 2.86s\n",
+            "  첫 글자 1.24s / 완료 2.86s\n"
+            "  답변모델 midm-2.0-mini-q4 (한국어) · parent section(상한 400토큰)\n")
+        for size in (None, 1, 7):
+            _, p = feed_chunks(STARTUP)
+            p.begin_question()
+            events, _ = feed_chunks(answer, size=size, parser=p)
+            done = [e for e in events if e[0] == "done"][-1][1]
+            self.assertEqual((done["model"], done["model_mode"], done["parent"]),
+                             ("midm-2.0-mini-q4", "한국어", "section(상한 400토큰)"))
+            self.assertEqual(done["ttft_s"], 1.24)
+            self.assertEqual(setup_bits(done),
+                             ["midm-2.0-mini-q4(한국어)", "parent section(상한 400토큰)"])
+
+    #--------------------------------------------------------------
+    # 예전 simplerag.exe 처럼 그 줄이 없으면 비워 두고 아무것도 붙이지 않는다
+    #--------------------------------------------------------------
+    def test_setup_line_missing(self):
+        _, p = feed_chunks(STARTUP)
+        p.begin_question()
+        events, _ = feed_chunks(ANSWER, parser=p)
+        done = [e for e in events if e[0] == "done"][-1][1]
+        self.assertIsNone(done["model"])
+        self.assertIsNone(done["parent"])
+        self.assertEqual(setup_bits(done), [])
 
 
 if __name__ == "__main__":

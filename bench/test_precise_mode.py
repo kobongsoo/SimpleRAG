@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 
 sys.path.insert(0, "src")
 sys.stdout.reconfigure(encoding="utf-8")
@@ -79,6 +80,21 @@ def test_pick():
     check("표시 이름 빠름/정밀",
           (cli._model_mode(config.FAST_GEN_MODEL), cli._model_mode(config.PRECISE_GEN_MODEL)) == ("빠름", "정밀"))
     check("모르는 별칭은 그대로 보여 준다", cli._model_mode("mystery-7b") == "mystery-7b")
+    # 소요 블록의 설정 줄 — 생성기에 실제로 붙은 별칭을 쓴다(RAGSearchBox chat_parser.RE_SETUP 과 같은 형식)
+    fake_app = types.SimpleNamespace(pipeline=types.SimpleNamespace(
+        generator=types.SimpleNamespace(alias=config.KOREAN_GEN_MODEL)))
+    saved = (config.PARENT_MODE, config.PARENT_MAX_TOKENS)
+    try:
+        config.PARENT_MODE = "off"
+        check("설정 줄 — 모델·parent off", cli._answer_setup_line(fake_app) ==
+              "답변모델 midm-2.0-mini-q4 (한국어) · parent off", cli._answer_setup_line(fake_app))
+        config.PARENT_MODE, config.PARENT_MAX_TOKENS = "section", 250
+        check("설정 줄 — parent section 이면 상한도", cli._answer_setup_line(fake_app).endswith(
+              "parent section(상한 250토큰)"), cli._answer_setup_line(fake_app))
+        check("설정 줄 — 생성기가 없으면 기본 모델", cli._answer_setup_line(object()).startswith(
+              "답변모델 {} ".format(config.DEFAULT_GEN_MODEL)))
+    finally:
+        config.PARENT_MODE, config.PARENT_MAX_TOKENS = saved
     check("표시 이름 한국어(Mi:dm)", cli._model_mode(config.KOREAN_GEN_MODEL) == "한국어")
     check("고를 수 있는 모델은 셋", config.USER_GEN_MODELS ==
           ("qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"))

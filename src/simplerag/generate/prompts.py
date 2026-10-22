@@ -54,14 +54,22 @@ PROMPTS = {"v0": SYSTEM_PROMPT, "v4": SYSTEM_PROMPT_V4, "v5": SYSTEM_PROMPT_V5}
 # 지금 설정의 시스템 지시문
 #=> 생성기가 system 인자를 받지 않았을 때 쓸 지시문을 설정(config.PROMPT)에서 고른다.
 #   예열(warm)도 같은 경로를 타므로, 바꾼 지시문의 KV 도 미리 만들어진다.
+#    1) custom 이면 config.yaml generation.system_prompt 글을 그대로 쓴다
+#    2) 그 밖에는 PROMPTS 에 미리 적어 둔 v0 | v4 | v5 중 하나
 #
 # -in: name = 프롬프트 이름(None 이면 config.PROMPT)
 #
 # -out: 지시문 문자열
-# -out: error = 모르는 이름이면 ValueError (설정 검증을 통과했다면 일어나지 않는다)
+# -out: error = 모르는 이름이면 ValueError, custom 인데 글이 비었으면 ValueError
+#               (설정 검증을 통과했다면 둘 다 일어나지 않는다)
 #------------------------------------------------------------------
 def active_system_prompt(name=None):
     key = (name or config.PROMPT or "v0").strip().lower()
+    if key == "custom":
+        # 사용자가 config.yaml 에 직접 쓴 지시문 — 비어 있으면 지시 없이 답하게 되므로 막는다
+        if not config.SYSTEM_PROMPT_TEXT:
+            raise ValueError("prompt: custom 인데 generation.system_prompt 가 비어 있습니다")
+        return config.SYSTEM_PROMPT_TEXT
     if key not in PROMPTS:
         raise ValueError("알 수 없는 프롬프트 '{}' — {} 중 하나".format(key, " | ".join(PROMPTS)))
     return PROMPTS[key]

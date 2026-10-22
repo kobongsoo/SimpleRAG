@@ -116,6 +116,30 @@ def _rerank_mode(v):
 
 
 #------------------------------------------------------------------
+# 글 검사기 만들기 (시스템 지시문처럼 사람이 쓰는 긴 글)
+#=> 문자열인지, 너무 길지 않은지만 본다. 앞뒤 공백·줄바꿈은 걷어 낸다.
+#   YAML 의 `>-` 접기 문법으로 여러 줄에 써도 한 문단으로 들어온다.
+#    1) 문자열이 아니면 오류(숫자 등)
+#    2) 앞뒤 공백 제거 후 max_chars 를 넘으면 오류 — 근거가 들어갈 자리(n_ctx 2048)를 지킨다
+#
+# -in: max_chars = 허용 최대 글자 수
+#
+# -out: check(v) → (다듬은 문자열, 오류문 또는 None)
+# -out: error = 없음 (잘못된 값은 오류문으로 돌려준다)
+#------------------------------------------------------------------
+def _text(max_chars):
+    def check(v):
+        if not isinstance(v, str):
+            return v, "글(문자열)이어야 합니다"
+        s = v.strip()
+        # 지시문이 길수록 근거·답변이 쓸 토큰이 줄어든다
+        if len(s) > max_chars:
+            return v, "{}자 이하여야 합니다(지금 {}자)".format(max_chars, len(s))
+        return s, None
+    return check
+
+
+#------------------------------------------------------------------
 # Parent-Child 모드 검사 — YAML 이 off 를 bool(false)로 읽는 것까지 받아 준다
 #=> config.yaml 에 `parent: off` 라고 쓰면 YAML 1.1 규칙상 off 는 false 가 된다.
 #   사용자는 off 라고 썼으므로 false 를 "off" 로 돌려 받는다.
@@ -185,7 +209,9 @@ SCHEMA = {
     "generation": {
         "top_k": _int(1, 20),
         "max_tokens": _int(16, 1024),             # 답변 토큰 상한 — n_ctx(2048) 안에 근거 자리를 남긴다
-        "prompt": _choice("v0", "v4", "v5"),            # 시스템 지시문(generate/prompts.py PROMPTS)
+        # 시스템 지시문 — v0 | v4 | v5 는 generate/prompts.py PROMPTS, custom 은 아래 system_prompt 글
+        "prompt": _choice("v0", "v4", "v5", "custom"),
+        "system_prompt": _text(1000),             # prompt: custom 일 때 쓰는 지시문 글
         # 기본 생성 모델 — 빠름(0.6B) | 정밀(1.7B, 기본) | 한국어(Mi:dm 2.0 Mini). config.USER_GEN_MODELS 와 같게
         "model": _choice("qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"),
         # 근거 표를 "머리글: 값" 평문으로 펴서 넣는다(계획서 3-3, tableflat.py)

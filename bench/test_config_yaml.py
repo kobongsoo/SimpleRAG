@@ -30,7 +30,8 @@ PY = sys.executable
 KEYS = ["CHUNK_TOKENS", "CHUNK_OVERLAP", "CHUNK_MODE", "MIN_CHUNK_TOKENS",
         "TABLE_HEADER_MAX_TOKENS", "DENSE_TOP_K", "BM25_TOP_K", "RRF_K", "BM25_K1",
         "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT", "DEFAULT_GEN_MODEL",
-        "PARENT_MODE", "PARENT_MAX_TOKENS", "FLATTEN_TABLES", "PDF_INFER_HEADINGS"]
+        "PARENT_MODE", "PARENT_MAX_TOKENS", "FLATTEN_TABLES", "PDF_INFER_HEADINGS",
+        "SYSTEM_PROMPT_TEXT"]
 
 
 #------------------------------------------------------------------
@@ -89,9 +90,16 @@ def test_settings(tmp):
     rc, repo, err = load_in_child()
     check("저장소 config.yaml 을 찾는다", rc == 0 and str(repo["CONFIG_PATH"]).endswith("config.yaml"),
           (rc, err))
-    same = rc == 0 and all(repo[k] == d0[k] for k in KEYS)
+    # 지시문은 이름(custom ↔ v0)이 아니라 실제 글로 비교한다 — 아래 따로 본다
+    same_keys = [k for k in KEYS if k not in ("PROMPT", "SYSTEM_PROMPT_TEXT")]
+    same = rc == 0 and all(repo[k] == d0[k] for k in same_keys)
     check("저장소 config.yaml 값 = 코드 기본값(동작 불변)", same,
-          {k: (repo[k], d0[k]) for k in KEYS if rc == 0 and repo[k] != d0[k]})
+          {k: (repo[k], d0[k]) for k in same_keys if rc == 0 and repo[k] != d0[k]})
+    # 저장소 config.yaml 은 지시문을 custom 글로 적어 두었다 — 그 글이 v0 와 글자까지 같아야 답이 그대로다
+    from simplerag.generate import prompts
+    check("저장소 config.yaml 지시문(custom) = v0 와 글자까지 같다",
+          rc == 0 and repo["PROMPT"] == "custom" and repo["SYSTEM_PROMPT_TEXT"] == prompts.SYSTEM_PROMPT,
+          rc == 0 and (repo["PROMPT"], repo["SYSTEM_PROMPT_TEXT"][:60]))
     check("기본값(128/16/structured/16/10/10/60/1.5/0.75/풀 10/3) — 풀은 §35.9 에서 5→10",
           d0 and (d0["CHUNK_TOKENS"], d0["CHUNK_OVERLAP"], d0["CHUNK_MODE"], d0["MIN_CHUNK_TOKENS"],
                   d0["DENSE_TOP_K"], d0["BM25_TOP_K"], d0["RRF_K"], d0["BM25_K1"], d0["BM25_B"],
@@ -136,6 +144,20 @@ generation:
     check("SIMPLERAG_PROMPT 가 config.yaml 보다 우선(v0)", rc == 0 and v["PROMPT"] == "v0", (rc, v, err))
     rc, v, err = load_in_child(env={"SIMPLERAG_CONFIG": "-", "SIMPLERAG_PROMPT": "v9"})
     check("SIMPLERAG_PROMPT 오타 → 시작할 때 오류", rc != 0 and "v0 | v4" in err, (rc, err[-200:]))
+
+    # 지시문을 config.yaml 에 직접 쓰기(prompt: custom + system_prompt)
+    rc, v, err = load_in_child("generation:\n  prompt: custom\n  system_prompt: >-\n"
+                               "    첫 줄입니다.\n    둘째 줄입니다.\n", tmp=tmp)
+    check("custom — 여러 줄(>-)이 한 문단으로 들어온다",
+          rc == 0 and v["PROMPT"] == "custom" and v["SYSTEM_PROMPT_TEXT"] == "첫 줄입니다. 둘째 줄입니다.", (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  prompt: custom\n", tmp=tmp)
+    check("custom 인데 system_prompt 가 없으면 시작할 때 오류", rc != 0 and "system_prompt" in err, (rc, err[-200:]))
+    rc, v, err = load_in_child("generation:\n  prompt: custom\n  system_prompt: '" + "가" * 1001 + "'\n", tmp=tmp)
+    check("system_prompt 1000자 초과 → 오류", rc != 0 and "1000자" in err, (rc, err[-200:]))
+    rc, v, err = load_in_child("generation:\n  prompt: custom\n  system_prompt: 지시문\n",
+                               env={"SIMPLERAG_PROMPT": "v0"}, tmp=tmp)
+    check("SIMPLERAG_PROMPT=v0 이면 custom 글보다 프리셋이 우선(측정 재현용)",
+          rc == 0 and v["PROMPT"] == "v0", (rc, v, err))
 
     # 정밀 모드(REPORT §44) — 기본은 정밀 1.7B, 설정·환경변수로 빠름(0.6B)·한국어(Mi:dm)를 고를 수 있다
     check("기본 생성 모델은 정밀(1.7B)", d0 and d0["DEFAULT_GEN_MODEL"] == "qwen3-1.7b-q4", d0)

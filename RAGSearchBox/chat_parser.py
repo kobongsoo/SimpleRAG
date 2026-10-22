@@ -33,12 +33,39 @@ RE_TTFT = re.compile(r"첫 글자 ([\d.]+)s / 완료 ([\d.]+)s")
 RE_SEARCH = re.compile(r"검색 (\d+)ms")
 # "  인용 근거: [1], [3]"
 RE_CITED = re.compile(r"인용 근거: (.+)")
+# "  답변모델 qwen3-1.7b-q4 (정밀) · parent off"  — simplerag cli._answer_setup_line 과 같은 형식
+#   (예전 simplerag.exe 는 이 줄을 내지 않는다 → model/parent 는 None)
+RE_SETUP = re.compile(r"답변모델 (\S+)(?: \(([^)]*)\))? · parent (.+?)\s*$", re.M)
 
 _STATE_STARTING = "starting"   # 모델 적재 중 — 첫 프롬프트를 기다린다
 _STATE_IDLE = "idle"           # 질문을 받을 수 있음
 _STATE_EVIDENCE = "evidence"   # 근거 블록을 모으는 중
 _STATE_ANSWER = "answer"       # 답변이 흘러오는 중
 _STATE_TIMING = "timing"       # 소요 블록을 모으는 중
+
+
+#------------------------------------------------------------------
+# 창 아래 소요 줄에 붙일 '답변 설정' 조각
+#=> 답변 창(answer_window)과 대화 패널(chat_panel)이 같은 모양으로 보이도록 한곳에서 만든다.
+#    1) 답변모델 — "qwen3-1.7b-q4(정밀)" 처럼 별칭 뒤에 모드 이름
+#    2) parent — "parent off" / "parent section(상한 400토큰)"
+#   예전 simplerag.exe 처럼 그 줄이 없으면 아무것도 붙이지 않는다.
+#
+# -in: info = ChatParser 의 done 정보(dict)
+#
+# -out: list[str] = 소요 줄에 이어 붙일 조각(없으면 빈 목록)
+# -out: error = 없음
+#------------------------------------------------------------------
+def setup_bits(info):
+    bits = []
+    if info.get("model"):
+        mode = info.get("model_mode")
+        # 모드 이름이 별칭과 같으면(모르는 모델) 두 번 쓰지 않는다
+        bits.append("{}({})".format(info["model"], mode) if mode and mode != info["model"]
+                    else info["model"])
+    if info.get("parent"):
+        bits.append("parent {}".format(info["parent"]))
+    return bits
 
 
 #------------------------------------------------------------------
@@ -218,7 +245,8 @@ class ChatParser:
     #
     # -in: 없음
     #
-    # -out: dict = {answer, evidence, search_ms, ttft_s, total_s, cited, warnings, parsed}
+    # -out: dict = {answer, evidence, search_ms, ttft_s, total_s, cited, model, model_mode,
+    #               parent, warnings, parsed}
     # -out: error = 없음 (못 뽑은 값은 None)
     #--------------------------------------------------------------
     def _done_info(self):
@@ -226,6 +254,8 @@ class ChatParser:
         ttft = RE_TTFT.search(t)
         search = RE_SEARCH.search(t)
         cited = RE_CITED.search(t)
+        # 어떤 모델·parent 로 만든 답인지 — 창 아래 소요 줄에 함께 보인다
+        setup = RE_SETUP.search(t)
         warns = [ln.strip() for ln in t.splitlines() if "⚠" in ln]
         return {
             "answer": "".join(self._answer).strip(),
@@ -234,6 +264,9 @@ class ChatParser:
             "ttft_s": float(ttft.group(1)) if ttft else None,
             "total_s": float(ttft.group(2)) if ttft else None,
             "cited": cited.group(1).strip() if cited else "",
+            "model": setup.group(1) if setup else None,
+            "model_mode": setup.group(2) if setup else None,
+            "parent": setup.group(3) if setup else None,
             "warnings": warns,
             "parsed": self._saw_evidence,
         }

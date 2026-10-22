@@ -18,6 +18,7 @@ from tkinter import font as tkfont
 import dock as rsb_dock
 import log as rsb_log
 import settings as rsb_settings
+from chat_parser import setup_bits
 
 # 화면 가장자리에서 이만큼 띄운다
 MARGIN = 8
@@ -480,6 +481,8 @@ class AnswerWindow:
             bits.append("첫 글자 {:.2f}s".format(info["ttft_s"]))
         if info.get("total_s") is not None:
             bits.append("완료 {:.2f}s".format(info["total_s"]))
+        # 답을 만든 모델과 parent 설정 — 예전 simplerag.exe 면 줄이 없어 건너뛴다
+        bits.extend(setup_bits(info))
         self.lbl_timing.config(text=" · ".join(bits))
         self.lbl_status.config(text="● 완료")
         rsb_log.diag(self.log, "답변 완료: 근거 %d건 · 답변 %d자 · %s",

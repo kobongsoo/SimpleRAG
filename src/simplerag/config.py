@@ -340,11 +340,18 @@ GEN_FLASH_ATTN = True       # CPU 경로. prefill 이득 > decode 손해 (RAG �
 GEN_MAX_TOKENS = _setting("generation.max_tokens", 200, "SIMPLERAG_GEN_MAX_TOKENS")
 # 시스템 지시문 선택. v0 = 채택 프롬프트(종전과 글자까지 동일), v4 = 계획서 1-3 실험
 #   ("질문의 답을 첫 문장에 바로, 1~2문장"). config.yaml generation.prompt / SIMPLERAG_PROMPT
+#   custom = config.yaml generation.system_prompt 에 적은 글을 그대로 쓴다.
 PROMPT = str(_setting("generation.prompt", "v0", "SIMPLERAG_PROMPT", str)).strip().lower()
-if PROMPT not in ("v0", "v4", "v5"):
+if PROMPT not in ("v0", "v4", "v5", "custom"):
     # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것
     from .settings import ConfigError as _ConfigError
-    raise _ConfigError("SIMPLERAG_PROMPT={!r} — v0 | v4 | v5 중 하나여야 합니다".format(PROMPT))
+    raise _ConfigError("SIMPLERAG_PROMPT={!r} — v0 | v4 | v5 | custom 중 하나여야 합니다".format(PROMPT))
+# prompt: custom 일 때의 지시문 글. 환경변수로는 바꾸지 않는다(긴 글이라 yaml 에서만 관리)
+SYSTEM_PROMPT_TEXT = str(_YAML.get("generation.system_prompt", "") or "").strip()
+if PROMPT == "custom" and not SYSTEM_PROMPT_TEXT:
+    # custom 을 골랐는데 글이 비어 있으면 모델이 지시 없이 답한다 — 시작할 때 막는다
+    from .settings import ConfigError as _ConfigError
+    raise _ConfigError("generation.prompt: custom 이면 generation.system_prompt 에 지시문을 적어야 합니다")
 GEN_TEMPERATURE = 0.0
 # 근거 표를 "머리글: 값" 행 단위 평문으로 펴서 모델에 넣는다(계획서 3-3, tableflat.py).
 #   Word 병합 셀 탓에 값 행이 한 칸씩 밀려 모델이 옆 칸 값을 집는 실패가 있다(g048).
