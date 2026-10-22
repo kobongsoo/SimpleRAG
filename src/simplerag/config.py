@@ -327,10 +327,10 @@ GEN_MAX_TOKENS = _setting("generation.max_tokens", 200, "SIMPLERAG_GEN_MAX_TOKEN
 # 시스템 지시문 선택. v0 = 채택 프롬프트(종전과 글자까지 동일), v4 = 계획서 1-3 실험
 #   ("질문의 답을 첫 문장에 바로, 1~2문장"). config.yaml generation.prompt / SIMPLERAG_PROMPT
 PROMPT = str(_setting("generation.prompt", "v0", "SIMPLERAG_PROMPT", str)).strip().lower()
-if PROMPT not in ("v0", "v4"):
+if PROMPT not in ("v0", "v4", "v5"):
     # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것
     from .settings import ConfigError as _ConfigError
-    raise _ConfigError("SIMPLERAG_PROMPT={!r} — v0 | v4 중 하나여야 합니다".format(PROMPT))
+    raise _ConfigError("SIMPLERAG_PROMPT={!r} — v0 | v4 | v5 중 하나여야 합니다".format(PROMPT))
 GEN_TEMPERATURE = 0.0
 # 근거 표를 "머리글: 값" 행 단위 평문으로 펴서 모델에 넣는다(계획서 3-3, tableflat.py).
 #   Word 병합 셀 탓에 값 행이 한 칸씩 밀려 모델이 옆 칸 값을 집는 실패가 있다(g048).

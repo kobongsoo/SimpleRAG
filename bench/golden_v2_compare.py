@@ -8,6 +8,7 @@
 #    · 근거 적중  — 정답 발췌문(reference_contexts)이 근거 청크 안에 실제로 들어 있는 비율
 #                   (공백·'|' 를 지우고 비교 — 두 엔진의 표 렌더링 차이를 없앤다)
 #    · 핵심어 정답 — 답변에 must 핵심어가 모두 들어 있는가
+#    · 완화 정답   — 위와 같되 숫자 표기 차이(10인=10명, 2백만원=200만원)는 같은 값으로 인정
 #   RAGAS 지표 — scores_items_*.json 이 있으면 Faithfulness·AR·CP·CR 평균
 #
 #   짝 비교: 이진 지표는 A만 맞힘 / B만 맞힘 개수와 McNemar 정확검정 p 값.
@@ -77,6 +78,63 @@ def must_ok(answer, musts):
     return all(any(norm(alt) in answer for alt in m.split("|")) for m in musts)
 
 
+# 숫자 + (한국어 자릿수 단위) + (단위) — "2백만원", "200만원", "2,000,000원", "10인", "만 2년"
+_NUM = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(억|천만|백만|십만|만|천|백)?\s*"
+                  r"(원|명|인|년|개월|일|주일|주|%|퍼센트|시간|분|km|회|세|개|건|쪽|점|배)?")
+_MULT = {"억": 10 ** 8, "천만": 10 ** 7, "백만": 10 ** 6, "십만": 10 ** 5, "만": 10 ** 4, "천": 10 ** 3, "백": 100}
+# 같은 뜻의 단위는 한 이름으로 — 10명 = 10인, 1주 = 1주일, 50% = 50퍼센트
+_UNIT = {"인": "명", "주일": "주", "퍼센트": "%"}
+
+
+#------------------------------------------------------------------
+# 글 속 (값, 단위) 쌍 뽑기
+#=> 한국어 자릿수 단위(만·백만 …)를 곱해 값을 맞추고, 같은 뜻 단위는 한 이름으로 모은다.
+#
+# -in: s = 글
+#
+# -out: set[(float, str)] — 단위가 없으면 ""
+# -out: error = 없음 (해석 못 한 숫자는 건너뛴다)
+#------------------------------------------------------------------
+def _quantities(s):
+    out = set()
+    for num, mult, unit in _NUM.findall(unicodedata.normalize("NFKC", s or "")):
+        try:
+            v = float(num.replace(",", "")) * _MULT.get(mult, 1)
+        except ValueError:
+            continue
+        out.add((v, _UNIT.get(unit, unit)))
+    return out
+
+
+#------------------------------------------------------------------
+# 핵심어 판정(완화) — 숫자 표기 차이를 같은 값으로 인정
+#=> 엄격 판정이 맞으면 그대로 맞음. 아니면 핵심어마다
+#    · 숫자가 없는 핵심어 → 엄격 판정과 같다(글자 그대로 들어 있어야 함)
+#    · 숫자가 있는 핵심어 → 그 안의 (값, 단위)가 답변에 모두 있으면 맞음
+#      (핵심어에 단위가 없으면 값만 맞으면 된다)
+#   실측: "10인"↔"10명", "2백만원"↔"200만원" 이 엄격 판정에서 오답으로 잡혔다(골든셋 v2, 2026-10-22).
+#
+# -in: answer = 답변 원문
+# -in: musts  = 핵심어 목록
+#
+# -out: bool
+# -out: error = 없음
+#------------------------------------------------------------------
+def must_ok_lenient(answer, musts):
+    flat = norm(answer)
+    got = _quantities(answer)
+    for m in musts:
+        if any(norm(alt) in flat for alt in m.split("|")):
+            continue
+        need = _quantities(m)
+        if not need:
+            return False
+        for v, u in need:
+            if not any(abs(v - gv) < 1e-6 and (not u or u == gu) for gv, gu in got):
+                return False
+    return True
+
+
 #------------------------------------------------------------------
 # 실험 폴더 읽기 — 답변 + (있으면) RAGAS 점수
 #=> scores_items_*.json 이 여러 개(지표 부분집합)면 문항 id 로 합친다.
@@ -106,6 +164,7 @@ def load(name):
                             ctx_rate=found / len(ctxs) if ctxs else 0.0,
                             ctx_ok=bool(ctxs) and found == len(ctxs),
                             must_ok=must_ok(norm(r.get("response", "")), r.get("must") or []),
+                            must_lenient=must_ok_lenient(r.get("response", ""), r.get("must") or []),
                             scores=scores.get(r["id"], {}))
     return out
 
@@ -139,7 +198,7 @@ def mcnemar(b, c):
 #------------------------------------------------------------------
 def summarize(ids, A, B):
     s = {"n": len(ids)}
-    for key in ("doc_ok", "ctx_ok", "must_ok"):
+    for key in ("doc_ok", "ctx_ok", "must_ok", "must_lenient"):
         a = sum(A[i][key] for i in ids)
         b = sum(B[i][key] for i in ids)
         only_a = sum(A[i][key] and not B[i][key] for i in ids)
@@ -171,8 +230,8 @@ def show(name, s):
         return "{:>3}→{:<3}(+{}/-{} p{:.2f})".format(v["A"], v["B"], v["only_B"], v["only_A"], v["p"])
     rag = " ".join("{} {:.2f}→{:.2f}".format(lab, s[lab]["A"], s[lab]["B"])
                    for _, lab in RAGAS_COLS if lab in s)
-    print("{:<14} n={:<3} 문서 {} 근거 {} 핵심어 {} {}".format(
-        name, s["n"], pair("doc_ok"), pair("ctx_ok"), pair("must_ok"), rag))
+    print("{:<14} n={:<3} 문서 {} 근거 {} 핵심어 {} 완화 {} {}".format(
+        name, s["n"], pair("doc_ok"), pair("ctx_ok"), pair("must_ok"), pair("must_lenient"), rag))
 
 
 #------------------------------------------------------------------

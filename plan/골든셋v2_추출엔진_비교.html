@@ -104,6 +104,7 @@ footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px
     <li><a href="#s12">추가 측정 — XLSX 옆 표 나누기 (blocks v2)</a></li>
     <li><a href="#s13">Phase 2 — DOC·PDF 블록화 (blocks v4)</a></li>
     <li><a href="#s14">추가 실험 — 표 평문화 · Parent-Child A · PDF P-2</a></li>
+    <li><a href="#s15">생성 쪽 실험 — 한국어 모델 · 지시문 v5 · 부모 상한 · 채점 보정</a></li>
   </ol>
 </nav>
 
@@ -415,6 +416,45 @@ blocks: [MCCS 이중화 테스트 시나리오 > MCCS 테스트 시나리오] | 
     <code>flatten_tables</code>·<code>parent</code> 는 생성 단계만 바꿔 재인덱싱이 필요 없다.</p>
   </div>
   <p class="meta">원자료: <code>results/ragas_golden/g2_v4_flat(_17)</code> · <code>g2_v4_parent(_17)</code> · <code>g2_blocks_v6(_17)</code></p>
+</section>
+
+<section id="s15">
+  <h2><span class="no">15</span>생성 쪽 실험 — 한국어 모델 · 지시문 v5 · 부모 상한 · 채점 보정 (2026-10-22)</h2>
+  <p>검색·근거는 충분히 좋아졌는데 정답이 근거만큼 따라오지 않아, 생성 쪽을 바꿔 봤다. 모두 blocks v4 인덱스, 규칙 지표만(RAGAS 없음).</p>
+
+  <h3>채점 보정 — '완화' 핵심어 지표 추가</h3>
+  <p>'근거는 맞는데 오답'(1.7B 29문항)을 보니 상당수가 표기만 다른 정답이었다("10인"↔"10명", "2백만원"↔"200만원").
+  <code>golden_v2_compare.py</code> 에 숫자 핵심어를 (값, 단위)로 바꿔 비교하는 <b>완화 정답</b>을 더했다(숫자가 없는 핵심어는 엄격 그대로).
+  "50%"↔"50만원", "18만원"↔"20만원" 같은 진짜 오답은 그대로 틀림이다. 완화 지표로 다시 계산해도 앞선 결론은 바뀌지 않았다
+  (legacy→blocks 1.7B: 엄격 67→80 p=0.04, 완화 73→85 p=0.06).</p>
+
+  <h3>결과</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>실험</th><th>정답 0.6B<br>(엄격/완화)</th><th>정답 1.7B·후보<br>(엄격/완화)</th><th>TTFT 중앙 · 3초 이내</th><th>판정</th></tr></thead>
+    <tbody>
+      <tr><td>기준 (Qwen3, 지시문 v0, 부모 끔)</td><td class="n">57 / 59</td><td class="n">80 / 85</td><td class="n">0.6B 1.54초 · 100%<br>1.7B 2.74초 · 72%</td><td>—</td></tr>
+      <tr><td><b>Mi:dm 2.0 Mini 2.3B</b></td><td class="n">—</td><td class="n up">86 / 94<br>(1.7B 대비 +16/−7, p=0.09)</td><td class="n dn">4.53초 · 2%</td><td><span class="tag t-acc">정확도 우선 모드 후보</span> 정답 최다, 속도 목표 불충족</td></tr>
+      <tr><td>Kanana 1.5 2.1B</td><td class="n">—</td><td class="n">86 / 89</td><td class="n">3.46초 · 20%</td><td><span class="tag t-bad">비채택</span> 68문항이 답 대신 근거를 나열</td></tr>
+      <tr><td>지시문 v5 ("숫자·명칭은 근거 표기 그대로")</td><td class="n">58 / 59</td><td class="n dn">74 / 78 (+4/−11)</td><td class="n">0.6B 1.79초 · 98%</td><td><span class="tag t-bad">비채택</span> 1.7B 표 문항 −3</td></tr>
+      <tr><td>Parent-Child 상한 250</td><td class="n">58 / 62</td><td class="n">77 / 80</td><td class="n">0.6B 2.66초 · 66%</td><td><span class="tag t-mut">끔 유지</span></td></tr>
+      <tr><td>Parent-Child 상한 200</td><td class="n">51 / 55</td><td class="n dn">74 / 77</td><td class="n">0.6B 2.17초 · 89%</td><td><span class="tag t-mut">끔 유지</span> 근거 101→97</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>한국어 모델</b> — 9월 506문항(DOC 위주)에서는 Mi:dm 이 1.7B 보다 11문항 적었는데, 포맷이 섞인 v2 에서는 반대로 가장 많이 맞혔다
+      (PDF +4·DOCX +3·TXT). 문서 구성에 따라 순위가 바뀌므로 단정하지 않는다. 첫 글자까지 4.5초라 SimpleRAG 의 3초 목표에는 맞지 않는다.
+      설정에서 고르려면 <code>generation.model</code> 선택지에 추가해야 한다(한국어 모델 작업분, 미커밋).</li>
+    <li><b>지시문 v5</b> — v0 에 한 문장만 더했는데 1.7B 가 7문항 더 틀렸다. 9월 v4 와 같은 교훈: 이 크기의 모델은 지시를 덧붙이면 다른 데서 잃는다.
+      코드에는 재현용으로만 남긴다(<code>generation.prompt: v5</code>).</li>
+    <li><b>부모 상한 축소</b> — 상한을 줄이면 근거 증가 효과(400 에서 117)가 사라진다. 같은 절을 한 번만 넣는 규칙이 다른 근거 자리를
+      줄이기 때문으로 보인다. 어느 상한에서도 정답이 기준보다 유의하게 낫지 않았다.</li>
+    <li><b>TTFT 잡음</b> — 같은 조건에서도 측정마다 ±0.5초 이상 흔들린다(노트북 발열·부하). 속도 비교는 같은 시간대에 반복해서 재야 한다.</li>
+  </ul>
+  <div class="verdict">
+    <p><strong>정리</strong> — 운영 기본값(Qwen3 0.6B · 지시문 v0 · 부모 끔 · 표 평문화 끔 · PDF 제목 추정 끔)은 바꾸지 않는다.
+    정답을 확실히 더 얻는 방법은 지금으로선 <b>더 큰 모델</b>(1.7B, Mi:dm)뿐이고, 그 대가는 속도다.</p>
+  </div>
+  <p class="meta">원자료: <code>results/ragas_golden/g2_v4_midm</code> · <code>g2_v4_kanana</code> · <code>g2_v4_p5(_17)</code> · <code>g2_v4_parent250(_17)</code> · <code>g2_v4_parent200(_17)</code></p>
 </section>
 
 <footer>
