@@ -227,6 +227,11 @@ if EXTRACT_ENGINE not in ("legacy", "blocks"):
     # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것
     raise ConfigError("SIMPLERAG_EXTRACT_ENGINE={!r} — legacy | blocks 중 하나여야 합니다".format(
         EXTRACT_ENGINE))
+# PDF 글자 크기로 제목 추정(재설계서 §9 P-2). 기본 끔 — 골든셋 v2 에서 청크 경로·근거는 좋아졌지만
+#   (PDF 근거 21→24) 핵심어 정답은 오르지 않았다(1.7B PDF 18→14, 유의차 없음, 2026-10-22).
+#   켜면 청크가 바뀌므로 전체 재인덱싱이 필요하다(청킹 설정 기록에 들어간다).
+PDF_INFER_HEADINGS = bool(_setting("extract.pdf_headings", False, "SIMPLERAG_PDF_HEADINGS",
+                                   lambda s: s.strip() not in ("0", "false", "no", "")))
 # 문서별 블록 JSON 을 <데이터 루트>/blocks_dump 에 남긴다(진단용, 기본 끔)
 EXTRACT_DUMP = bool(_setting("extract.dump_blocks", False))
 # 약한 초과 허용 α — 단위(블록·표 행) 하나가 예산 × α 이하면 쪼개지 않고 통째로 둔다.
@@ -334,6 +339,14 @@ GEN_TEMPERATURE = 0.0
 FLATTEN_TABLES = ((os.environ["SIMPLERAG_FLATTEN_TABLES"] != "0")
                   if os.environ.get("SIMPLERAG_FLATTEN_TABLES")
                   else bool(_YAML.get("generation.flatten_tables", False)))
+# Parent-Child 실험 A(재설계서 §12) — 검색은 청크로 하고 sLLM 에는 그 청크가 속한 절(부모)을 넣는다.
+#   "off"(기본) | "section". blocks 엔진 인덱스(section_id 있음)에서만 효과가 있고 재색인은 필요 없다.
+#   근거 토큰이 늘어 TTFT 가 늘어난다 — 부모 상한은 parent_max_tokens(기본 400).
+PARENT_MODE = str(_setting("generation.parent", "off", "SIMPLERAG_PARENT", str)).strip().lower()
+if PARENT_MODE not in ("off", "section"):
+    # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것
+    raise ConfigError("SIMPLERAG_PARENT={!r} — off | section 중 하나여야 합니다".format(PARENT_MODE))
+PARENT_MAX_TOKENS = _setting("generation.parent_max_tokens", 400, "SIMPLERAG_PARENT_MAX_TOKENS")
 
 # ── 생성 백엔드 (CPU / iGPU) ─────────────────────────
 # 내장 GPU(Vulkan)로 prefill 을 넘기면 LLM 구간이 2.25→0.80초(506문항 실측,

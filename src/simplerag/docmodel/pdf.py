@@ -6,12 +6,14 @@
 #                     되풀이되는 줄을 header/footer 로 표시(청크에서 제외, 처음 1개는 본문에 남김)
 #    · 쪽번호 — 맨 위·아래 줄이 "12" · "- 12 -" · "3 / 30" · "Page 3" 꼴이면 page_number 로 표시
 #    · 목차 — 점선 리더 줄은 공통 후처리(postprocess._mark_toc)가 toc 로 표시
-#    · 제목 — 아직 정규식 추측(후처리의 제목 폴백). 글자 크기 기반 추정은 P-2
+#    · 제목(P-2) — 본문보다 확연히 큰 짧은 줄을 제목으로 추정(source=inferred, 크기 순위 = 수준).
+#                 추정 제목이 3개 이상이면 후처리가 정규식 제목(조문·번호절)을 그 아래 수준으로 겹친다
 #   한 줄을 블록 하나로 둔다 — 기존 청킹이 큰 절을 줄 단위로 나누던 것과 같은 단위다.
 #   텍스트층이 사실상 없으면(스캔 PDF) ValueError → 기존 추출(사이냅 폴백 포함)로 보낸다.
 #------------------------------------------------------------------
 
 import re
+import statistics
 import time
 
 from . import blocks as B
@@ -34,6 +36,15 @@ _PAGE_NO = re.compile(r"^\s*(?:[-–—]\s*)?\d{1,4}(?:\s*[-–—])?\s*$"
                       r"|^\s*(?:page|p\.?)\s*\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?\s*$", re.I)
 _LINE_SPLIT = re.compile(r"\r\n|\r|\n")
 
+# 글자 크기 제목 추정(P-2)
+HEAD_RATIO = 1.12            # 본문 크기의 이 배 이상이면 제목 후보
+HEAD_MAX_CHARS = 60          # 이보다 긴 줄은 제목으로 보지 않는다
+MIN_INFERRED = 3             # 후보가 이보다 적으면 추정하지 않는다(정규식 폴백에 맡김)
+HEAD_MAX_SHARE = 0.15        # 후보가 전체 줄의 이 비율을 넘으면 큰 글씨 문서로 보고 추정하지 않는다
+MAX_LEVEL = 3                # 크기 순위로 매기는 제목 수준의 최대값
+# 목차 줄 꼬리(점선 리더 + 쪽번호) — 큰 글씨 목차를 제목으로 잡지 않게
+_TOC_TAIL = re.compile(r"(?:\.{3,}|·{3,}|…{2,}|-{4,})\s*\d{1,4}\s*$")
+
 
 #------------------------------------------------------------------
 # PDF 추출 (진입점)
@@ -52,7 +63,7 @@ def extract(path, title=""):
     except Exception as e:      # noqa: BLE001 — 손상·암호화 PDF 는 폴백
         raise ValueError("PDF 열기 실패: {}".format(type(e).__name__))
     doc = B.Document(format="pdf", title=title)
-    pages = []
+    pages, sizes = [], []
     t0 = time.monotonic()
     try:
         n = len(pdf)
@@ -62,10 +73,13 @@ def extract(path, title=""):
                 break
             page = pdf[i]
             try:
-                txt = page.get_textpage().get_text_range()
+                tp = page.get_textpage()
+                txt = tp.get_text_range()
+                lines = [ln.rstrip() for ln in _LINE_SPLIT.split(txt or "")]
+                pages.append(lines)
+                sizes.append(_line_sizes(tp, txt, len(lines)))
             finally:
                 page.close()
-            pages.append([ln.rstrip() for ln in _LINE_SPLIT.split(txt or "")])
     finally:
         pdf.close()
     doc.pages = len(pages)
@@ -73,13 +87,101 @@ def extract(path, title=""):
         raise ValueError("PDF 텍스트층 없음(스캔 PDF)")
 
     edge = _edge_kinds(pages)
+    # 글자 크기 제목 추정은 설정으로 켤 때만(기본 끔 — config.PDF_INFER_HEADINGS 주석의 측정 결과)
+    from .. import config
+    heads = _infer_headings(pages, sizes, edge) if config.PDF_INFER_HEADINGS else {}
     for no, lines in enumerate(pages, 1):
         for j, ln in enumerate(lines):
             if not ln.strip():
                 continue
+            if (no, j) in heads:
+                doc.blocks.append(B.Block(B.HEADING, ln.strip(), level=heads[(no, j)], page=no,
+                                          source=B.SRC_INFERRED))
+                continue
             kind = edge.get((no, j), B.PARAGRAPH)
             doc.blocks.append(B.Block(kind, ln.strip(), page=no))
     return doc
+
+
+#------------------------------------------------------------------
+# 줄마다 글자 크기 (P-2)
+#=> 쪽 글자를 _LINE_SPLIT 과 같은 규칙으로 줄로 나누며, 줄마다 공백이 아닌 글자들의
+#   글꼴 크기 중앙값을 낸다. 글자 수(count_chars)와 글 길이가 다르면 위치를 맞출 수 없어
+#   그 쪽은 크기 없이 둔다.
+#
+# -in: tp      = PdfTextPage
+# -in: txt     = tp.get_text_range() 결과
+# -in: n_lines = _LINE_SPLIT 으로 나눈 줄 수(맞춰 볼 기준)
+#
+# -out: list[float 또는 None] — 줄마다 글꼴 크기 (모르면 None)
+# -out: error = 없음 (pdfium 호출 실패 시 모두 None)
+#------------------------------------------------------------------
+def _line_sizes(tp, txt, n_lines):
+    try:
+        if tp.count_chars() != len(txt or ""):
+            return [None] * n_lines
+        raw = pdfium.raw
+        out, cur = [], []
+        i = 0
+        while i < len(txt):
+            ch = txt[i]
+            if ch in "\r\n":
+                out.append(statistics.median(cur) if cur else None)
+                cur = []
+                # \r\n 은 줄바꿈 하나 — _LINE_SPLIT 과 같은 규칙
+                i += 2 if (ch == "\r" and i + 1 < len(txt) and txt[i + 1] == "\n") else 1
+                continue
+            if not ch.isspace():
+                cur.append(round(raw.FPDFText_GetFontSize(tp.raw, i), 1))
+            i += 1
+        out.append(statistics.median(cur) if cur else None)
+        return out if len(out) == n_lines else [None] * n_lines
+    except Exception:           # noqa: BLE001 — 크기를 못 읽으면 제목 추정만 하지 않는다
+        return [None] * n_lines
+
+
+#------------------------------------------------------------------
+# 글자 크기로 제목 줄 추정 (P-2)
+#=> 본문보다 확연히 큰 짧은 줄을 제목으로 본다.
+#    1) 본문 크기 = 15자 이상 줄들의 크기 최빈값(글자 수 가중)
+#    2) 크기 ≥ 본문 × HEAD_RATIO, 길이 ≤ HEAD_MAX_CHARS, 머리말·쪽번호·목차 아님 → 후보
+#    3) 후보가 MIN_INFERRED 개 미만이거나 전체 줄의 HEAD_MAX_SHARE 를 넘으면 추정하지 않는다
+#       (크기 정보가 없는 PDF, 문서 전체가 큰 글씨인 PDF)
+#    4) 후보 크기를 큰 순으로 순위 매겨 수준 1~MAX_LEVEL
+#   굵기만으로는 정하지 않는다 — 실측에서 Q/A 강조(상담사례집)에 굵기를 썼다.
+#
+# -in: pages = 쪽별 줄 목록
+# -in: sizes = 쪽별 줄 크기 목록(_line_sizes)
+# -in: edge  = _edge_kinds 결과(제외할 가장자리 줄)
+#
+# -out: dict = {(쪽, 줄 위치): 수준}
+# -out: error = 없음
+#------------------------------------------------------------------
+def _infer_headings(pages, sizes, edge):
+    weight = {}
+    n_lines = 0
+    for lines, szs in zip(pages, sizes):
+        for ln, s in zip(lines, szs):
+            if s and len(ln.strip()) >= 15:
+                weight[s] = weight.get(s, 0) + len(ln.strip())
+            if ln.strip():
+                n_lines += 1
+    if not weight:
+        return {}
+    body = max(weight, key=weight.get)
+    cand = {}
+    for no, (lines, szs) in enumerate(zip(pages, sizes), 1):
+        for j, (ln, s) in enumerate(zip(lines, szs)):
+            t = ln.strip()
+            if not t or not s or (no, j) in edge or len(t) > HEAD_MAX_CHARS:
+                continue
+            if s >= body * HEAD_RATIO and re.search(r"[가-힣A-Za-z]", t) and not _TOC_TAIL.search(t):
+                cand[(no, j)] = s
+    if len(cand) < MIN_INFERRED or len(cand) > n_lines * HEAD_MAX_SHARE:
+        return {}
+    ranks = sorted({round(s / body, 1) for s in cand.values()}, reverse=True)
+    level = {r: min(MAX_LEVEL, k + 1) for k, r in enumerate(ranks)}
+    return {pos: level[round(s / body, 1)] for pos, s in cand.items()}
 
 
 #------------------------------------------------------------------

@@ -145,6 +145,7 @@ SCHEMA = {
     "extract": {
         "engine": _choice("legacy", "blocks"),     # 추출 엔진(바꾸면 전체 재인덱싱)
         "dump_blocks": _bool,                      # 문서별 블록 JSON 저장(진단용)
+        "pdf_headings": _bool,                     # PDF 글자 크기로 제목 추정(P-2, 기본 끔)
     },
     "retrieval": {
         "dense_top_k": _int(1, 1000),
@@ -166,6 +167,9 @@ SCHEMA = {
         "model": _choice("qwen3-0.6b-q4", "qwen3-1.7b-q4"),
         # 근거 표를 "머리글: 값" 평문으로 펴서 넣는다(계획서 3-3, tableflat.py)
         "flatten_tables": _bool,
+        # Parent-Child 실험 A — sLLM 에 청크 대신 그 청크의 절(부모)을 넣는다(재설계서 §12)
+        "parent": _choice("off", "section"),
+        "parent_max_tokens": _int(64, 1500),
     },
 }
 

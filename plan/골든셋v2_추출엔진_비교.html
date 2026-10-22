@@ -103,6 +103,7 @@ footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px
     <li><a href="#s11">다음 단계</a></li>
     <li><a href="#s12">추가 측정 — XLSX 옆 표 나누기 (blocks v2)</a></li>
     <li><a href="#s13">Phase 2 — DOC·PDF 블록화 (blocks v4)</a></li>
+    <li><a href="#s14">추가 실험 — 표 평문화 · Parent-Child A · PDF P-2</a></li>
   </ol>
 </nav>
 
@@ -377,6 +378,43 @@ blocks: [MCCS 이중화 테스트 시나리오 > MCCS 테스트 시나리오] | 
     <code>bench/ragas_golden.py score --exp g2_blocks_v4 …</code> (1.7B 는 <code>g2_blocks_v4_17</code>, F·AR 만).</p>
   </div>
   <p class="meta">원자료: <code>results/ragas_golden/g2_blocks_v4</code> · <code>g2_blocks_v4_17</code> (근거 150/150 동일), 비교 JSON <code>g2_legacy_vs_g2_blocks_v4.json</code> · <code>g2_legacy_17_vs_g2_blocks_v4_17.json</code></p>
+</section>
+
+<section id="s14">
+  <h2><span class="no">14</span>추가 실험 — 표 평문화 · Parent-Child A · PDF P-2 (2026-10-22)</h2>
+  <p>모두 blocks v4 를 기준으로, 하나씩만 바꿔 같은 150문항을 0.6B·1.7B 로 다시 수집했다. 규칙 지표만 쓴다
+  (RAGAS 는 판정 서버 사정으로 하지 않음). 운영 기본값은 셋 다 <b>끔</b>으로 두었다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>실험</th><th>바꾼 것</th><th>근거 포함</th><th>정답 0.6B</th><th>정답 1.7B</th><th>TTFT 1.7B 중앙</th><th>판정</th></tr></thead>
+    <tbody>
+      <tr><td>기준 (v4)</td><td>—</td><td class="n">101</td><td class="n">57</td><td class="n">80</td><td class="n">2.74초</td><td>—</td></tr>
+      <tr><td><b>표 평문화</b><br><code>generation.flatten_tables</code></td><td>표 근거를 "머리글: 값" 평문으로 펴서 넣음(색인 그대로)</td>
+        <td class="n">101</td><td class="n">57 (±0)</td><td class="n dn">77 (+0/−3)</td><td class="n">—</td><td><span class="tag t-bad">끔 유지</span> 1.7B 표 문항만 −3(20→17)</td></tr>
+      <tr><td><b>Parent-Child A</b><br><code>generation.parent: section</code></td><td>검색은 청크, LLM 에는 같은 절 청크를 이은 부모(상한 400토큰)</td>
+        <td class="n up">117 (+22/−6, p&lt;0.01)</td><td class="n">54 (+11/−14)</td><td class="n">81 (+14/−13)</td><td class="n dn">3.98초 (3초 이내 72→18%)</td>
+        <td><span class="tag t-mut">끔 유지</span> 근거는 유의하게 늘었지만 정답은 그대로, 속도 손해 큼</td></tr>
+      <tr><td><b>PDF P-2</b><br><code>extract.pdf_headings</code></td><td>본문보다 12% 이상 큰 짧은 줄을 제목으로 추정, 정규식 제목은 그 아래로</td>
+        <td class="n">105 (PDF 21→24)</td><td class="n">58 (PDF 14→11)</td><td class="n">76 (PDF 18→14)</td><td class="n">—</td>
+        <td><span class="tag t-mut">끔 유지</span> 경로는 정확해졌으나 정답 개선 미확인</td></tr>
+    </tbody>
+  </table></div>
+  <h3>해석</h3>
+  <ul>
+    <li><b>표 평문화</b> — 표 근거가 든 27문항 중 0.6B 11개·1.7B 9개 답이 바뀌었지만 맞힘은 늘지 않았고 1.7B 는 3개 줄었다.
+      '본인 결혼 500,000 → 500만원' 같은 숫자 오독도 고쳐지지 않았다.</li>
+    <li><b>Parent-Child A</b> — 정답 발췌문이 LLM 입력에 들어가는 비율은 확실히 올랐다(특히 PDF 21→30, HWPX 9→13). 그러나 근거가 길어지면(619→861자)
+      작은 모델이 요점을 덜 짚어 정답은 제자리였고, prefill 이 늘어 1.7B 의 3초 이내 응답이 72% → 18% 로 무너졌다.
+      다음 후보: 부모 상한을 200~250토큰으로 줄여 근거 증가와 속도의 균형점을 찾는다. 부모 조회(약 400ms)는 채택 시 캐시로 줄인다.</li>
+    <li><b>PDF P-2</b> — 청크 경로는 눈에 띄게 정확해졌다(예: 학교 회계연도 문항
+      <code>참고 2 ｢언론중재…｣상 언론사 &gt; 제351조</code> → <code>Ⅴ. 금품등의 수수 금지 등 &gt; 수수 금지 금품등 &gt; 제351조</code>).
+      그러나 PDF 정답은 1.7B 18→14(+4/−8, p=0.39)로 내려갔다. 잃은 문항을 보면 근거는 같거나 더 좋고 답변에서 핵심어 하나가 빠진 경우가 대부분이라
+      생성 쪽 흔들림으로 보이지만, 개선을 보이지 못했으므로 기본은 끈다. 표지·그림 속 큰 글씨(ISM 매뉴얼 'C', OWASP 도표 라벨)가 제목으로 잡히는 잡음도 남아 있다.</li>
+  </ul>
+  <div class="note">
+    <p>세 기능 모두 코드는 남기고 설정으로만 켠다. <code>extract.pdf_headings</code> 를 켜면 청크가 바뀌어 재인덱싱이 필요하다(청킹 설정 기록에 들어감).
+    <code>flatten_tables</code>·<code>parent</code> 는 생성 단계만 바꿔 재인덱싱이 필요 없다.</p>
+  </div>
+  <p class="meta">원자료: <code>results/ragas_golden/g2_v4_flat(_17)</code> · <code>g2_v4_parent(_17)</code> · <code>g2_blocks_v6(_17)</code></p>
 </section>
 
 <footer>

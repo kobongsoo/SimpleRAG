@@ -261,6 +261,33 @@ class VectorStore:
                 return out
 
     #------------------------------------------------------------------
+    # 한 절의 청크 모으기 (Parent-Child 실험 A)
+    #=> blocks 엔진은 청크마다 section_id(문서 안 절 번호)를 남긴다. 같은 문서·같은 절의
+    #   청크를 chunk_idx 순으로 돌려준다 — 검색된 청크의 '부모(절 전체)'를 만들 때 쓴다.
+    #
+    # -in: doc_path   = 문서 경로(payload 의 doc_path)
+    # -in: section_id = 절 번호
+    #
+    # -out: [payload dict, …] chunk_idx 순 (없으면 [])
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def section_chunks(self, doc_path, section_id):
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        self.ensure_collection()
+        flt = Filter(must=[FieldCondition(key="doc_path", match=MatchValue(value=doc_path)),
+                           FieldCondition(key="section_id", match=MatchValue(value=int(section_id)))])
+        out, offset = [], None
+        while True:
+            pts, offset = self._client.scroll(collection_name=COLLECTION, scroll_filter=flt,
+                                              limit=500, offset=offset,
+                                              with_payload=True, with_vectors=False)
+            out.extend(p.payload for p in pts if p.payload)
+            if offset is None:
+                break
+        return sorted(out, key=lambda pl: pl.get("chunk_idx", 0))
+
+    #------------------------------------------------------------------
     # 인덱스 통계
     # -out: dict = {count, disk_mb}
     #------------------------------------------------------------------

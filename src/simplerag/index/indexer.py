@@ -179,6 +179,8 @@ def chunk_params():
                        "sentence_split": config.CHUNK_SENTENCE_SPLIT,
                        "hard_max": config.CHUNK_HARD_MAX,
                        "blocks_version": BLOCKS_VERSION})
+        if config.PDF_INFER_HEADINGS:
+            params["pdf_headings"] = True
     return params
 
 
@@ -188,6 +190,8 @@ def chunk_params():
 #   3 = 재설계서 Phase 2 — DOC(바이너리 PAPX·스타일) · PDF(쪽 경계·머리말·쪽번호) 블록 경로
 #   4 = DOC 표의 눕힌 행 펼치기(기존 normalize_tables 규칙)
 #   5 = D:\분류함 전수 점검 반영 — HTML <head>·<svg> 건너뛰기 제거(<title> 살림), XLSX 행 상한 해제
+#   (P-2 글자 크기 제목 추정은 extract.pdf_headings 로 켤 때만 청크가 바뀐다 — 켜면 설정 기록에
+#    pdf_headings 키가 들어가 재인덱싱을 요구한다. 꺼 두면 청크가 5 와 같아 버전을 올리지 않는다)
 BLOCKS_VERSION = 5
 
 

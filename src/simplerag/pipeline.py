@@ -54,7 +54,10 @@ class RagPipeline:
     def answer(self, query, top_k=None, max_tokens=None, folder=None):
         t0 = time.perf_counter()
 
-        chunks, timing = self.retriever.search(query, top_k=top_k, folder=folder)
+        if config.PARENT_MODE == "section":
+            chunks, timing = self._search_parents(query, top_k, folder)
+        else:
+            chunks, timing = self.retriever.search(query, top_k=top_k, folder=folder)
         yield ("evidence", chunks, timing)
 
         if not chunks and timing.get("no_relevant"):
@@ -99,6 +102,34 @@ class RagPipeline:
             "total_s": round(t_end - t0, 2),
             "timing": timing,
         })
+
+    #------------------------------------------------------------------
+    # 부모(절) 근거로 검색 — Parent-Child 실험 A (재설계서 §12)
+    #=> 같은 절이 여러 번 검색되면 부모는 하나만 넣으므로, top_k 의 두 배를 받아 놓고
+    #   서로 다른 절의 부모로 top_k 개를 채운다.
+    #    1) 검색(리랭크·관련 근거 판정까지 그대로)
+    #    2) 청크마다 같은 절 형제 청크를 모아 부모 글로 바꾼다(parent.expand)
+    #
+    # -in: query, top_k, folder = answer 와 같음
+    #
+    # -out: (chunks, timing) — chunks[i]["text"] 는 부모 글, ["child_text"] 는 원래 청크.
+    #        timing 에 parent_ms(부모 만들기 시간)
+    # -out: error = 검색 예외는 전파, 부모 만들기 실패는 그 청크만 자식 그대로
+    #------------------------------------------------------------------
+    def _search_parents(self, query, top_k, folder):
+        from .chunk import _tlen
+        from .retrieve import parent
+
+        k = top_k or config.TOP_K
+        chunks, timing = self.retriever.search(query, top_k=k * 2, folder=folder)
+        if not chunks:
+            return chunks, timing
+        t = time.perf_counter()
+        tok = self.retriever.embedder.tokenizer
+        chunks = parent.expand(chunks, self.retriever.store, lambda s: _tlen(tok, s),
+                               k, config.PARENT_MAX_TOKENS)
+        timing = dict(timing, parent_ms=round((time.perf_counter() - t) * 1000, 1))
+        return chunks, timing
 
     #------------------------------------------------------------------
     # 동기 응답 (평가/배치용)

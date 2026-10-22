@@ -360,7 +360,9 @@ class HybridRetriever:
                            "doc_name": pl.get("doc_name", ""),
                            "doc_path": pl.get("doc_path", ""),
                            "folder": pl.get("folder", ""),
-                           "chunk_idx": pl.get("chunk_idx", 0)})
+                           "chunk_idx": pl.get("chunk_idx", 0),
+                           # blocks 엔진 인덱스에만 있다 — Parent-Child 의 '같은 절' 찾기에 쓴다
+                           "section_id": pl.get("section_id")})
         t4 = time.perf_counter()
 
         timing = {

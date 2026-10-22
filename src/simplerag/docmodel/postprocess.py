@@ -199,6 +199,16 @@ def _heading_fallback(doc):
         return
     # 블록은 dataclass 라 == 가 내용 비교다 — 같은 글자의 다른 블록과 헷갈리지 않게 id 로 가른다
     head_ids = {id(b) for b in parser_heads}
+    # 서식으로 추정한 제목(PDF 글자 크기, P-2)은 상위 구조로 두고, 정규식 제목은 그 아래 수준으로
+    # 겹친다 — ISMS 지침처럼 장 제목만 크고 "1.1 목적" 은 본문 크기인 문서에서 둘 다 살린다.
+    # 추정 제목이 너무 적으면 파일 제목과 같이 취급한다(정규식이 잡으면 내린다).
+    inferred = [b for b in doc.blocks
+                if b.type == B.HEADING and not b.synthetic and b.source == B.SRC_INFERRED]
+    base = 0
+    if len(inferred) >= MIN_PARSER_HEADINGS:
+        base = max(b.level or 1 for b in inferred)
+    else:
+        head_ids |= {id(b) for b in inferred}
 
     # 정규식 문법은 '문단처럼 생긴' 블록 글자만 보고 고른다 — 표 셀 글자가 섞이면 오판한다
     candidates = [b for b in doc.blocks if b.type in _PARA_LIKE or id(b) in head_ids]
@@ -218,6 +228,8 @@ def _heading_fallback(doc):
             continue
         first, _, rest = b.text.partition("\n")
         level = _regex_level(name, pat, first, offset)
+        if level is not None:
+            level = min(9, level + base)
         if level is None:
             # 파일 제목이었지만 정규식에 안 걸리면 문단으로 내린다(글자는 그대로)
             if id(b) in head_ids:

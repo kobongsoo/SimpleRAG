@@ -139,6 +139,60 @@ def test_doc_pdf_rules():
     check("숫자만 다른 짧은 줄(제N조)은 머리말 아님", not any(kinds.get((p, 1)) for p in range(1, 6)), kinds)
     check("본문 줄은 표시 안 함", not any(kinds.get((p, j)) for p in range(1, 6) for j in range(2, 6)))
 
+    # P-2 — 글자 크기로 제목 추정: 장 제목(11.4)만 크고 절 제목(1.1)은 본문(9.7)과 같은 문서
+    from simplerag.docmodel.pdf import _infer_headings
+    pages, sizes = [], []
+    for ch in range(1, 5):
+        lines = ["{}. 장 제목 {}".format(ch, ch), "{}.1 절 제목".format(ch)] + \
+                ["본문 문장이 충분히 길게 이어집니다 {}-{}".format(ch, k) for k in range(6)]
+        pages.append(lines)
+        sizes.append([11.4, 9.7] + [9.7] * 6)
+    heads = _infer_headings(pages, sizes, {})
+    check("큰 글씨 장 제목 추정", sorted(heads) == [(p, 0) for p in range(1, 5)], heads)
+    check("크기 정보 없으면 추정 안 함", _infer_headings(pages, [[None] * 8] * 4, {}) == {})
+    doc = B.Document("pdf", "t", blocks=[B.Block(B.HEADING, t, level=heads[(p, j)], source=B.SRC_INFERRED)
+                                         if (p, j) in heads else B.Block(B.PARAGRAPH, t)
+                                         for p, lines in enumerate(pages, 1) for j, t in enumerate(lines)])
+    postprocess.finalize(doc)
+    lv = {b.text: b.level for b in doc.blocks if b.type == "heading"}
+    check("정규식 절 제목은 추정 제목 아래로", lv.get("1. 장 제목 1") == 1 and lv.get("1.1 절 제목") == 3, lv)
+
+
+#------------------------------------------------------------------
+# Parent-Child 실험 A — 부모(절) 만들기
+#=> 상한 안에서 자식 앞뒤 청크를 붙이고, 접두는 한 번만, 상한에 걸린 쪽은 건너뛰지 않고 멈춘다.
+#   같은 절이 두 번 검색되면 부모는 하나만 남긴다.
+#
+# -in: 없음
+#
+# -out: 없음
+# -out: error = 없음
+#------------------------------------------------------------------
+def test_parent():
+    from simplerag.retrieve.parent import build_parent, expand
+
+    print("[Parent-Child]")
+    sibs = [{"chunk_idx": i, "text": "[규정 > 제5조]\n본문{}".format(i) + "가" * n}
+            for i, n in enumerate([10, 10, 10, 80])]
+    child = dict(sibs[1])
+    tlen = len
+    got = build_parent(child, sibs, tlen, 60)
+    check("접두는 맨 앞에 한 번", got.count("[규정 > 제5조]") == 1 and got.startswith("[규정 > 제5조]"), got)
+    check("상한 안에서 앞뒤 붙임", "본문0" in got and "본문1" in got and "본문2" in got, got)
+    check("상한 넘는 청크는 안 붙임", "본문3" not in got, got)
+    check("형제 없으면 자식 그대로", build_parent(child, [sibs[1]], tlen, 60) == child["text"])
+
+    class _Store:
+        # 검색 결과의 형제를 돌려주는 가짜 저장소
+        def section_chunks(self, doc_path, sid):
+            return sibs if sid == 7 else []
+
+    hits = [dict(sibs[1], id=1, doc_path="a", section_id=7), dict(sibs[2], id=2, doc_path="a", section_id=7),
+            {"id": 3, "doc_path": "b", "section_id": None, "chunk_idx": 0, "text": "다른 문서"}]
+    out = expand(hits, _Store(), tlen, 3, 60)
+    check("같은 절은 부모 하나", len(out) == 2 and out[1]["text"] == "다른 문서", [o["text"][:12] for o in out])
+    check("원래 청크는 child_text", out[0]["child_text"] == sibs[1]["text"])
+
 
 #------------------------------------------------------------------
 # Markdown · HTML 블록
@@ -365,6 +419,7 @@ if __name__ == "__main__":
     test_tables()
     test_xlsx_split()
     test_doc_pdf_rules()
+    test_parent()
     test_md_html()
     test_postprocess()
     test_prefix()
