@@ -79,7 +79,10 @@ def test_pick():
     check("표시 이름 빠름/정밀",
           (cli._model_mode(config.FAST_GEN_MODEL), cli._model_mode(config.PRECISE_GEN_MODEL)) == ("빠름", "정밀"))
     check("모르는 별칭은 그대로 보여 준다", cli._model_mode("mystery-7b") == "mystery-7b")
-    check("기본값은 빠름(0.6B)", config.DEFAULT_GEN_MODEL == config.FAST_GEN_MODEL == "qwen3-0.6b-q4")
+    check("표시 이름 한국어(Mi:dm)", cli._model_mode(config.KOREAN_GEN_MODEL) == "한국어")
+    check("고를 수 있는 모델은 셋", config.USER_GEN_MODELS ==
+          ("qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"))
+    check("기본값은 정밀(1.7B)", config.DEFAULT_GEN_MODEL == config.PRECISE_GEN_MODEL == "qwen3-1.7b-q4")
     check("정밀 모델이 목록에 있다", config.PRECISE_GEN_MODEL in config.GEN_MODELS)
 
 

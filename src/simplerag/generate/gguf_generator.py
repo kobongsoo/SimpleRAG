@@ -17,7 +17,8 @@ import time
 
 from .. import config
 from .base import Generator, GenerateError
-from .prompts import active_system_prompt, build_prompt, build_user_message
+from .chatformat import build_chat_prompt, stop_strings
+from .prompts import active_system_prompt, build_user_message
 
 
 class GgufGenerator(Generator):
@@ -155,7 +156,7 @@ class GgufGenerator(Generator):
         budget = max(128, self.n_ctx - max_tokens - 16)
 
         texts = list(chunks)
-        prompt = build_prompt(system, build_user_message(query, texts))
+        prompt = build_chat_prompt(system, build_user_message(query, texts), self.alias)
 
         # 싼 검사 — 한글/영문 어느 쪽이든 1토큰이 1자보다 짧아지진 않으므로
         # '글자 수 <= 예산'이면 토큰 수도 반드시 예산 이하다. 대부분의 질의가
@@ -174,7 +175,7 @@ class GgufGenerator(Generator):
             if cut < 40:
                 break
             texts[i] = texts[i][:cut]
-            prompt = build_prompt(system, build_user_message(query, texts))
+            prompt = build_chat_prompt(system, build_user_message(query, texts), self.alias)
 
         return prompt
 
@@ -208,7 +209,7 @@ class GgufGenerator(Generator):
                 prompt,
                 max_tokens=n_out,
                 temperature=config.GEN_TEMPERATURE,
-                stop=["<|im_end|>", "<|endoftext|>"],
+                stop=stop_strings(self.alias),
                 stream=True,
             ):
                 text = piece["choices"][0]["text"]
@@ -231,6 +232,6 @@ class GgufGenerator(Generator):
                 prompt,
                 max_tokens=n_out,
                 temperature=config.GEN_TEMPERATURE,
-                stop=["<|im_end|>", "<|endoftext|>"],
+                stop=stop_strings(self.alias),
             )
         return r["choices"][0]["text"]

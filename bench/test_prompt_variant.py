@@ -144,6 +144,8 @@ def test_generator():
     gen = object.__new__(GgufGenerator)
     import threading
     gen._llm, gen.n_ctx, gen._infer_lock = FakeLlama(), 2048, threading.Lock()
+    # 채팅 형식은 별칭으로 고른다(계획서 2-3). __init__ 을 건너뛰었으니 여기서 채운다.
+    gen.alias = config.DEFAULT_GEN_MODEL
     gen.ensure_loaded = lambda: None
     saved = config.PROMPT
     try:

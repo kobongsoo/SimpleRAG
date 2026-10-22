@@ -300,16 +300,30 @@ CONFIG_WARNINGS = check_resolved(CHUNK_TOKENS, CHUNK_OVERLAP, MIN_CHUNK_TOKENS,
 
 # ── 생성 ─────────────────────────────────────────────
 GEN_MODELS = {
-    "qwen3-0.6b-q4": "Qwen3-0.6B-Q4_K_M.gguf",   # 기본. TTFT 2.75s / 정답률 83%
-    "qwen3-1.7b-q4": "Qwen3-1.7B-Q4_K_M.gguf",   # 정밀 모드. TTFT 8.46s / 92%
+    "qwen3-0.6b-q4": "Qwen3-0.6B-Q4_K_M.gguf",   # 빠름. TTFT 2.75s / 정답률 83%
+    "qwen3-1.7b-q4": "Qwen3-1.7B-Q4_K_M.gguf",   # 기본(정밀). TTFT 8.46s / 92%
+    # 계획서 2-3 — 한국어 특화 후보(측정용). 파일이 없으면 그 모델을 고를 때만 실패한다.
+    "midm-2.0-mini-q4": "Midm-2.0-Mini-Instruct-Q4_K_M.gguf",     # KT, MIT, 2.3B
+    "kanana-1.5-2.1b-q4": "kanana-1.5-2.1b-instruct-Q4_K_M.gguf",  # 카카오, Apache-2.0, 2.1B
 }
-# 정밀 모드(계획서 D8 ③ / REPORT §44): 기본은 빠른 0.6B, 필요할 때만 1.7B 를 쓴다.
-#   1.7B 는 506문항 정답 377 → 399(p=0.007)지만 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).
-#   그래서 "기본값을 바꾸는" 대신 "고를 수 있게" 한다 — config.yaml generation.model,
-#   환경변수 SIMPLERAG_GEN_MODEL, CLI `--precise` / `--model`.
-FAST_GEN_MODEL = "qwen3-0.6b-q4"        # 빠름(기본)
-PRECISE_GEN_MODEL = "qwen3-1.7b-q4"     # 정밀
-DEFAULT_GEN_MODEL = str(_setting("generation.model", FAST_GEN_MODEL,
+# 모델별 채팅 형식(generate/chatformat.py). 적지 않은 별칭은 qwen3 로 본다 —
+#   형식이 틀리면 학습 때 본 적 없는 입력이 들어가 품질 비교가 무의미해진다.
+GEN_MODEL_FORMATS = {
+    "qwen3-0.6b-q4": "qwen3",
+    "qwen3-1.7b-q4": "qwen3",
+    "midm-2.0-mini-q4": "midm",
+    "kanana-1.5-2.1b-q4": "kanana",
+}
+# 정밀 모드(계획서 D8 ③ / REPORT §44): 1.7B 는 506문항 정답 377 → 399(p=0.007),
+#   골든셋 v2 must 57 → 80 이라 기본으로 쓴다. 대신 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).
+#   빠른 0.6B 나 한국어 특화 Mi:dm 은 config.yaml generation.model,
+#   환경변수 SIMPLERAG_GEN_MODEL, CLI `--model` 로 고른다.
+FAST_GEN_MODEL = "qwen3-0.6b-q4"        # 빠름
+PRECISE_GEN_MODEL = "qwen3-1.7b-q4"     # 정밀(기본)
+KOREAN_GEN_MODEL = "midm-2.0-mini-q4"   # 한국어 특화 — 골든셋 v2 must 86(1.7B 80) 이지만 TTFT 중앙 4.5초
+# 사용자가 고를 수 있는 모델(설정·CLI). kanana 는 근거를 통째로 옮겨 적는 답이 많아 측정용으로만 둔다
+USER_GEN_MODELS = (FAST_GEN_MODEL, PRECISE_GEN_MODEL, KOREAN_GEN_MODEL)
+DEFAULT_GEN_MODEL = str(_setting("generation.model", PRECISE_GEN_MODEL,
                                  "SIMPLERAG_GEN_MODEL", str)).strip().lower()
 if DEFAULT_GEN_MODEL not in GEN_MODELS:
     # yaml 값은 settings 검사가 먼저 막는다. 여기는 환경변수 오타를 시작할 때 알리기 위한 것

@@ -638,7 +638,8 @@ def cmd_status(args):
         print("생성모델 : {} ({} 모드)   ← {}".format(
             config.GEN_MODELS[config.DEFAULT_GEN_MODEL], _model_mode(config.DEFAULT_GEN_MODEL),
             "한 번만 정밀하게: ask --precise" if config.DEFAULT_GEN_MODEL == config.FAST_GEN_MODEL
-            else "빠르게: ask --model {}".format(config.FAST_GEN_MODEL)))
+            else "다른 모델: ask --model {}".format(" | ".join(
+                m for m in config.USER_GEN_MODELS if m != config.DEFAULT_GEN_MODEL))))
         cached = gen_backend.peek()
         print("생성백엔드: {}".format(
             "{} — {}".format(gen_backend.label(cached["backend"]), cached.get("reason", ""))
@@ -758,20 +759,21 @@ def cmd_clear(args):
 
 #------------------------------------------------------------------
 # 모델 별칭 → 사람이 읽는 모드 이름
-#=> 화면에 "빠름/정밀" 로 보여 준다. 설정으로 다른 모델을 넣었을 때는 별칭을 그대로 쓴다.
+#=> 화면에 "빠름/정밀/한국어" 로 보여 준다. 측정용 모델 등 그 밖의 것은 별칭을 그대로 쓴다.
 #
 # -in: alias = 생성 모델 별칭
 #
-# -out: "빠름" | "정밀" | 별칭 그대로
+# -out: "빠름" | "정밀" | "한국어" | 별칭 그대로
 # -out: error = 없음
 #------------------------------------------------------------------
 def _model_mode(alias):
-    return {config.FAST_GEN_MODEL: "빠름", config.PRECISE_GEN_MODEL: "정밀"}.get(alias, alias)
+    return {config.FAST_GEN_MODEL: "빠름", config.PRECISE_GEN_MODEL: "정밀",
+            config.KOREAN_GEN_MODEL: "한국어"}.get(alias, alias)
 
 
 #------------------------------------------------------------------
 # 이번 명령에서 쓸 생성 모델 고르기 (정밀 모드 — 계획서 D8 ③ / REPORT §44)
-#=> 기본은 빠른 0.6B(설정 generation.model), `--precise` 를 붙이면 그 실행만 1.7B 로 답한다.
+#=> 기본은 설정 generation.model(1.7B), `--precise` 를 붙이면 그 실행만 1.7B, `--model` 은 고른 모델로 답한다.
 #    1) `--precise` 면 정밀 모델 별칭
 #    2) `--model` 로 직접 고른 것이 있으면 그것
 #    3) 둘 다 없으면 None — App 이 설정 기본값을 쓴다
@@ -892,7 +894,7 @@ def main(argv=None):
     pa.add_argument("--folder", default=None,
                     help="이 폴더(하위 포함) 문서만 근거로 쓴다(폴더 한정 검색)")
     pa.add_argument("--model", default=None,
-                    choices=list(config.GEN_MODELS), help="생성 모델 직접 지정")
+                    choices=list(config.USER_GEN_MODELS), help="생성 모델 직접 지정")
     pa.add_argument("--precise", action="store_true",
                     # argparse 는 help 를 %-서식으로 처리한다 — "%p" 를 쓰면 --help 가 죽는다(%% 로 적는다)
                     help="정밀 모드(1.7B) — 506문항 정답 +4.4%%p, 첫 글자까지 3초를 넘을 수 있다")
@@ -903,7 +905,7 @@ def main(argv=None):
     pc = sub.add_parser("chat", help="대화형 질의 (모델 1회 적재)")
     pc.add_argument("--top-k", type=int, default=None)
     pc.add_argument("--max-tokens", type=int, default=None)
-    pc.add_argument("--model", default=None, choices=list(config.GEN_MODELS))
+    pc.add_argument("--model", default=None, choices=list(config.USER_GEN_MODELS))
     pc.add_argument("--precise", action="store_true", help="정밀 모드(1.7B)로 대화")
     pc.add_argument("--no-stream", action="store_true",
                     help="답변을 한 번에 출력(콘솔 렌더링 문제 회피)")
@@ -940,7 +942,7 @@ def main(argv=None):
     pb.set_defaults(func=cmd_backend)
 
     pw = sub.add_parser("warmup", help="예열만 수행(콜드스타트 측정)")
-    pw.add_argument("--model", default=None, choices=list(config.GEN_MODELS))
+    pw.add_argument("--model", default=None, choices=list(config.USER_GEN_MODELS))
     pw.add_argument("--precise", action="store_true", help="정밀 모드(1.7B) 예열")
     pw.set_defaults(func=cmd_warmup)
 

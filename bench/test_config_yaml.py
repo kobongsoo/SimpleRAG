@@ -136,10 +136,14 @@ generation:
     rc, v, err = load_in_child(env={"SIMPLERAG_CONFIG": "-", "SIMPLERAG_PROMPT": "v9"})
     check("SIMPLERAG_PROMPT 오타 → 시작할 때 오류", rc != 0 and "v0 | v4" in err, (rc, err[-200:]))
 
-    # 정밀 모드(REPORT §44) — 기본은 빠른 0.6B, 설정·환경변수로 정밀(1.7B)을 기본값으로 둘 수 있다
-    check("기본 생성 모델은 빠름(0.6B)", d0 and d0["DEFAULT_GEN_MODEL"] == "qwen3-0.6b-q4", d0)
-    rc, v, err = load_in_child("generation:\n  model: qwen3-1.7b-q4\n", tmp=tmp)
-    check("generation.model 로 정밀을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "qwen3-1.7b-q4", (rc, v, err))
+    # 정밀 모드(REPORT §44) — 기본은 정밀 1.7B, 설정·환경변수로 빠름(0.6B)·한국어(Mi:dm)를 고를 수 있다
+    check("기본 생성 모델은 정밀(1.7B)", d0 and d0["DEFAULT_GEN_MODEL"] == "qwen3-1.7b-q4", d0)
+    rc, v, err = load_in_child("generation:\n  model: qwen3-0.6b-q4\n", tmp=tmp)
+    check("generation.model 로 빠름을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "qwen3-0.6b-q4", (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  model: midm-2.0-mini-q4\n", tmp=tmp)
+    check("generation.model 로 Mi:dm 을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "midm-2.0-mini-q4", (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  model: kanana-1.5-2.1b-q4\n", tmp=tmp)
+    check("generation.model 에 측정용 kanana 는 못 넣는다", rc != 0, (rc, err[-200:]))
     rc, v, err = load_in_child("generation:\n  model: qwen3-1.7b-q4\n",
                                env={"SIMPLERAG_GEN_MODEL": "qwen3-0.6b-q4"}, tmp=tmp)
     check("SIMPLERAG_GEN_MODEL 이 config.yaml 보다 우선",

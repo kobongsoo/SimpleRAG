@@ -41,8 +41,10 @@ generation:
   top_k: 3                      # sLLM 에 넣는 근거 청크 수 (리랭킹 후 상위 N)
   max_tokens: 200               # 답변 토큰 상한. 16~1024
   prompt: v0                    # 시스템 지시문. v0(채택) | v4(기각 — 506문항 377→358, REPORT §40)
-  model: qwen3-0.6b-q4          # 기본 생성 모델. qwen3-0.6b-q4(빠름, TTFT 1.9초) |
-                                #   qwen3-1.7b-q4(정밀, 정답 +4.4%p 이지만 TTFT 2.7~3.4초 — REPORT §42)
-                                #   한 번만 정밀하게 묻고 싶으면 명령에 --precise 를 붙인다
+  model: qwen3-1.7b-q4          # 기본 생성 모델. 셋 중 하나:
+                                #   qwen3-0.6b-q4    빠름 — TTFT 중앙 1.5초, 골든셋 v2 must 57/150
+                                #   qwen3-1.7b-q4    정밀(기본) — TTFT 중앙 2.7초, must 80/150
+                                #   midm-2.0-mini-q4 한국어(KT Mi:dm 2.0 Mini) — must 86/150 이지만 TTFT 중앙 4.5초
+                                #   한 번만 다른 모델로 묻고 싶으면 명령에 --model <별칭> 을 붙인다
   flatten_tables: false         # 근거 표를 "머리글: 값" 행 평문으로 펴서 모델에 넣는다(계획서 3-3).
                                 #   색인은 그대로라 재인덱싱이 필요 없다. 측정 중이라 기본은 꺼 둔다
