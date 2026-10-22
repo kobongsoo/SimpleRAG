@@ -116,6 +116,29 @@ def _rerank_mode(v):
 
 
 #------------------------------------------------------------------
+# Parent-Child 모드 검사 — YAML 이 off 를 bool(false)로 읽는 것까지 받아 준다
+#=> config.yaml 에 `parent: off` 라고 쓰면 YAML 1.1 규칙상 off 는 false 가 된다.
+#   사용자는 off 라고 썼으므로 false 를 "off" 로 돌려 받는다.
+#    1) false → "off"
+#    2) 그 밖에는 off | section 중 하나(대소문자 무시)
+#   true 는 어느 모드인지 알 수 없으므로 오류로 둔다.
+#
+# -in: v = 값 (off | section, 또는 false)
+#
+# -out: ("off" | "section", 오류문 또는 None)
+# -out: error = 없음 (잘못된 값은 오류문으로 돌려준다)
+#------------------------------------------------------------------
+def _parent_mode(v):
+    # YAML 이 off 를 false 로 바꿔 버린 경우
+    if v is False:
+        return "off", None
+    s = str(v).strip().lower()
+    if s in ("off", "section"):
+        return s, None
+    return v, "off | section 중 하나여야 합니다"
+
+
+#------------------------------------------------------------------
 # 빈 값(null)도 허용하는 검사기로 감싸기
 #
 # -in: inner = 원래 검사기
@@ -168,7 +191,7 @@ SCHEMA = {
         # 근거 표를 "머리글: 값" 평문으로 펴서 넣는다(계획서 3-3, tableflat.py)
         "flatten_tables": _bool,
         # Parent-Child 실험 A — sLLM 에 청크 대신 그 청크의 절(부모)을 넣는다(재설계서 §12)
-        "parent": _choice("off", "section"),
+        "parent": _parent_mode,                     # off | section — YAML 의 off(=false)도 받는다
         "parent_max_tokens": _int(64, 1500),
     },
 }

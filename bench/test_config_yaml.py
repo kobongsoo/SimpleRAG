@@ -29,7 +29,8 @@ TOTAL = [0]
 PY = sys.executable
 KEYS = ["CHUNK_TOKENS", "CHUNK_OVERLAP", "CHUNK_MODE", "MIN_CHUNK_TOKENS",
         "TABLE_HEADER_MAX_TOKENS", "DENSE_TOP_K", "BM25_TOP_K", "RRF_K", "BM25_K1",
-        "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT", "DEFAULT_GEN_MODEL"]
+        "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT", "DEFAULT_GEN_MODEL",
+        "PARENT_MODE", "PARENT_MAX_TOKENS", "FLATTEN_TABLES", "PDF_INFER_HEADINGS"]
 
 
 #------------------------------------------------------------------
@@ -144,6 +145,20 @@ generation:
     check("generation.model 로 Mi:dm 을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "midm-2.0-mini-q4", (rc, v, err))
     rc, v, err = load_in_child("generation:\n  model: kanana-1.5-2.1b-q4\n", tmp=tmp)
     check("generation.model 에 측정용 kanana 는 못 넣는다", rc != 0, (rc, err[-200:]))
+
+    # 실험 옵션 — config.yaml 에 적힌 대로 읽히는지(기본은 모두 끔)
+    check("실험 옵션 기본값은 모두 끔", d0 and (d0["PARENT_MODE"], d0["PARENT_MAX_TOKENS"], d0["FLATTEN_TABLES"],
+                                           d0["PDF_INFER_HEADINGS"]) == ("off", 400, False, False), d0)
+    rc, v, err = load_in_child("generation:\n  parent: off\n", tmp=tmp)
+    check("parent: off — YAML 이 false 로 읽어도 off 로 받는다", rc == 0 and v["PARENT_MODE"] == "off", (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  parent: Section\n  parent_max_tokens: 250\n", tmp=tmp)
+    check("parent: section · 상한 250", rc == 0 and (v["PARENT_MODE"], v["PARENT_MAX_TOKENS"]) == ("section", 250),
+          (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  parent: true\n", tmp=tmp)
+    check("parent: true 는 모드를 알 수 없어 오류", rc != 0 and "off | section" in err, (rc, err[-200:]))
+    rc, v, err = load_in_child("generation:\n  flatten_tables: true\nextract:\n  pdf_headings: true\n", tmp=tmp)
+    check("flatten_tables · pdf_headings 켜기", rc == 0 and v["FLATTEN_TABLES"] is True and v["PDF_INFER_HEADINGS"] is True,
+          (rc, v, err))
     rc, v, err = load_in_child("generation:\n  model: qwen3-1.7b-q4\n",
                                env={"SIMPLERAG_GEN_MODEL": "qwen3-0.6b-q4"}, tmp=tmp)
     check("SIMPLERAG_GEN_MODEL 이 config.yaml 보다 우선",
