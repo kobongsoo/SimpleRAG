@@ -4,6 +4,8 @@
 models/
 runtime/
 dist/
+# dist-rust: Rust 판 배포(exe·DLL·모델 하드 링크 수 GB·인덱스) — rust/build_dist.ps1 로 만든다
+dist-rust/
 build/
 .venv/
 

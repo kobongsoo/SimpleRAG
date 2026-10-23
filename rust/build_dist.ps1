@@ -1,0 +1,68 @@
+﻿# ------------------------------------------------------------------
+# Rust 판 빌드 + dist-rust 배포
+# => 1) cargo build --release (simplerag-rs.exe, RAGSearchBox-rs.exe)
+#    2) 저장소 루트 dist-rust\ 에 exe 를 넣는다
+#    3) 처음이면 Python 배포본(dist\simplerag)에서 런타임 DLL 을 복사하고, 모델은 하드 링크로 건다
+#       (같은 드라이브라 수 GB 모델이 두 벌 생기지 않는다), config.yaml·RAGSearchBox.ini 도 없을 때만 만든다
+#    이미 있는 파일(설정·인덱스)은 덮어쓰지 않는다.
+#
+# 사용: powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
+# ------------------------------------------------------------------
+$ErrorActionPreference = "Stop"
+$rust = $PSScriptRoot
+$root = Split-Path $rust -Parent
+$dist = Join-Path $root "dist-rust"
+$py = Join-Path $root "dist\simplerag"
+
+# 1) 빌드
+Push-Location $rust
+cargo build --release
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build 실패" }
+Pop-Location
+
+# 2) exe 배치
+New-Item -ItemType Directory -Force $dist | Out-Null
+foreach ($exe in "simplerag-rs.exe", "RAGSearchBox-rs.exe") {
+    Copy-Item (Join-Path $rust "target\release\$exe") $dist -Force
+    "배치: $exe"
+}
+
+# 없을 때만 복사
+function Copy-IfMissing($src, $dst) {
+    if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item $src $dst; "복사: $dst" }
+}
+# 없을 때만 하드 링크(실패하면 복사)
+function Link-IfMissing($src, $dst) {
+    if ((Test-Path $src) -and -not (Test-Path $dst)) {
+        try { New-Item -ItemType HardLink -Path $dst -Target $src | Out-Null; "링크: $dst" }
+        catch { Copy-Item $src $dst; "복사: $dst" }
+    }
+}
+
+# 3) 런타임 — onnxruntime·pdfium·llama.cpp(CPU / Vulkan)
+Copy-IfMissing "$py\_internal\onnxruntime\capi\onnxruntime.dll" "$dist\onnxruntime.dll"
+Copy-IfMissing "$py\_internal\onnxruntime\capi\onnxruntime_providers_shared.dll" "$dist\onnxruntime_providers_shared.dll"
+Copy-IfMissing "$py\_internal\pypdfium2_raw\pdfium.dll" "$dist\pdfium.dll"
+foreach ($sub in "runtime\llama_cpu", "runtime\llama_vulkan") { New-Item -ItemType Directory -Force "$dist\$sub" | Out-Null }
+Get-ChildItem "$py\_internal\llama_cpp\lib\*.dll" -ErrorAction SilentlyContinue | ForEach-Object { Copy-IfMissing $_.FullName "$dist\runtime\llama_cpu\$($_.Name)" }
+Get-ChildItem "$py\runtime\llama_vulkan\*" -ErrorAction SilentlyContinue | ForEach-Object { Copy-IfMissing $_.FullName "$dist\runtime\llama_vulkan\$($_.Name)" }
+Copy-IfMissing "$py\runtime\llama_vulkan\VERSION.txt" "$dist\runtime\llama_cpu\VERSION.txt"
+
+# 모델 — 하드 링크
+foreach ($sub in "models", "models\e5-small-ko", "models\bge-reranker-base-int8") { New-Item -ItemType Directory -Force "$dist\$sub" | Out-Null }
+Get-ChildItem "$py\models\*.gguf" -ErrorAction SilentlyContinue | ForEach-Object { Link-IfMissing $_.FullName "$dist\models\$($_.Name)" }
+foreach ($m in "e5-small-ko", "bge-reranker-base-int8") {
+    Get-ChildItem "$py\models\$m\*" -ErrorAction SilentlyContinue | ForEach-Object { Link-IfMissing $_.FullName "$dist\models\$m\$($_.Name)" }
+}
+
+# 설정
+Copy-IfMissing "$py\config.yaml" "$dist\config.yaml"
+if (-not (Test-Path "$dist\RAGSearchBox.ini") -and (Test-Path "$py\RAGSearchBox.ini")) {
+    (Get-Content "$py\RAGSearchBox.ini" -Encoding UTF8) |
+        ForEach-Object { $_ -replace 'RAGSearchBox\.exe 옆 simplerag\.exe -> \.\.\\dist\\simplerag -> 개발용 소스', 'RAGSearchBox-rs.exe 옆 simplerag-rs.exe -> ..\dist-rust\simplerag-rs.exe' } |
+        Where-Object { $_ -notmatch '--python-option u' } |
+        Set-Content "$dist\RAGSearchBox.ini" -Encoding UTF8
+    "만듦: $dist\RAGSearchBox.ini"
+}
+"완료 — $dist"
+"인덱스가 없으면: dist-rust\simplerag-rs.exe import --from dist\simplerag  (Python 판 인덱스 가져오기, 다시 임베딩 없음)"

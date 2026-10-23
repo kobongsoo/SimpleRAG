@@ -1,0 +1,14 @@
+# SimpleRAG Rust 판 워크스페이스
+#   simplerag    — simplerag.exe (index / search / ask / chat / status / clear / extract / backend / warmup / import)
+#   ragsearchbox — RAGSearchBox.exe (트레이 상주 · 탐색기 옆 패널 · 자동 인덱싱)
+# 원본 Python 코드(src/simplerag, RAGSearchBox)는 그대로 두고 같은 기능을 여기서 다시 짠다.
+[workspace]
+resolver = "2"
+members = ["simplerag", "ragsearchbox"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "unwind"

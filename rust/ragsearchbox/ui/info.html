@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>RAGSearchBox-rs 설정</title>
+<!--
+  설정 창 (Python info_window.py)
+  - 모델 정보(1초마다 새 값) · 모델 내리기/다시 올리기
+  - 인덱싱 폴더 [추가…] [빼기] [다시 확인]
+  - 자동 시작 · 로그 폴더 [열기] · 화면 열기 · 닫기
+-->
+<style>
+  :root { --fs: __FONT_PX__px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #fff; font-family: "Malgun Gothic", "맑은 고딕", sans-serif; font-size: var(--fs); color: #1f1f1f; }
+  body { padding: 12px 14px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; vertical-align: top; color: #475063; padding: 3px 12px 3px 0; white-space: nowrap; }
+  td { padding: 3px 0; vertical-align: top; word-break: break-all; }
+  button { font: inherit; padding: 2px 10px; margin: 0 4px 4px 0; background: #fff; border: 1px solid #b9c0cc; border-radius: 3px; cursor: pointer; }
+  button:disabled { color: #9aa1ad; cursor: default; }
+  .note { color: #647083; white-space: pre-line; }
+  select { width: 100%; font: inherit; border: 1px solid #d7dbe3; }
+  .row { display: flex; gap: 8px; }
+  .row .grow { flex: 1; }
+  .col button { display: block; width: 100%; }
+  .foot { display: flex; justify-content: space-between; margin-top: 12px; }
+</style>
+</head>
+<body>
+<table>
+  <tr><th>생성 모델</th><td id="v_model"></td></tr>
+  <tr><th>임베딩 모델</th><td id="v_embed"></td></tr>
+  <tr><th>리랭킹 모델</th><td id="v_rerank"></td></tr>
+  <tr><th>생성 백엔드</th><td id="v_gen"></td></tr>
+  <tr><th></th><td><button id="b_unload">모델 내리기 (인덱싱 전에)</button><button id="b_reload">모델 다시 올리기</button>
+    <div class="note" id="actnote"></div></td></tr>
+  <tr><th>인덱싱 폴더</th><td>
+    <div class="row"><div class="grow"><select id="folders" size="3"></select></div>
+      <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
+    <div class="note" id="foldernote"></div></td></tr>
+  <tr><th>자동 시작</th><td><label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label></td></tr>
+  <tr><th>로그 폴더</th><td><div class="row"><div class="grow" id="logdir"></div><button id="b_logs">열기</button></div></td></tr>
+</table>
+<div class="foot"><button id="b_open">화면 열기</button><button id="b_close">닫기</button></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const send = (o) => window.ipc.postMessage(JSON.stringify(o));
+let folders = null;
+const UP = "모델이 올라가 있지 않음";
+
+window.rsb = {
+  // Rust 가 1초마다 넣어 주는 값
+  update(info) {
+    $("v_model").textContent = info.model || UP;
+    $("v_embed").textContent = info.embed_model || UP;
+    $("v_rerank").textContent = [info.rerank_model, info.rerank].filter(Boolean).join(" · ") || UP;
+    $("v_gen").textContent = info.gen || UP;
+    const up = info.model_up;
+    $("b_unload").disabled = !(up === true);
+    $("b_reload").disabled = !(up === false);
+    $("actnote").textContent = info.action_msg || "";
+    const fs = info.folders || [];
+    if (JSON.stringify(fs) !== JSON.stringify(folders)) {
+      folders = fs;
+      const sel = $("folders"); sel.innerHTML = "";
+      for (const f of fs) { const o = document.createElement("option"); o.textContent = f; o.value = f; sel.appendChild(o); }
+    }
+    let note = !fs.length ? "인덱싱할 폴더가 없습니다 — [추가…] 로 고르세요"
+      : (info.docs == null ? "" : "인덱싱된 문서 " + Number(info.docs).toLocaleString() + "건");
+    if (info.folder_msg) note = (note ? note + "\n" : "") + info.folder_msg;
+    $("foldernote").textContent = note;
+    if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
+    $("logdir").textContent = info.log_dir || "";
+  },
+};
+$("b_unload").onclick = () => send({ type: "unload" });
+$("b_reload").onclick = () => send({ type: "reload" });
+$("b_add").onclick = () => send({ type: "add_folder" });
+$("b_remove").onclick = () => {
+  const sel = $("folders");
+  if (sel.selectedIndex < 0) { send({ type: "folder_msg", msg: "뺄 폴더를 목록에서 고르세요" }); return; }
+  const f = folders[sel.selectedIndex];
+  if (!confirm(f + "\n\n이 폴더를 빼면 그 안 문서가 인덱스에서 빠집니다(원본 파일은 그대로).\n계속할까요?")) return;
+  send({ type: "remove_folder", folder: f });
+};
+$("b_rescan").onclick = () => send({ type: "rescan" });
+$("autorun").onchange = () => send({ type: "autorun" });
+$("b_logs").onclick = () => send({ type: "open_logs" });
+$("b_open").onclick = () => send({ type: "open" });
+$("b_close").onclick = () => send({ type: "hide" });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") send({ type: "hide" }); });
+send({ type: "ready" });
+</script>
+</body>
+</html>

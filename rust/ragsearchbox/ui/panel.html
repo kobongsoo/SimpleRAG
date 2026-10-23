@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>RAGSearchBox-rs</title>
+<!--
+  폴더 패널 화면 (Python chat_panel.py 의 tkinter 화면을 HTML 로 옮김)
+  - 머리: 대화 제목 · 폴더, 오른쪽에 ⋯(대화 기록) · ✎(새 대화)
+  - 질문은 오른쪽 회색 말풍선, 답은 상자 없이 본문으로 흘러나온다
+  - 답 아래 "▸ 참조 원문 N건" — 누르면 출처가 펼쳐진다(문서 이름=파일 열기, [...]=전체 본문 팝업)
+  - 아래는 둥근 입력 카드(폴더 칩 · 범위 ▾ · 상태 · 보내기)
+  Rust 와는 window.ipc.postMessage(JSON) / window.rsb.* 함수로 주고받는다.
+-->
+<style>
+  :root {
+    --bg: #ffffff; --ink: #1f1f1f; --ink2: #444746; --muted: #6b7280; --rule: #e3e6ea;
+    --bubble: #e9eef6; --card: #f0f4f9; --chip: #dde3ea; --hover: #eef1f5; --link: #1a5fb4;
+    --src: #f3f4f6; --send: #1f1f1f; --err: #b4462f; --fs: __FONT_PX__px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: "Malgun Gothic", "맑은 고딕", sans-serif; font-size: var(--fs); }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  header { display: flex; align-items: flex-start; padding: 8px 14px; border-bottom: 1px solid var(--rule); }
+  header .titles { flex: 1; min-width: 0; }
+  #title { font-weight: bold; font-size: calc(var(--fs) * 1.1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #folder { color: var(--muted); font-size: calc(var(--fs) * 0.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon { font-family: "Segoe UI Symbol", sans-serif; font-size: calc(var(--fs) * 1.3); color: var(--ink2);
+    padding: 0 7px; cursor: pointer; border-radius: 6px; user-select: none; position: relative; }
+  .icon:hover { background: var(--hover); }
+  .icon[data-tip]:hover::after { content: attr(data-tip); position: absolute; top: 120%; right: 0; white-space: nowrap;
+    background: var(--ink); color: #fff; font-size: calc(var(--fs) * 0.8); padding: 2px 6px; border-radius: 4px;
+    font-family: "Malgun Gothic", sans-serif; z-index: 20; }
+  #body { flex: 1; overflow-y: auto; padding: 10px 14px; }
+  #hint { text-align: center; margin-top: 18vh; }
+  #hint img { width: 72px; height: auto; margin-bottom: 14px; }
+  #hint .hello { font-size: calc(var(--fs) * 1.9); font-weight: bold; }
+  #hint .sub { color: var(--muted); margin-top: 8px; white-space: pre-line; }
+  .turn { margin: 4px 0 16px; }
+  .q { display: flex; justify-content: flex-end; }
+  .q div { background: var(--bubble); padding: 9px 14px; border-radius: 16px; max-width: 78%;
+    white-space: pre-wrap; word-break: break-word; }
+  .scope { text-align: right; color: var(--muted); font-size: calc(var(--fs) * 0.85); margin-top: 2px; }
+  .ans { margin-top: 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+  .wait { color: var(--muted); font-size: calc(var(--fs) * 0.85); }
+  .raw { color: var(--ink2); }
+  .err { color: var(--err); font-size: calc(var(--fs) * 0.85); margin-top: 4px; }
+  .meta { color: var(--muted); font-size: calc(var(--fs) * 0.85); margin-top: 6px; }
+  .srchead { display: flex; justify-content: space-between; margin-top: 10px; font-size: calc(var(--fs) * 0.85); }
+  .tog { color: var(--ink2); cursor: pointer; user-select: none; }
+  .link { color: var(--link); cursor: pointer; text-decoration: underline; }
+  .srcitem { margin: 6px 0 0 10px; font-size: calc(var(--fs) * 0.85); }
+  .srctop { display: flex; justify-content: space-between; gap: 6px; }
+  .srcbox { background: var(--src); color: var(--ink2); padding: 4px 8px; margin-top: 3px; white-space: pre-wrap;
+    word-break: break-word; max-height: calc(var(--fs) * 0.85 * 1.5 * 4 + 8px); overflow-y: auto; }
+  footer { padding: 10px 12px; }
+  .card { background: var(--card); border-radius: 18px; padding: 8px 12px; }
+  #chip { display: inline-block; background: var(--chip); color: var(--ink2); font-size: calc(var(--fs) * 0.85);
+    padding: 2px 8px; border-radius: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: inherit; color: var(--ink);
+    padding: 6px 2px; height: calc(var(--fs) * 1.45 * 3 + 12px); }
+  .bar { display: flex; align-items: center; gap: 6px; font-size: calc(var(--fs) * 0.85); }
+  #scopebtn { color: var(--ink2); cursor: pointer; padding: 2px 4px; border-radius: 4px; user-select: none; position: relative; }
+  #scopebtn:hover { background: var(--hover); }
+  #state { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #send { background: var(--send); color: #fff; border: 0; border-radius: 50%; width: 30px; height: 30px; font-weight: bold;
+    cursor: pointer; font-size: calc(var(--fs) * 1.1); }
+  .menu { position: fixed; background: #fff; border: 1px solid #d7dbe3; box-shadow: 0 4px 14px rgba(0,0,0,.12);
+    border-radius: 8px; padding: 4px 0; z-index: 30; font-size: calc(var(--fs) * 0.85); max-width: 92vw; }
+  .menu div { padding: 5px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .menu div:hover { background: var(--hover); }
+  .menu .sep { border-top: 1px solid var(--rule); margin: 4px 0; padding: 0; cursor: default; }
+  .menu .dis { color: var(--muted); cursor: default; }
+  .menu .dis:hover { background: transparent; }
+  #pop { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none; z-index: 40; }
+  #pop .box { position: absolute; inset: 24px 12px; background: #fff; border-radius: 10px; display: flex; flex-direction: column; padding: 10px 12px; }
+  #pop .ph { color: #647083; font-size: calc(var(--fs) * 0.85); margin-bottom: 6px; word-break: break-all; }
+  #pop .pt { font-weight: bold; margin-bottom: 4px; }
+  #pop .pb { flex: 1; overflow-y: auto; border: 1px solid #d7dbe3; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; }
+  #pop .pf { text-align: right; margin-top: 8px; }
+  #pop button { font: inherit; padding: 3px 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titles"><div id="title">새 대화</div><div id="folder"></div></div>
+  <span class="icon" id="btnHist" data-tip="대화 기록">⋯</span>
+  <span class="icon" id="btnNew" data-tip="새 대화">✎</span>
+</header>
+<div id="body">
+  <div id="hint">
+    <img src="data:image/png;base64,__MOAI__" alt="">
+    <div class="hello">무엇을 찾아 드릴까요?</div>
+    <div class="sub">이 폴더의 문서에 대해 물어보세요.
+예) 연차 이월 기준은 어떻게 되나요</div>
+  </div>
+</div>
+<footer>
+  <div class="card">
+    <div><span id="chip">📁 범위 모름</span></div>
+    <textarea id="input" placeholder="무엇이든 물어보세요 (Enter 전송)"></textarea>
+    <div class="bar">
+      <span id="scopebtn">이 폴더 ▾</span>
+      <span id="state"></span>
+      <button id="send" title="보내기">↑</button>
+    </div>
+  </div>
+</footer>
+<div id="pop"><div class="box"><div class="pt"></div><div class="ph"></div><div class="pb"></div>
+  <div class="pf"><button id="popClose">닫기</button></div></div></div>
+<script>
+"use strict";
+const MAX_TURNS = 20;
+const SCOPE_LABELS = { folder: "이 폴더", root: "지정 폴더 전체" };
+const $ = (id) => document.getElementById(id);
+const send = (obj) => window.ipc.postMessage(JSON.stringify(obj));
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+// 화면 상태 — 지금 대화(conv)와 마디 목록(turns)
+let conv = null, turns = [], busy = false, folder = "", scopeDesc = "", scopeMode = "__SCOPE__", history = [];
+let flashTimer = null;
+
+function setState(t) { $("state").textContent = t || ""; }
+function flash(t) {
+  setState(t);
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { if ($("state").textContent === t) setState(""); }, 3000);
+}
+function scrollBottom() { const b = $("body"); b.scrollTop = b.scrollHeight; }
+function lastTurn() { return turns.length ? turns[turns.length - 1] : null; }
+
+// 마디 하나 그리기 — 질문 말풍선 · 범위 · 답 칸 · 소요 줄 · 출처 칸
+function startTurn(q, scope, record) {
+  $("hint").style.display = "none";
+  const frame = el("div", "turn");
+  const qr = el("div", "q"); qr.appendChild(el("div", null, q)); frame.appendChild(qr);
+  if (scope) frame.appendChild(el("div", "scope", scope.replace("범위: ", "")));
+  const t = { frame, record, ans: el("div", "ans"), meta: el("div"), src: el("div"), answer: null, wait: null, docs: [] };
+  frame.appendChild(t.ans); frame.appendChild(t.meta); frame.appendChild(t.src);
+  $("body").appendChild(frame);
+  turns.push(t);
+  while (turns.length > MAX_TURNS) { const o = turns.shift(); o.frame.remove(); }
+  return t;
+}
+function dropWait(t) { if (t.wait) { t.wait.remove(); t.wait = null; } }
+function ensureAnswer(t) { if (!t.answer) { dropWait(t); t.answer = el("span"); t.ans.appendChild(t.answer); } }
+function drawMeta(t, text) { t.meta.innerHTML = ""; t.meta.appendChild(el("div", "meta", text)); }
+function drawRaw(t, text) { dropWait(t); t.ans.appendChild(el("div", "raw", text)); }
+function drawError(t, msg) { dropWait(t); t.ans.appendChild(el("div", "err", "● " + msg)); }
+
+// 출처 — 접힌 머리 + 펼치면 문서별 줄(이름 · [...] · 본문 상자)
+function drawSources(t, items) {
+  t.src.innerHTML = "";
+  t.docs = items.map((it) => it.doc || "");
+  if (!items.length) return;
+  const head = el("div", "srchead");
+  const label = "참조 원문 " + items.length + "건";
+  const tog = el("span", "tog", "▸ " + label);
+  head.appendChild(tog);
+  const docs = t.docs.slice();
+  const show = el("span", "link", "탐색기에서 보기");
+  show.onclick = () => send({ type: "show_files", docs });
+  head.appendChild(show);
+  t.src.appendChild(head);
+  const box = el("div"); box.style.display = "none";
+  for (const it of items) {
+    const row = el("div", "srcitem");
+    const top = el("div", "srctop");
+    const name = el("span", it.path ? "link" : null, (it.no ?? "?") + ". " + (it.doc || ""));
+    if (it.path) name.onclick = () => send({ type: "open_file", path: it.path });
+    const more = el("span", "link", "[...]");
+    more.onclick = () => popup(it);
+    top.appendChild(name); top.appendChild(more); row.appendChild(top);
+    row.appendChild(el("div", "srcbox", it.full || it.snippet || ""));
+    box.appendChild(row);
+  }
+  t.src.appendChild(box);
+  tog.onclick = () => {
+    const open = box.style.display === "none";
+    box.style.display = open ? "block" : "none";
+    tog.textContent = (open ? "▾ " : "▸ ") + label;
+    if (open && lastTurn() === t) scrollBottom();
+  };
+}
+
+// 근거 전체 본문 팝업
+function popup(it) {
+  const p = $("pop");
+  p.querySelector(".pt").textContent = "[" + (it.no ?? "?") + "] " + (it.doc || "");
+  p.querySelector(".ph").textContent = it.path || it.doc || "";
+  p.querySelector(".pb").textContent = it.full || ((it.snippet || "") + "\n\n(전체 본문을 받지 못했습니다 — simplerag-rs.exe 를 새로 빌드하면 보입니다)");
+  p.style.display = "block";
+}
+$("popClose").onclick = () => { $("pop").style.display = "none"; };
+
+// 대화 다시 그리기(기록 열기)
+function replay(rec) {
+  const t = startTurn(rec.q || "", rec.scope || "", rec);
+  if (rec.evidence && rec.evidence.length) drawSources(t, rec.evidence);
+  if (rec.answer) { ensureAnswer(t); t.answer.textContent = rec.answer; }
+  if (rec.raw) drawRaw(t, rec.raw);
+  if (rec.error) drawError(t, rec.error);
+  if (rec.meta) drawMeta(t, rec.meta);
+}
+function clearTurns() {
+  for (const t of turns) t.frame.remove();
+  turns = [];
+  $("hint").style.display = "block";
+  $("body").scrollTop = 0;
+}
+function saveConv() { if (conv) send({ type: "save", conv }); }
+
+// 보내기
+function doSend() {
+  const text = $("input").value.trim();
+  if (!text) return;
+  if (busy) { setState("답변이 끝난 뒤에 보낼 수 있습니다"); return; }
+  $("input").value = "";
+  if (!conv) {
+    let title = text.split(/\s+/).join(" ");
+    if ([...title].length > 40) title = [...title].slice(0, 39).join("") + "…";
+    conv = { id: (Date.now() / 1000).toFixed(6), title: title || "(제목 없음)", folder, updated: Date.now() / 1000, turns: [] };
+    $("title").textContent = conv.title;
+  }
+  const record = { q: text, scope: scopeDesc };
+  conv.turns.push(record);
+  saveConv();
+  const t = startTurn(text, record.scope, record);
+  t.wait = el("div", "wait", "● 근거를 찾는 중…");
+  t.ans.appendChild(t.wait);
+  busy = true;
+  setState("보내는 중");
+  scrollBottom();
+  send({ type: "ask", text });
+}
+function newChat() {
+  if (busy) { setState("답변이 끝난 뒤에 바꿀 수 있습니다"); return; }
+  const already = conv === null && !turns.length;
+  clearTurns(); conv = null; $("title").textContent = "새 대화";
+  flash(already ? "이미 새 대화입니다 — 질문을 입력하세요" : "새 대화를 시작합니다 (이전 대화는 ⋯ 에 있습니다)");
+  $("input").focus();
+}
+function openConv(c) {
+  if (busy) { setState("답변이 끝난 뒤에 바꿀 수 있습니다"); return; }
+  clearTurns(); conv = JSON.parse(JSON.stringify(c));
+  $("title").textContent = conv.title || "";
+  for (const rec of conv.turns || []) replay(rec);
+  setState(""); scrollBottom();
+}
+
+// 작은 팝업 메뉴
+function menu(anchor, items, alignRight) {
+  closeMenu();
+  const m = el("div", "menu"); m.id = "menu";
+  for (const it of items) {
+    if (it === "-") { m.appendChild(el("div", "sep")); continue; }
+    const d = el("div", it.disabled ? "dis" : null, it.label);
+    if (!it.disabled) d.onclick = () => { closeMenu(); it.fn(); };
+    m.appendChild(d);
+  }
+  document.body.appendChild(m);
+  const r = anchor.getBoundingClientRect();
+  let x = alignRight ? r.right - m.offsetWidth : r.left;
+  let y = r.bottom + 2;
+  if (y + m.offsetHeight > window.innerHeight) y = r.top - m.offsetHeight - 2;
+  m.style.left = Math.max(4, x) + "px"; m.style.top = Math.max(4, y) + "px";
+}
+function closeMenu() { const m = $("menu"); if (m) m.remove(); }
+document.addEventListener("mousedown", (e) => { const m = $("menu"); if (m && !m.contains(e.target)) closeMenu(); });
+
+$("btnHist").onclick = (e) => {
+  e.stopPropagation();
+  const items = [{ label: "✎  새 대화", fn: newChat }, "-"];
+  if (!history.length) items.push({ label: "(아직 기록이 없습니다)", disabled: true });
+  for (const c of history) items.push({ label: (conv && conv.id === c.id ? "✓  " : "     ") + c.label, fn: () => openConv(c) });
+  if (history.length) {
+    items.push("-");
+    items.push({ label: "기록 모두 지우기", fn: () => {
+      if (!confirm("저장된 대화 기록 " + history.length + "개를 모두 지울까요?")) return;
+      send({ type: "clear_history" }); newChat();
+    } });
+  }
+  menu($("btnHist"), items, true);
+};
+$("btnNew").onclick = newChat;
+$("scopebtn").onclick = (e) => {
+  e.stopPropagation();
+  menu($("scopebtn"), Object.entries(SCOPE_LABELS).map(([k, v]) => ({ label: (k === scopeMode ? "● " : "○ ") + v, fn: () => chooseScope(k) })), false);
+};
+function chooseScope(k) {
+  $("scopebtn").textContent = SCOPE_LABELS[k] + " ▾";
+  if (k === scopeMode) return;
+  scopeMode = k; send({ type: "scope", mode: k });
+}
+$("send").onclick = doSend;
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); doSend(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if ($("pop").style.display === "block") { $("pop").style.display = "none"; return; }
+    if ($("menu")) { closeMenu(); return; }
+    send({ type: "close" });
+  }
+});
+
+// ── Rust 가 부르는 함수들 ───────────────────────────────
+window.rsb = {
+  setFolder(f) { folder = f || ""; $("folder").textContent = folder; },
+  setScope(desc) { scopeDesc = desc || ""; $("chip").textContent = desc ? "📁 " + desc.replace("범위: ", "") : "📁 범위 모름"; },
+  setScopeMode(k) { scopeMode = k; $("scopebtn").textContent = (SCOPE_LABELS[k] || SCOPE_LABELS.folder) + " ▾"; },
+  setHistory(list) { history = list || []; },
+  setState(t) { setState(t); },
+  notice(t) { setState(t); },
+  evidence(items) {
+    const t = lastTurn(); if (!t) return;
+    t.record.evidence = items;
+    drawSources(t, items);
+    if (t.wait) t.wait.textContent = "● 답변을 만드는 중…";
+    scrollBottom();
+  },
+  token(text) {
+    const t = lastTurn(); if (!t || !text) return;
+    ensureAnswer(t);
+    t.answer.textContent += text;
+    t.record.answer = (t.record.answer || "") + text;
+    scrollBottom();
+  },
+  finish(info) {
+    const t = lastTurn(); busy = false; setState("");
+    if (!t) return;
+    for (const w of info.warnings || []) rsb.token("\n" + w);
+    dropWait(t);
+    const bits = [];
+    if (info.search_ms != null) bits.push("검색 " + info.search_ms + "ms");
+    if (info.ttft_s != null) bits.push("첫 글자 " + Number(info.ttft_s).toFixed(2) + "s");
+    if (info.total_s != null) bits.push("완료 " + Number(info.total_s).toFixed(2) + "s");
+    if (info.model) bits.push(info.model_mode && info.model_mode !== info.model ? info.model + "(" + info.model_mode + ")" : info.model);
+    if (info.parent) bits.push("parent " + info.parent);
+    if (t.answer) {
+      bits.unshift("AI 요약 — 아래 출처로 확인하세요");
+      t.answer.textContent = t.answer.textContent.replace(/\s+$/, "");
+      t.record.answer = (t.record.answer || "").replace(/\s+$/, "");
+    }
+    if (bits.length) { t.record.meta = bits.join(" · "); drawMeta(t, t.record.meta); }
+    saveConv(); scrollBottom();
+  },
+  raw(text) {
+    const t = lastTurn(); if (!t || !text) return;
+    t.record.raw = text.trim(); drawRaw(t, t.record.raw); saveConv(); scrollBottom();
+  },
+  error(msg) {
+    busy = false; setState("● " + msg);
+    const t = lastTurn();
+    if (t) { t.record.error = msg; drawError(t, msg); saveConv(); scrollBottom(); }
+  },
+  focusInput() { $("input").focus(); },
+  isBusy() { return busy; },
+};
+send({ type: "ready" });
+</script>
+</body>
+</html>
