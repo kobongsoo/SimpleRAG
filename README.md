@@ -6,7 +6,12 @@
 
 > **상태**: 파이프라인 구현 완료, 실문서 371건으로 검증 완료 (2026-08-21)
 > **갱신**: iGPU 자동 선택 + 리랭킹 운영 반영 (2026-09-14, [REPORT §32](results/REPORT.md))
+> **갱신**: 자동 인덱싱 · 폴더 한정 검색 · 관련 근거 판정 · 탐색기 패널 앱 [RAGSearchBox](RAGSearchBox/README.md) (2026-10)
+> **갱신**: 구조화 추출(blocks 엔진) 운영 전환 · 생성 모델 선택(기본 1.7B) · 시스템 지시문을 config.yaml 에서 (2026-10-22)
+> **갱신**: Rust 판 `simplerag-rs.exe` · `RAGSearchBox-rs.exe` 추가 — [rust/README.md](rust/README.md) (2026-10-23)
 > **원칙**: 모든 설계 결정은 이 PC에서의 실측에 근거한다. 추측으로 정한 값은 없다.
+>
+> `results/REPORT.md`(측정 기록)는 로컬 전용이라 저장소에는 올라가 있지 않다.
 
 ---
 
@@ -24,6 +29,9 @@
 ---
 
 ## 실측 성능 — 현재 운영값 (2026-09-14)
+
+> 이 표는 **0.6B 모델 기준** 측정이다. 2026-10-22 부터 기본 생성 모델은 1.7B 로, TTFT 중앙값이 약 2.7초다
+> (빠른 0.6B 는 약 1.5초 — `config.yaml` `generation.model` 주석, REPORT §42·§44).
 
 i5-1340P 노트북(Iris Xe) / **평가 코퍼스** 368문서·59,747청크 / 평가 506문항.
 (운영 인덱스는 2026-09-14 부터 `sample` 폴더 20건 — 이 표는 평가 코퍼스 기준이다. 머리글 상한 적용 후에도
@@ -72,12 +80,15 @@ iGPU 가 없거나 느린 PC 는 자동으로 오른쪽 열(CPU 전용, 리랭�
 
 | 항목 | 값 | 근거 |
 |---|---|---|
-| 생성 모델 | **Qwen3-0.6B-Q4_K_M** (GGUF, 빠름) + **1.7B**(`--precise`, 정밀) | 0.6B TTFT 1.9초·506문항 74.5% / 1.7B 78.9%(p=0.007)지만 3초 이내가 97%→72% (REPORT §42·§44) |
+| 생성 모델 | **Qwen3-1.7B-Q4_K_M** (GGUF, 기본) · 0.6B(빠름) · Mi:dm 2.0 Mini(한국어) 중 선택 | 1.7B 506문항 정답 377→399(p=0.007), 골든셋 v2 must 57→80. 대신 3초 이내가 97%→72% (REPORT §42·§44·§47) |
+| 추출 | **blocks 엔진** — 문서를 제목·문단·표·목록 블록으로 읽고 절 단위로 조립 (PDF·DOCX·PPTX·XLSX·HWPX·HWP·DOC·HTML 등) | D:\분류함 1,633건 전수 점검. `extract.engine: legacy` 로 예전 평문 추출 |
 | 임베딩 | **e5-small-ko ONNX int8** (384차원) | fp32 대비 2.5배 |
-| 청킹 | **128토큰 / 16 겹침** | 512 대비 TTFT 3.3배 |
+| 청킹 | **structured 128토큰 / 16 겹침** — 절 경계를 지키고 `[문서명 > 절]` 접두, 표 조각엔 머리글 다시 붙임 | 512 대비 TTFT 3.3배 |
 | 벡터DB | **Qdrant local** (서버 불필요) | 81ms — 전체 예산의 3% |
 | 검색 | dense 10 + BM25 10 → **RRF → top-3** | top-3이 실측 포화점 |
 | 리랭킹 | **bge-reranker-base int8**, RRF 후보 10 → 3 (iGPU 일 때만) | 506문항 +14~15문항(비유의). CPU 에서는 TTFT 3초 목표와 충돌 |
+| 관련 근거 판정 | 리랭커 점수 + 질문·근거 핵심 낱말 겹침으로 판정, 관련 근거가 없으면 답하지 않음("답변할 수 없습니다") | 리랭커 점수만으로는 못 가른다 |
+| 폴더 한정 검색 | `--folder <폴더>` — 그 폴더(하위 포함) 문서만 근거로 | RAGSearchBox 패널 폴더 = 검색 범위 |
 | BM25 | **numpy 역색인 자체 구현** | rank_bm25 대비 294배 |
 | 프롬프트 | **V0 단순 지시** | 인용 강제형은 실문서에서 역효과 |
 | 런타임 | llama.cpp(생성) + onnxruntime(임베딩·리랭킹) | 단계별 최적 런타임이 다름 |
@@ -90,7 +101,12 @@ iGPU 가 없거나 느린 PC 는 자동으로 오른쪽 열(CPU 전용, 리랭�
 | [doc/03_exe_배포_가이드.md](doc/03_exe_배포_가이드.md) | **exe 빌드·배포** (Python 없는 PC 용) |
 | [plan/설계서.md](plan/설계서.md) | 설계 결정 12개와 근거 |
 | [plan/구조인식_청킹_설계.md](plan/구조인식_청킹_설계.md) | 구조 인식 청킹 설계 |
-| [results/REPORT.md](results/REPORT.md) | 전체 측정 기록 (32절) |
+| [plan/구조화추출_청킹_재설계서.html](plan/구조화추출_청킹_재설계서.html) | 구조화 추출(blocks 엔진) 재설계 |
+| [plan/답변품질_개선_계획.html](plan/답변품질_개선_계획.html) | 생성 쪽 실험(지시문 · 표 평문화 · Parent-Child · 모델 비교) |
+| [plan/자동인덱싱_설계서.html](plan/자동인덱싱_설계서.html) · [plan/폴더한정검색_설계서.html](plan/폴더한정검색_설계서.html) | 자동 인덱싱 · 폴더 한정 검색 |
+| [RAGSearchBox/README.md](RAGSearchBox/README.md) | 탐색기 옆 대화 패널 앱 (설계: [plan/RAGSearchBox_설계서.html](plan/RAGSearchBox_설계서.html)) |
+| [rust/README.md](rust/README.md) | Rust 판 (`simplerag-rs.exe` · `RAGSearchBox-rs.exe`) |
+| [results/REPORT.md](results/REPORT.md) | 전체 측정 기록 (47절, 로컬 전용) |
 
 ---
 
@@ -138,12 +154,13 @@ set SIMPLERAG_EMBED_DIR=D:\Project\MpowerClassify\resources\models\e5-small-ko
 
 | 명령 | 설명 |
 |---|---|
-| `index --dir <폴더>` | 재귀 인덱싱(증분). 폴더와 대조해 **추가·수정·삭제**를 반영한다 — 수정 문서는 새 청크를 먼저 넣고 옛 청크를 지우며, 날짜만 바뀐 문서는 다시 임베딩하지 않는다. 한꺼번에 많이 사라지면(30% 또는 50건 이상) 지우지 않고 멈추므로 정말 지운 것이면 `--allow-delete`. `--rebuild` 로 전체 재구축 |
-| **`chat`** | **대화형 — 모델 1회 적재 후 계속 질문** (여러 개 물어볼 때 필수) |
+| `index --dir <폴더>` | 재귀 인덱싱(증분). 폴더와 대조해 **추가·수정·삭제**를 반영한다 — 수정 문서는 새 청크를 먼저 넣고 옛 청크를 지우며, 날짜만 바뀐 문서는 다시 임베딩하지 않는다. 한꺼번에 많이 사라지면(30% 또는 50건 이상) 지우지 않고 멈추므로 정말 지운 것이면 `--allow-delete`. `--rebuild` 로 전체 재구축, `--max-add N` 으로 한 번에 추가할 문서 수 제한 |
+| **`chat`** | **대화형 — 모델 1회 적재 후 계속 질문** (여러 개 물어볼 때 필수). RAGSearchBox 의 워커로도 쓰인다(`/ask` · `/index-doc` 등 명령) |
 | `ask <질문>` | 1회용 질의. 질문을 생략하면 `chat` 으로 들어간다 |
-| `ask --precise <질문>` | **정밀 모드** — 그 질문만 1.7B 로 답한다(정답률 +4.4%p, 첫 글자 3초 안팎). `chat --precise` 도 같다 |
+| `ask --model <별칭> <질문>` | 그 질문만 다른 모델로 — `qwen3-0.6b-q4`(빠름) · `qwen3-1.7b-q4`(기본) · `midm-2.0-mini-q4`(한국어). `--precise` 는 1.7B. `chat` 도 같다 |
+| `ask --folder <폴더> <질문>` | **폴더 한정** — 그 폴더(하위 포함) 문서만 근거로. `search` 도 같다 |
 | `search <질문>` | **검색만** 수행(LLM 미적재) — 원인 진단용 |
-| `extract <파일>` | **추출 미리보기** — 인덱싱 전 확인용 |
+| `extract <파일>` | **추출 미리보기** — 인덱싱 전 확인용. `--blocks` 는 블록·절·청크까지, `--dump <폴더>` 는 파일로 저장 |
 | `clear` | **인덱스 삭제** (`-y` 무인, `--doc <파일>` 1건만) |
 | `status [-v]` | 인덱스 규모, 문서별 청크 수 |
 | `warmup` | 예열만 수행(콜드스타트 측정) |
@@ -152,8 +169,10 @@ set SIMPLERAG_EMBED_DIR=D:\Project\MpowerClassify\resources\models\e5-small-ko
 ### 검색·청킹 계수 — `config.yaml`
 
 청크 크기·겹침·코사인/BM25 검색 후보 수·RRF k·리랭커 입력 수·sLLM 근거 수를 **코드 수정 없이**
-`config.yaml` 에서 바꾼다(우선순위 환경변수 > config.yaml > 기본값). `chunk.*` 를 바꾸면
-`index --dir <폴더> --rebuild` 가 필요하고, 나머지는 다음 실행부터 반영된다. 오타·범위 밖 값은
+`config.yaml` 에서 바꾼다(우선순위 환경변수 > config.yaml > 기본값). 추출 엔진(`extract.engine`),
+생성 모델(`generation.model`), 시스템 지시문(`generation.system_prompt`)도 여기서 고르고,
+실험 옵션(`flatten_tables` · `parent` · `pdf_headings`, 기본 끔)도 주석과 함께 들어 있다.
+`chunk.*`·`extract.*` 를 바꾸면 `index --dir <폴더> --rebuild` 가 필요하고, 나머지는 다음 실행부터 반영된다. 오타·범위 밖 값은
 시작할 때 오류로 알려 준다. 지금 값은 `status` 로 확인한다. 자세한 표는
 [doc/03 §4](doc/03_exe_배포_가이드.md).
 
@@ -168,15 +187,20 @@ set SIMPLERAG_EMBED_DIR=D:\Project\MpowerClassify\resources\models\e5-small-ko
 SimpleRAG/
 ├─ src/simplerag/
 │  ├─ config.py           실측 확정 상수 (각 값에 근거 주석)
-│  ├─ chunk.py            토큰 기준 청킹
+│  ├─ settings.py         config.yaml 읽기 · 값 검사
 │  ├─ extract.py          추출 계층 (OLE 보정 · 표 정규화 · 문자 정제)
+│  ├─ docmodel/           구조화 추출(blocks 엔진) — pdf · docx · pptx · xlsx · hwpx · doc_bin · html_md · 후처리 · 절 조립
+│  ├─ chunk.py structure.py  청킹 (fixed · structured · blocks)
+│  ├─ tableflat.py        표 평문화(실험)
 │  ├─ embed/              ONNX int8 임베더
-│  ├─ generate/           llama.cpp 래퍼 + 프롬프트/파서 + 백엔드 선택(CPU/iGPU)
-│  ├─ index/              Qdrant · BM25 · 증분 인덱서
-│  ├─ retrieve/           hybrid.py(dense + BM25 → RRF) + reranker.py
+│  ├─ generate/           llama.cpp 래퍼 + 프롬프트 · 채팅 형식 + 백엔드 선택(CPU/iGPU)
+│  ├─ index/              Qdrant · BM25 · 증분 인덱서 · 워커 인덱싱 명령
+│  ├─ retrieve/           hybrid.py(dense + BM25 → RRF · 관련 근거 판정) · reranker.py · parent.py · vector_matrix.py(폴더 한정 검색)
 │  ├─ pipeline.py         2단계 응답 이벤트 스트림
 │  ├─ warmup.py           병렬 예열 (App 조립)
-│  └─ cli.py              CLI 진입점
+│  └─ cli.py console.py   CLI 진입점 · 콘솔 출력
+├─ RAGSearchBox/          탐색기 옆 대화 패널 앱 (트레이 상주, 자동 인덱싱)
+├─ rust/                  Rust 판 — simplerag-rs · RAGSearchBox-rs (빌드: rust/build_dist.ps1 → dist-rust/)
 ├─ bench/                 실측 하네스 (회귀 측정용으로 유지)
 ├─ doc/04_구현_명세.md     구현 명세 (as-built)
 ├─ doc/02_테스트_가이드.md  내 문서로 테스트하는 법
@@ -186,12 +210,32 @@ SimpleRAG/
 ├─ runtime/llama_vulkan/  iGPU(Vulkan) 판 llama.cpp DLL
 ├─ models/                GGUF · 리랭커 모델
 ├─ plan/설계서.md          설계 결정과 근거
-├─ results/REPORT.md      전체 측정 기록 (32절)
+├─ results/REPORT.md      전체 측정 기록 (47절, 로컬 전용)
 ├─ qdrant_data/           벡터 인덱스
 ├─ bm25_index.npz         BM25 역색인 캐시
 ├─ index_state.json       증분 갱신 상태
 └─ gen_backend.json       CPU/iGPU 측정 결과 (자동 생성)
 ```
+
+---
+
+## RAGSearchBox — 탐색기 옆 대화 패널
+
+탐색기에서 지정한 폴더를 열면 오른쪽에 대화 패널이 붙어, 그 폴더 문서에 대해 묻고 답을 받는다.
+`simplerag chat` 을 워커로 띄워 쓰고, 폴더 변경을 감시해 자동으로 인덱싱한다.
+설치·설정은 [RAGSearchBox/README.md](RAGSearchBox/README.md).
+
+## Rust 판
+
+`src/simplerag` 와 `RAGSearchBox` 를 Rust 로 옮긴 판이 `rust/` 에 있다 — `simplerag-rs.exe`(CLI · 워커)와
+`RAGSearchBox-rs.exe`(WebView2 패널). 워커 프로토콜 · config.yaml · index_state.json 이 Python 판과 같고,
+추출 결과 · 청크 · 검색 · 답변을 Python 판과 대조해 같음을 확인했다. Python 판 인덱스는 `import` 로 가져온다.
+
+```
+powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
+```
+
+자세한 내용은 [rust/README.md](rust/README.md).
 
 ---
 
@@ -262,7 +306,7 @@ SimpleRAG/
 |---|---|---|
 | Q8 | 스캔 PDF OCR 도입 여부 | 계약서 카테고리 복구 |
 | Q9 | 생성 정확도 76% 개선 | 남은 실패는 대부분 생성 단계 |
-| Q3 | UI 형태 (현재 CLI) | 파이프라인이 UI 독립적이라 교체 쉬움 |
+| Q3 | ~~UI 형태~~ | RAGSearchBox(탐색기 옆 패널)로 해결 |
 | Q5 | 배포 형태 | venv 권장 |
 | — | 짧은 질문 검색 실패 | 검색 단계 개선 |
 
