@@ -199,7 +199,8 @@ class IndexCommands:
     #
     # -in: path = 문서 경로
     #
-    # -out: {ok, result("added"|"modified"|"same"|"unchanged"|"failed_before"), chunks, why}
+    # -out: {ok, result("added"|"modified"|"same"|"moved"|"copied"|"unchanged"|"failed_before"),
+    #        chunks, why, from(옮긴 문서의 옛 경로 · 복사본의 원본 경로)}
     # -out: error = 저장소 쓰기 실패는 예외(run 이 받는다)
     #--------------------------------------------------------------
     def index_doc(self, path):
@@ -225,11 +226,18 @@ class IndexCommands:
             self._ext = indexer.build_extractor()
         self.app.embedder.ensure_loaded()
         r = indexer.sync_doc(path, fp, state, self.app.embedder, self.app.store, self._ext)
-        if r["ok"] and r["op"] in ("added", "modified"):
+        if r["ok"] and r["op"] == "moved":
+            # 옮긴 문서 — 같은 벡터를 새 경로 이름으로 다시 단다(옛 경로 행은 뺀다)
+            self._matrix_update(r["from"], None)
+            rng = state["docs"].get(path, {}).get("ids") or [0, 0]
+            self._matrix_update(path, list(range(rng[0], rng[1])))
+        if r["ok"] and r["op"] in ("added", "modified", "copied"):
             # 폴더 한정 검색용 벡터 한 벌에도 반영한다 — 옛 행은 지우고 새 청크를 덧붙인다
             rng = state["docs"].get(path, {}).get("ids") or [0, 0]
             self._matrix_update(path, list(range(rng[0], rng[1])))
         out = {"ok": r["ok"], "path": path, "result": r["op"], "chunks": r.get("chunks", 0)}
+        if r.get("from"):
+            out["from"] = r["from"]          # 옮긴 문서·복사본 — 어디서 왔는지(로그용)
         if not r["ok"]:
             out["why"] = r.get("why", "")
             out["kept_old"] = bool(r.get("kept_old"))
@@ -322,7 +330,10 @@ class IndexCommands:
     # -in: folder       = 지정 폴더
     # -in: allow_delete = True 면 대량 삭제 멈춤을 건너뛴다(사용자가 트레이에서 허락했을 때)
     #
-    # -out: {ok, add:[경로], modify:[경로], remove:[키], delete_blocked, retry_skip, bm25_stale}
+    # -out: {ok, add:[경로], modify:[경로], move:[새 경로], remove:[키], delete_blocked, retry_skip,
+    #        bm25_stale}
+    #        move = 하위 폴더로 옮긴 문서의 새 경로. /index-doc 으로 보내면 경로만 바꾼다
+    #        (새 문서 한도·대량 삭제 확인에 세지 않는다)
     # -out: error = 없음 (폴더가 없으면 ok=False)
     #--------------------------------------------------------------
     def plan(self, folder, allow_delete=False):
@@ -331,10 +342,13 @@ class IndexCommands:
             return {"ok": False, "folder": folder, "why": "폴더가 보이지 않습니다"}
         state = self._state()
         p = indexer.plan_changes(folder, state, allow_delete=allow_delete)
-        add = [path for path, _ in p["todo"] if os.path.abspath(path) not in state["docs"]]
+        move = list(p["moved"].values())
+        moving = {indexer.norm_path(m) for m in move}
+        add = [path for path, _ in p["todo"] if os.path.abspath(path) not in state["docs"]
+               and indexer.norm_path(path) not in moving]
         modify = [path for path, _ in p["todo"] if os.path.abspath(path) in state["docs"]]
         return {"ok": True, "folder": os.path.abspath(folder), "files": len(p["files"]),
-                "add": add, "modify": modify, "remove": p["removed"],
+                "add": add, "modify": modify, "move": move, "remove": p["removed"],
                 "delete_blocked": p["delete_blocked"], "retry_skip": p["retry_skip"],
                 "bm25_stale": indexer.bm25_stale(state)}
 

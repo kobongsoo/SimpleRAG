@@ -302,6 +302,9 @@ def _extract_blocks(path, name, ext, embedder):
 #=> 수정 문서는 "수정 전 청크를 지우고 수정 후 청크를 넣는다". 다만 그 순서대로 하면
 #   사이에 문서가 비고, 넣기가 실패하면 문서가 사라진다. 그래서 순서를 뒤집는다.
 #    1) 내용 해시가 전과 같으면 지문만 새로 적고 끝(다시 임베딩하지 않는다)
+#       처음 보는 경로인데 같은 파일(내용·이름)이 다른 자리에서 사라졌으면 옮긴 것 —
+#       move_doc 으로 경로만 바꾸고 끝(다시 임베딩하지 않는다).
+#       원본이 그대로 있으면 붙여 넣은 복사본 — copy_doc 으로 원본 벡터를 베낀다(다시 임베딩 없음)
 #    2) 새 버전을 추출·청킹·임베딩한다 — 인덱스는 아직 건드리지 않는다.
 #       여기서 실패하면 옛 버전을 그대로 두고, 같은 지문으로는 다시 시도하지 않게 적어 둔다
 #    3) 새 점 id 를 예약하고 상태 파일에 먼저 적는다(도중에 죽어도 id 가 겹치지 않게)
@@ -319,7 +322,7 @@ def _extract_blocks(path, name, ext, embedder):
 # -in: ext      = build_extractor() 결과
 # -in: log      = 안내 출력 함수 fn(str)
 #
-# -out: dict = {ok, op("added"|"modified"|"same"), chunks, why, kept_old, n_rows}
+# -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"), chunks, why, kept_old, n_rows, from}
 # -out: error = 추출·임베딩 실패는 ok=False 로 돌려준다. 저장소 쓰기 실패는 예외 전파
 #------------------------------------------------------------------
 def sync_doc(path, fp, state, embedder, store, ext, log=None):
@@ -341,6 +344,19 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
         state.get("failed", {}).pop(key, None)
         save_state(state)
         return {"ok": True, "op": "same", "chunks": prev.get("chunks", 0)}
+    # 처음 보는 경로인데 같은 파일이 다른 자리에서 사라졌다 — 옮긴 것이다(경로만 바꾼다)
+    if not prev:
+        old = moved_from(state, path, chash)
+        if old:
+            log("  [이동] {} → {}".format(old, key))
+            return move_doc(old, path, fp, state, store)
+        # 원본이 그대로 있는 같은 파일 — 붙여 넣은 복사본이다(원본 벡터를 베낀다)
+        src = copied_from(state, path, chash)
+        if src:
+            r = copy_doc(src, path, fp, state, store)
+            if r:
+                log("  [복사] {} → {}".format(src, key))
+                return r
 
     # ── 2) 새 버전 만들기 (인덱스는 아직 그대로) ──────
     # 문서 1건의 실패가 전체 실행을 죽이면 안 된다. 추출뿐 아니라 청킹·임베딩까지
@@ -566,7 +582,12 @@ def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=Fal
 
     # ── 삭제 후보 ────────────────────────────────────
     present = {norm_path(p) for p in files}
-    removed = [] if rebuild else find_removed(state, doc_dir, present, recursive)
+    missing = [] if rebuild else find_removed(state, doc_dir, present, recursive)
+    # 사라진 것 가운데 "같은 파일이 다른 자리에 있는 것"(하위 폴더로 옮김)은 지운 게 아니다.
+    # 이동은 sync_doc 이 경로만 바꾸고, 이미 새 자리가 인덱스에 있으면 옛 자리는 중복이라 뺀다.
+    # 둘 다 대량 삭제 안전 확인에 세지 않는다 — 폴더 정리로 많이 옮겨도 멈추지 않게.
+    moved, dup = find_moves(state, missing, files)
+    removed = [k for k in missing if k not in moved and k not in dup]
     base = norm_path(doc_dir).rstrip("\\/") + os.sep
     n_known = sum(1 for k in state["docs"] if norm_path(k).startswith(base))
     delete_blocked = ""
@@ -575,9 +596,188 @@ def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=Fal
         if not ok:
             delete_blocked = why
             removed = []
+    removed = sorted(removed + dup)
 
     return {"files": files, "skipped": skipped, "todo": todo, "removed": removed,
-            "delete_blocked": delete_blocked, "retry_skip": n_retry_skip}
+            "moved": moved, "delete_blocked": delete_blocked, "retry_skip": n_retry_skip}
+
+
+#------------------------------------------------------------------
+# 옮긴 문서 찾기 (사라진 경로 ↔ 같은 파일이 있는 새 경로)
+#=> 문서를 하위 폴더로 옮기면 대조 결과가 "옛 경로 사라짐 + 새 경로 추가" 로 나온다.
+#   그대로 처리하면 같은 문서가 다시 임베딩되고, 사라진 것이 많으면 대량 삭제 안전 확인에
+#   걸려 옛 경로는 지워지지 않아 같은 문서가 두 벌 남았다(사용자 화면에서 23건 확인).
+#    1) 사라진 문서의 (내용 해시, 파일 이름) 을 모은다 — 내용 해시는 파일 바이트의 sha1
+#    2) 지금 폴더의 파일 가운데 이름이 같은 것만 내용 해시를 구해 견준다(읽는 양을 줄인다)
+#    3) 맞으면 이동. 새 경로가 이미 인덱스에 있으면(예전 버그로 두 벌이 됨) 옛 경로는 중복
+#   이름까지 같아야 이동으로 본다 — 이름을 바꾸면 청크 앞에 붙은 제목이 달라져 다시 만든다.
+#
+# -in: state   = 상태 dict
+# -in: missing = 사라진 문서 키 목록(find_removed 결과)
+# -in: files   = 지금 폴더의 파일 경로 목록
+#
+# -out: (moved {옛 키: 새 경로}, dup [옛 키 — 새 자리가 이미 인덱스에 있음])
+# -out: error = 없음 (읽지 못하는 파일은 이동으로 보지 않는다)
+#------------------------------------------------------------------
+def find_moves(state, missing, files):
+    want = {}
+    for key in missing:
+        h = (state["docs"].get(key) or {}).get("content_hash")
+        if h:
+            want.setdefault((h, os.path.basename(key).lower()), []).append(key)
+    if not want:
+        return {}, []
+    names = {name for _, name in want}
+    indexed = {norm_path(k) for k in state["docs"]}
+    moved, dup = {}, []
+    for path in files:
+        name = os.path.basename(path).lower()
+        if name not in names:
+            continue                       # 이름이 다르면 해시를 구할 필요도 없다
+        try:
+            h = content_hash(path)
+        except OSError:
+            continue
+        olds = want.get((h, name))
+        if not olds:
+            continue
+        old = olds.pop(0)
+        if norm_path(path) in indexed:
+            dup.append(old)
+        else:
+            moved[old] = path
+    return moved, dup
+
+
+#------------------------------------------------------------------
+# 이 파일이 어디서 옮겨 왔는가 (sync_doc 이 새 문서를 넣기 전에 본다)
+#=> 상태 파일에 있으나 지금은 없는 문서 가운데 내용 해시와 파일 이름이 같은 것.
+#
+# -in: state = 상태 dict
+# -in: path  = 새 경로
+# -in: chash = 새 파일의 내용 해시
+#
+# -out: 옛 키 또는 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def moved_from(state, path, chash):
+    name = os.path.basename(path).lower()
+    me = norm_path(path)
+    for key, d in state["docs"].items():
+        if (d.get("content_hash") == chash and os.path.basename(key).lower() == name
+                and norm_path(key) != me and not os.path.exists(key)):
+            return key
+    return None
+
+
+#------------------------------------------------------------------
+# 이 파일이 어느 문서의 복사본인가 (sync_doc 이 새 문서를 넣기 전에 본다)
+#=> 상태 파일에 있고 지금도 파일이 있는 문서 가운데 내용 해시와 파일 이름이 같은 것.
+#   (원본이 사라졌으면 복사가 아니라 이동이다 — moved_from 이 먼저 본다)
+#
+# -in: state = 상태 dict
+# -in: path  = 새 경로
+# -in: chash = 새 파일의 내용 해시
+#
+# -out: 원본 키 또는 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def copied_from(state, path, chash):
+    name = os.path.basename(path).lower()
+    me = norm_path(path)
+    for key, d in state["docs"].items():
+        if (d.get("content_hash") == chash and os.path.basename(key).lower() == name
+                and norm_path(key) != me and os.path.exists(key) and d.get("ids")):
+            return key
+    return None
+
+
+#------------------------------------------------------------------
+# 복사본 넣기 — 원본의 청크·벡터를 그대로 베낀다 (다시 임베딩하지 않는다)
+#=> 같은 문서를 다른 폴더에 붙여 넣은 경우. 복사본도 인덱스에 따로 둔다:
+#    - 그 폴더에서 폴더 한정 검색을 하면 찾아야 하고
+#    - 원본을 지워도 복사본은 남아야 한다
+#   검색 결과에서는 본문이 같은 청크를 하나로 합치므로(hybrid.dedup_key) 근거 자리를 두 번 쓰지 않는다.
+#    1) 원본 점들의 벡터·payload 를 읽는다(빠졌으면 None — 부르는 쪽이 새로 만든다)
+#    2) 새 id 를 예약해 상태 파일에 먼저 적는다(sync_doc 과 같은 순서)
+#    3) 위치 정보(doc_path·folder·mtime·gen)만 바꿔 새 id 로 넣는다
+#    4) 상태 파일에 복사본을 적는다. 새 점이 생겼으므로 BM25 는 다시 만든다(mark_changed)
+#
+# -in: src_key = 원본 키
+# -in: path    = 복사본 경로
+# -in: fp      = 복사본의 file_fingerprint
+# -in: state   = 상태 dict (수정됨)
+# -in: store   = VectorStore
+#
+# -out: {ok, op: "copied", chunks, from} 또는 None(원본 점을 못 읽음)
+# -out: error = 저장소 쓰기 실패는 예외 전파
+#------------------------------------------------------------------
+def copy_doc(src_key, path, fp, state, store):
+    src = state["docs"][src_key]
+    rng = src.get("ids") or [0, 0]
+    vecs, payloads = store.points_of(list(range(rng[0], rng[1])))
+    if vecs is None or not len(payloads):
+        return None
+    key = os.path.abspath(path)
+    name = os.path.basename(path)
+    folder = os.path.basename(os.path.dirname(path))
+    mtime = int(os.stat(path).st_mtime)
+
+    start_id = state["next_id"]
+    ids = list(range(start_id, start_id + len(payloads)))
+    state["next_id"] = start_id + len(payloads)
+    save_state(state)
+
+    for p in payloads:
+        p.update(doc_path=key, doc_name=name, folder=folder, mtime=mtime, gen=fp)
+    store.upsert(ids, vecs, payloads)
+    # 예전에 넣다 끊긴 찌꺼기가 있을 수 있다 — 방금 넣은 것만 남긴다(sync_doc 과 같다)
+    store.delete_doc_except(key, ids)
+
+    entry = dict(src)
+    entry.update(fingerprint=fp, ids=[start_id, start_id + len(payloads)], name=name,
+                 folder=folder, mtime=mtime)
+    state["docs"][key] = entry
+    state.get("failed", {}).pop(key, None)
+    mark_changed(state)
+    save_state(state)
+    return {"ok": True, "op": "copied", "chunks": len(payloads), "from": src_key}
+
+
+#------------------------------------------------------------------
+# 옮긴 문서의 경로만 바꾸기 (다시 임베딩하지 않는다)
+#=> 내용이 같으므로 청크·벡터는 그대로 두고 위치 정보만 새로 적는다.
+#    1) 저장소의 그 문서 점들(id 범위)에 새 doc_path·folder 등을 덮어쓴다
+#    2) 상태 파일의 키를 새 경로로 옮긴다
+#   1 을 먼저 한다 — 도중에 끊겨도 상태 파일에는 옛 경로가 남아 다음 대조가 다시 이동으로
+#   찾아 같은 일을 되풀이한다(id 로 고르므로 두 번 해도 같다).
+#   청크·id 가 그대로라 BM25 는 다시 만들 필요가 없다.
+#
+# -in: old_key = 상태 파일의 옛 키
+# -in: path    = 새 경로
+# -in: fp      = 새 경로의 file_fingerprint
+# -in: state   = 상태 dict (수정됨)
+# -in: store   = VectorStore
+#
+# -out: {ok, op: "moved", chunks, from}
+# -out: error = 저장소 쓰기 실패는 예외 전파
+#------------------------------------------------------------------
+def move_doc(old_key, path, fp, state, store):
+    key = os.path.abspath(path)
+    name = os.path.basename(path)
+    folder = os.path.basename(os.path.dirname(path))
+    mtime = int(os.stat(path).st_mtime)
+    entry = dict(state["docs"][old_key])
+    rng = entry.get("ids") or [0, 0]
+    store.set_payload_ids(list(range(rng[0], rng[1])),
+                          {"doc_path": key, "doc_name": name, "folder": folder,
+                           "mtime": mtime, "gen": fp})
+    entry.update(fingerprint=fp, name=name, folder=folder, mtime=mtime)
+    del state["docs"][old_key]
+    state["docs"][key] = entry
+    state.get("failed", {}).pop(key, None)
+    save_state(state)
+    return {"ok": True, "op": "moved", "chunks": entry.get("chunks", 0), "from": old_key}
 
 
 #------------------------------------------------------------------
@@ -602,7 +802,7 @@ def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=Fal
 #                     None 이면 제한 없음. 자동 인덱싱이 처음 켠 폴더를 묻지 않고 통째로
 #                     인덱싱하지 않게 한다(설계서 §8 — 371건에 19분 걸렸다)
 #
-# -out: dict = 처리 요약 {files, changed, added, modified, same, removed,
+# -out: dict = 처리 요약 {files, changed, added, modified, same, moved, copied, removed,
 #                         delete_blocked, held_new, chunks, failed, sec}
 # -out: error = 폴더 없음·청킹 설정 불일치는 RuntimeError
 #------------------------------------------------------------------
@@ -634,11 +834,15 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     # 새 문서가 너무 많으면 이번에는 넣지 않는다 — 사람이 "지금 인덱싱" 으로 허락해야 한다
     held_new = 0
+    # 옮긴 문서는 새 문서가 아니다(경로만 바꾼다) — 한도에 세지 않는다
+    moved_to = {norm_path(p) for p in plan["moved"].values()}
     if max_add is not None:
-        adds = [t for t in todo if os.path.abspath(t[0]) not in state["docs"]]
+        adds = [t for t in todo if os.path.abspath(t[0]) not in state["docs"]
+                and norm_path(t[0]) not in moved_to]
         if len(adds) > max_add:
             held_new = len(adds)
-            todo = [t for t in todo if os.path.abspath(t[0]) in state["docs"]]
+            todo = [t for t in todo if os.path.abspath(t[0]) in state["docs"]
+                    or norm_path(t[0]) in moved_to]
             log("  새 문서 {}건은 한도({}건)를 넘어 이번에는 넣지 않았습니다".format(held_new, max_add))
 
     log("문서 {}건 중 {}건 처리 대상, 사라진 문서 {}건".format(len(files), len(todo), len(removed)))
@@ -647,7 +851,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     t_start = time.perf_counter()
     prog = Progress(max(1, len(todo)))
-    counts = {"added": 0, "modified": 0, "same": 0}
+    counts = {"added": 0, "modified": 0, "same": 0, "moved": 0, "copied": 0}
     total_chunks = 0
     failed = []
 
@@ -669,9 +873,13 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
         if r["op"] == "same":
             log("  [{}/{}] {:<48} 내용 같음 — 다시 임베딩하지 않음".format(n, len(todo), name[:46]))
             continue
+        if r["op"] == "moved":
+            log("  [{}/{}] [이동] {:<44} 경로만 바꿈 — 다시 임베딩하지 않음".format(
+                n, len(todo), name[:42]))
+            continue
         total_chunks += r["chunks"]
         rate, eta = prog.update(n)
-        label = "추가" if r["op"] == "added" else "수정"
+        label = {"added": "추가", "copied": "복사"}.get(r["op"], "수정")
         table_note = "  표{}행".format(r["n_rows"]) if r.get("n_rows") else ""
         log("  [{}/{}] [{}] {:<44} {:>4}청크  ({:.1f} 문서/s, 남은시간 {:.0f}s)".format(
             n, len(todo), label, name[:42], r["chunks"], rate, eta) + table_note)
@@ -679,7 +887,8 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     # ── BM25 ─────────────────────────────────────────
     # 전체 코퍼스가 있어야 만들 수 있어 마지막에 한 번 구축한다. 지난번에 벡터만 바꾸고
     # BM25 를 못 만든 채 끝났으면(bm25_stale) 이번에 바뀐 게 없어도 만든다.
-    if counts["added"] or counts["modified"] or n_removed or rebuild or bm25_stale(state):
+    if (counts["added"] or counts["modified"] or counts["copied"] or n_removed or rebuild
+            or bm25_stale(state)):
         log("BM25 인덱스 구축 중...")
         all_chunks, all_ids, n_orphans = collect_for_bm25(store, state, log)
         if n_orphans:
@@ -694,6 +903,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     return {"files": len(files), "changed": len(todo) + n_removed,
             "added": counts["added"], "modified": counts["modified"], "same": counts["same"],
+            "moved": counts["moved"], "copied": counts["copied"],
             "removed": n_removed, "delete_blocked": delete_blocked, "held_new": held_new,
             "chunks": total_chunks, "failed": failed,
             "sec": round(time.perf_counter() - t_start, 1)}

@@ -192,6 +192,49 @@ class VectorStore:
                 must_not=must_not))
 
     #------------------------------------------------------------------
+    # 점 id 들의 payload 일부 바꾸기 (문서 이동 — 경로만 바뀌고 내용은 같을 때)
+    #=> 파일을 하위 폴더로 옮기기만 했으면 다시 추출·임베딩할 필요가 없다. 벡터·본문은 두고
+    #   doc_path·folder 같은 위치 정보만 새로 적는다. id 로 고르므로 같은 일을 두 번 해도 같다.
+    #
+    # -in: ids     = 그 문서의 점 id 목록(상태 파일의 ids 범위)
+    # -in: payload = 덮어쓸 키·값 {doc_path, doc_name, folder, mtime, gen}
+    #
+    # -out: 없음
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def set_payload_ids(self, ids, payload):
+        if not ids:
+            return
+        self.ensure_collection()
+        for i in range(0, len(ids), 1000):
+            self._client.set_payload(collection_name=COLLECTION, payload=payload,
+                                     points=[int(x) for x in ids[i:i + 1000]])
+
+    #------------------------------------------------------------------
+    # 점 id 들의 벡터·payload 읽기 (문서 복사본 — 같은 벡터를 다시 쓰려고)
+    #=> 같은 파일을 다른 폴더에 붙여 넣었으면 다시 추출·임베딩하지 않고 원본 점을 그대로 베낀다.
+    #
+    # -in: ids = 점 id 목록
+    #
+    # -out: (벡터 numpy 배열 (N, dim), payload 목록) — id 순서대로. 하나라도 없으면 (None, None)
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def points_of(self, ids):
+        import numpy as np
+
+        self.ensure_collection()
+        got = {}
+        for i in range(0, len(ids), 1000):
+            for p in self._client.retrieve(collection_name=COLLECTION,
+                                           ids=[int(x) for x in ids[i:i + 1000]],
+                                           with_vectors=True, with_payload=True):
+                got[int(p.id)] = p
+        if len(got) != len(ids):
+            return None, None              # 원본 점이 빠져 있다 — 부르는 쪽이 새로 만든다
+        pts = [got[int(x)] for x in ids]
+        return np.array([p.vector for p in pts], dtype="float32"), [dict(p.payload) for p in pts]
+
+    #------------------------------------------------------------------
     # 점 id 로 지우기 (고아 청소용)
     #
     # -in: ids = 지울 점 id 목록
