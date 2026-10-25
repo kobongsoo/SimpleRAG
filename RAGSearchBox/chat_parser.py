@@ -16,6 +16,7 @@
 #     줄 단위로 기다리면 영원히 오지 않는다.
 #------------------------------------------------------------------
 
+import json
 import re
 
 PROMPT = "질문> "
@@ -27,6 +28,8 @@ TIMING_MARK = "── 소요"
 RE_EV_HEAD = re.compile(r"── 근거 (\d+)건 \((\d+)ms\)")
 # "  [1] 문서이름.doc"
 RE_EV_ITEM = re.compile(r"^\s{2}\[(\d+)\]\s+(.+?)\s*$")
+# '  @ev {"no": 1, "path": "...", "text": "..."}' — 근거 전체 본문(워커에 SIMPLERAG_EVIDENCE_FULL=1 일 때만)
+EV_FULL_PREFIX = "  @ev "
 # "  첫 글자 1.24s / 완료 2.86s"
 RE_TTFT = re.compile(r"첫 글자 ([\d.]+)s / 완료 ([\d.]+)s")
 # "  검색 845ms (임베딩 6 + dense 81 + BM25 1 + 리랭킹 120)"
@@ -219,6 +222,7 @@ class ChatParser:
     #--------------------------------------------------------------
     # 근거 블록 해석
     #=> "── 근거 3건 (845ms)" 머리와 "  [1] 문서" / "      본문" 줄을 나눈다.
+    #   "  @ev {json}" 줄이 있으면 그 근거의 전체 본문(full)·문서 경로(path)를 붙인다([...] 팝업용).
     #
     # -in: block = 근거 구분선부터 답변 구분선 직전까지의 글자
     #
@@ -232,6 +236,17 @@ class ChatParser:
             self._ev_ms = int(m.group(2))
         items = []
         for line in block.splitlines():
+            # 전체 본문 줄 — 같은 번호 근거에 붙인다(옛 워커는 이 줄을 내지 않아 "full" 이 없다)
+            if line.startswith(EV_FULL_PREFIX):
+                try:
+                    full = json.loads(line[len(EV_FULL_PREFIX):])
+                except ValueError:
+                    continue
+                for it in items:
+                    if it["no"] == full.get("no"):
+                        it["full"] = full.get("text", "")
+                        it["path"] = full.get("path", "")
+                continue
             hit = RE_EV_ITEM.match(line)
             if hit:
                 items.append({"no": int(hit.group(1)), "doc": hit.group(2), "snippet": ""})

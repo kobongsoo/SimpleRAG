@@ -22,17 +22,16 @@ WM_TRAY = win32con.WM_USER + 20        # 트레이 아이콘이 보내는 알림
 WM_UPDATE = win32con.WM_USER + 21      # 다른 스레드가 "툴팁 갱신해라" 하고 보내는 것
 
 # 메뉴 항목 번호와 이름 (app 이 이름으로 받는다)
+# 모델 내리기/올리기·로그인 시 자동 시작은 "설정" 창으로 옮겼다 — 트레이에는
+# 자주 쓰는 것(화면 열기·설정)과 지금 해야 할 일(지금 인덱싱)만 남긴다.
+# 화면 열기는 설정 창에도 있다(같은 동작).
 MENU = [
-    (1006, "open", "창 열기"),
-    (1001, "unload", "모델 내리기 (인덱싱 전에)"),
-    (1002, "reload", "모델 다시 올리기"),
+    (1006, "open", "화면 열기"),
+    (1010, "info", "설정"),
     (0, None, None),                                   # 구분선
     (1007, "index_now", "지금 인덱싱"),
-    (1008, "rescan", "전체 다시 확인"),
     (1009, "autoindex", "자동 인덱싱"),
     (0, None, None),
-    (1003, "autorun", "로그인 시 자동 시작"),
-    (1004, "logs", "로그 폴더 열기"),
     (1005, "exit", "종료"),
 ]
 
@@ -42,6 +41,7 @@ MENU = [
 #=> 상태 글(툴팁)과 메뉴를 보여 주고, 고른 항목을 콜백으로 알린다.
 #
 # -필드: tooltip = 지금 보여 줄 상태 글
+# -필드: title   = 메뉴 맨 위 회색 줄("RAGSearchBox — 준비됨")
 #------------------------------------------------------------------
 class Tray(threading.Thread):
     #--------------------------------------------------------------
@@ -51,19 +51,22 @@ class Tray(threading.Thread):
     # -in: autorun_flag = 자동 시작이 켜져 있는지 알려 주는 함수 fn() -> bool
     # -in: icon_path    = .ico 경로(없으면 기본 아이콘)
     # -in: flags        = 메뉴 이름별 체크 표시 함수 {이름: fn() -> bool} (예: 자동 인덱싱)
+    # -in: enabled      = 메뉴 이름별 누를 수 있는지 함수 {이름: fn() -> bool}. False 면 회색(예: 지금 인덱싱)
     #
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
-    def __init__(self, on_action, autorun_flag=None, icon_path=None, flags=None):
+    def __init__(self, on_action, autorun_flag=None, icon_path=None, flags=None, enabled=None):
         super().__init__(name="rsb-tray", daemon=True)
         self.on_action = on_action
         self.autorun_flag = autorun_flag or (lambda: False)
         self.flags = dict(flags or {})
         self.flags.setdefault("autorun", self.autorun_flag)
+        self.enabled = dict(enabled or {})
         self.icon_path = icon_path
         self.log = rsb_log.get("tray")
         self.tooltip = "RAGSearchBox"
+        self.title = "RAGSearchBox"     # 메뉴 맨 위 회색 줄("RAGSearchBox — 준비됨")
         self._hwnd = None
         self._added = False
         self._ready = threading.Event()
@@ -144,6 +147,18 @@ class Tray(threading.Thread):
                 pass
 
     #--------------------------------------------------------------
+    # 메뉴 맨 위 줄 바꾸기 (다른 스레드에서 불러도 된다)
+    #=> 메뉴는 열 때마다 새로 만들므로 값만 바꿔 두면 다음에 열 때 반영된다.
+    #
+    # -in: text = "RAGSearchBox — 준비됨" 같은 짧은 글
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def set_title(self, text):
+        self.title = text or "RAGSearchBox"
+
+    #--------------------------------------------------------------
     # 알림 풍선 띄우기
     #=> 설정 오류처럼 사용자가 바로 알아야 하는 것에만 쓴다.
     #
@@ -194,6 +209,7 @@ class Tray(threading.Thread):
     #--------------------------------------------------------------
     # 마우스 오른쪽 단추 — 메뉴 보이기
     #=> 자동 시작 항목에는 지금 상태를 체크 표시로 보여 준다.
+    #   맨 위 회색 줄은 이름과 짧은 상태만 — 모델·백엔드는 "설정" 창에서 본다.
     #
     # -in: 없음
     #
@@ -202,9 +218,10 @@ class Tray(threading.Thread):
     #--------------------------------------------------------------
     def _show_menu(self):
         menu = win32gui.CreatePopupMenu()
-        # 맨 위에 상태를 회색으로 보여 준다(누를 수 없는 항목)
+        # 맨 위에는 이름과 짧은 상태만 회색으로 둔다(누를 수 없는 항목).
+        # 모델·백엔드까지 한 줄에 다 넣으면 메뉴가 옆으로 길어져서 "설정" 창으로 옮겼다.
         win32gui.AppendMenu(menu, win32con.MF_STRING | win32con.MF_GRAYED, 1000,
-                            self.tooltip[:80])
+                            self.title[:80])
         win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
         for ident, name, label in MENU:
             if name is None:
@@ -216,6 +233,12 @@ class Tray(threading.Thread):
                     flags |= win32con.MF_CHECKED
             except Exception:
                 pass                     # 체크 표시를 못 구해도 메뉴는 띄운다
+            try:
+                # 지금 할 일이 없는 항목은 회색으로 — 눌러도 아무 일 없는 메뉴로 헷갈리지 않게
+                if name in self.enabled and not self.enabled[name]():
+                    flags |= win32con.MF_GRAYED
+            except Exception:
+                pass                     # 판단을 못 하면 누를 수 있게 둔다
             win32gui.AppendMenu(menu, flags, ident, label)
 
         pos = win32gui.GetCursorPos()

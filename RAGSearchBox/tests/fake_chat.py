@@ -18,10 +18,12 @@
 #    FAKE_NO_EVIDENCE  : 근거를 못 찾은 답변을 낸다(인덱스가 비었을 때)
 #    FAKE_CMD_DELAY    : 인덱싱 명령(/index-…) 하나에 걸리는 시간(초)
 #    FAKE_OLD_WORKER   : 인덱싱 명령을 모르는 옛 워커처럼 "알 수 없는 명령" 을 낸다
+#    FAKE_RERANK_DEFER : 리랭커를 백그라운드로 올리는 척 — 준비 뒤 이 초가 지나면 stderr 로 완료를 알린다
 #------------------------------------------------------------------
 import json
 import os
 import sys
+import threading
 import time
 
 
@@ -117,7 +119,18 @@ def main():
     out("모델 적재 중...\n")
     time.sleep(delay)
     out("준비 완료 (0.1초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf\n")
-    out("생성 iGPU(Vulkan) / 리랭킹 켬\n")
+    defer = os.environ.get("FAKE_RERANK_DEFER")
+    if defer:
+        # 진짜 chat 처럼 "적재 중" 으로 시작하고, 끝나면 stderr 로 한 줄 알린다(cli._announce_rerank)
+        out("생성 iGPU(Vulkan) / 리랭킹 켬(백그라운드 적재 중)\n")
+        # 진짜 CLI 의 stderr 는 UTF-8 이다 — 콘솔 기본 인코딩과 무관하게 바이트로 맞춰 쓴다
+        threading.Timer(float(defer), lambda: (
+            sys.stderr.buffer.write("리랭커 적재 완료 (500ms)\n".encode("utf-8")),
+            sys.stderr.buffer.flush())).start()
+    else:
+        out("생성 iGPU(Vulkan) / 리랭킹 켬\n")
+    # 진짜 chat 처럼 임베딩·리랭커 모델 이름을 알린다(설정 창이 읽는다)
+    out("모델: 임베딩 e5-small-ko / 리랭커 bge-reranker-base-int8\n")
     out("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n\n")
     out("질문> ")
 

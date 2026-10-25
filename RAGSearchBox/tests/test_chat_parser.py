@@ -96,6 +96,23 @@ class TestChatParser(unittest.TestCase):
         self.assertTrue(done["parsed"])
 
     #--------------------------------------------------------------
+    # 근거 전체 본문 줄(@ev)을 같은 번호 근거에 붙인다 — [...] 팝업이 쓴다
+    #=> 줄바꿈·한글이 든 본문도 ASCII JSON 한 줄로 오므로 조각 크기와 무관하게 같아야 한다.
+    #--------------------------------------------------------------
+    def test_evidence_full(self):
+        full_line = '  @ev {"no": 2, "path": "D:\\\\docs\\\\B.doc", "text": "\\uc804\\uccb4\\n\\ubcf8\\ubb38"}\n'
+        text = ANSWER.replace("      두 번째 근거 본문\n", "      두 번째 근거 본문\n" + full_line)
+        for size in (None, 7):
+            _, p = feed_chunks(STARTUP)
+            p.begin_question()
+            events, _ = feed_chunks(text, size=size, parser=p)
+            items = events[0][1]
+            self.assertEqual(items[1]["full"], "전체\n본문")
+            self.assertEqual(items[1]["path"], "D:\\docs\\B.doc")
+            self.assertNotIn("full", items[0])            # 줄이 없는 근거는 그대로
+            self.assertEqual(items[1]["snippet"], "두 번째 근거 본문")
+
+    #--------------------------------------------------------------
     # 조각 크기가 달라도 같은 결과 (핵심 — 파이프는 아무 데서나 잘린다)
     #--------------------------------------------------------------
     def test_chunk_independence(self):

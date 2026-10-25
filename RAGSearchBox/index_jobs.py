@@ -188,6 +188,45 @@ class IndexJobs:
         return ""
 
     #--------------------------------------------------------------
+    # 허락을 기다리는 일이 있는가 (트레이 "지금 인덱싱" 을 누를 수 있게 할지)
+    #=> 새 문서가 많거나(waiting_new), 한꺼번에 많이 사라졌거나 지정 폴더 밖 문서가 많아
+    #   (waiting_delete) 멈춰 있을 때만 True. 트레이 스레드에서 불러도 되게 읽기만 한다.
+    #
+    # -in: 없음
+    #
+    # -out: True = 허락을 기다리는 일이 있다
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def has_waiting(self):
+        return bool(self.enabled and not self.disabled_reason
+                    and (self.waiting_new or self.waiting_delete))
+
+    #--------------------------------------------------------------
+    # 지금 상태를 짧은 말로 (트레이 메뉴 맨 위 줄)
+    #=> status_text 와 같은 판단이지만 메뉴 한 줄에 맞게 짧게 쓴다. 꺼져 있는 것은 메뉴 체크
+    #   표시로 이미 보이므로 말하지 않는다.
+    #
+    # -in: 없음
+    #
+    # -out: "인덱싱 중 2/5" · "인덱스 확인 중" · "'지금 인덱싱' 필요" · "자동 인덱싱 멈춤" · ""(할 말 없음)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def short_state(self):
+        if not self.enabled:
+            return ""
+        if self.disabled_reason:
+            return "자동 인덱싱 멈춤"
+        r = self._round
+        if self._inflight or self._docs:
+            # 바꿀 문서가 있으면 진행 수를, 대조만 하는 중이면 "확인 중" 으로 구분한다
+            if r["total"]:
+                return "인덱싱 중 {}/{}".format(r["done"], r["total"])
+            return "인덱스 확인 중"
+        if self.waiting_new or self.waiting_delete:
+            return "'지금 인덱싱' 필요"
+        return ""
+
+    #--------------------------------------------------------------
     # 한 번 돌리기 (메인 스레드, 50ms 마다)
     #=> 한 번에 하나의 일만 보낸다. 결과가 와야 다음 일을 보낸다.
     #
@@ -330,6 +369,9 @@ class IndexJobs:
         approved = root in self._approved
         self._approved.discard(root)
         add, modify, remove = res.get("add", []), res.get("modify", []), res.get("remove", [])
+        # 하위 폴더로 옮긴 문서 — 워커가 경로만 바꾼다(다시 임베딩 없음). 새 문서 한도에 세지 않는다.
+        # 옛 워커는 이 키를 주지 않는다(그때는 add 에 섞여 온다)
+        move = res.get("move", [])
 
         limit = self.s.autoindex_ask_above
         if limit and len(add) > limit and not approved:
@@ -350,7 +392,7 @@ class IndexJobs:
         else:
             self.waiting_delete.pop(root, None)
 
-        for op, paths in (("remove-doc", remove), ("index-doc", modify + add)):
+        for op, paths in (("remove-doc", remove), ("index-doc", move + modify + add)):
             for p in paths:
                 key = (op, os.path.normcase(p))
                 if key not in self._queued:
@@ -359,9 +401,9 @@ class IndexJobs:
                     self._round["total"] += 1
         if res.get("bm25_stale"):
             self._bm25_needed = True
-        if add or modify or remove:
-            self.log.info("대조 결과 %s: 추가 %d · 수정 %d · 삭제 %d", root, len(add), len(modify),
-                          len(remove))
+        if add or modify or remove or move:
+            self.log.info("대조 결과 %s: 추가 %d · 수정 %d · 이동 %d · 삭제 %d", root, len(add),
+                          len(modify), len(move), len(remove))
 
     #--------------------------------------------------------------
     # 지정 폴더 밖 문서 확인 결과
@@ -423,10 +465,16 @@ class IndexJobs:
         r["done"] += 1
         result = res.get("result", "")
         name = os.path.basename(path)
-        if res.get("ok") and result in ("added", "modified", "removed"):
+        if res.get("ok") and result == "moved":
+            # 옮긴 문서 — 청크·id 가 그대로라 키워드 색인은 다시 만들지 않는다
+            r["changed"].append(name)
+            self.log.info("반영 이동: %s → %s", res.get("from", "?"), path)
+            self.notify("doc", "방금 반영(이동): {}".format(name))
+        elif res.get("ok") and result in ("added", "modified", "copied", "removed"):
+            # 복사본(copied)은 원본 벡터를 베껴 새 점이 생겼다 — 키워드 색인은 다시 만든다
             self._bm25_needed = True
             r["changed"].append(name)
-            label = {"added": "추가", "modified": "수정", "removed": "삭제"}[result]
+            label = {"added": "추가", "modified": "수정", "copied": "복사", "removed": "삭제"}[result]
             self.log.info("반영 %s: %s (%s청크, %sms)", label, path, res.get("chunks", res.get("removed", "")),
                           res.get("ms"))
             self.notify("doc", "방금 반영({}): {}".format(label, name))

@@ -24,6 +24,7 @@ import answer_window
 import autorun
 import chat_panel
 import index_jobs
+import info_window
 import log as rsb_log
 import query_filter
 import settings as rsb_settings
@@ -67,6 +68,13 @@ class App:
         # §18 폴더 패널 — 지정 폴더를 열면 오른쪽에 뜨는 대화창
         self.panel = chat_panel.ChatPanel(root, s, on_ask=self._on_panel_ask)
         self.dedup = query_filter.Dedup(s.dedup_sec)
+        # 트레이 "설정" — 모델·백엔드·상태·폴더·로그 위치를 칸을 나눠 보여 준다
+        self.info = info_window.InfoWindow(root, s, self._info, self._open_logs,
+                                           set_folders=self._set_folders, rescan=self._rescan,
+                                           actions={"open": self._act_open,
+                                                    "unload": self._act_unload,
+                                                    "reload": self._act_reload,
+                                                    "autorun": self._act_autorun})
 
         self.worker = None
         self.worker_error = None          # 실행 파일을 못 찾았을 때의 안내 문구
@@ -79,7 +87,9 @@ class App:
                 answer_timeout_s=s.answer_timeout_s, restart_max=s.restart_max,
                 idle_unload_min=s.idle_unload_min,
                 # 관련 근거 문턱 — 가장 가까운 근거도 동떨어졌으면 답하지 않게(워커가 읽는다)
-                env={"SIMPLERAG_RELEVANCE_MIN": s.relevance_min})
+                env={"SIMPLERAG_RELEVANCE_MIN": s.relevance_min,
+                     # 근거 [...] 팝업에 보일 전체 본문을 워커가 함께 내게 한다
+                     "SIMPLERAG_EVIDENCE_FULL": "1"})
         else:
             self.worker_error = why
             self.log.error("%s", why)
@@ -97,7 +107,9 @@ class App:
         self.tray = rsb_tray.Tray(lambda name: self.q.put(("tray", name)),
                                   autorun_flag=autorun.is_enabled,
                                   icon_path=rsb_settings.icon_path(),
-                                  flags={"autoindex": lambda: bool(self.jobs and self.jobs.enabled)})
+                                  flags={"autoindex": lambda: bool(self.jobs and self.jobs.enabled)},
+                                  # "지금 인덱싱" 은 허락을 기다리는 일이 있을 때만 누를 수 있다
+                                  enabled={"index_now": lambda: bool(self.jobs and self.jobs.has_waiting())})
         self.monitor = Monitor(s, self.scope,
                                lambda text, folders, anchor, hwnd:
                                    self.q.put(("query", text, folders, anchor, hwnd)),
@@ -487,17 +499,19 @@ class App:
             self.log.warning("검색 범위를 설정에 저장하지 못했다: %s", detail)
 
     #--------------------------------------------------------------
-    # "근거 파일 보기" (§16)
+    # "근거 파일 보기" (§16) — 패널에서는 출처 머리의 "탐색기에서 보기"
     #=> 답변에 나온 근거 문서 이름들을, 질문을 친 그 탭의 검색 결과로 띄운다.
     #   UIA 조작은 감시 스레드 몫이라 여기서는 부탁만 한다.
     #
-    # -in: 없음
+    # -in: docs = 띄울 근거 문서 이름들(패널이 그 마디 것을 준다). 비우면 마지막 답의 근거
     #
     # -out: 없음
     # -out: error = 없음 (대상 창을 모르면 창에 한 줄로 알린다)
     #--------------------------------------------------------------
-    def _show_evidence(self):
-        if self.panel.visible:
+    def _show_evidence(self, docs=None):
+        if docs:
+            docs = [d for d in docs if d]
+        elif self.panel.visible:
             turn = self.panel.turns[-1] if self.panel.turns else None
             docs = [d for d in (turn.docs if turn else []) if d]
         else:
@@ -525,7 +539,7 @@ class App:
     #--------------------------------------------------------------
     # 트레이 메뉴 처리
     #
-    # -in: name = "open" | "unload" | "reload" | "autorun" | "logs" | "exit"
+    # -in: name = "open" | "info" | "unload" | "reload" | "autorun" | "exit" | 자동 인덱싱 메뉴
     #
     # -out: 없음
     # -out: error = 없음
@@ -536,7 +550,7 @@ class App:
         if name == "open":
             self._open_panel()
 
-        elif name in ("index_now", "rescan", "autoindex"):
+        elif name in ("index_now", "autoindex"):
             self._on_tray_autoindex(name)
 
         elif name == "unload":
@@ -557,14 +571,14 @@ class App:
                 msg = "로그인할 때 자동으로 시작합니다" if ok else msg
             self.tray.notify("RAGSearchBox", msg)
 
-        elif name == "logs":
-            self._open_logs()
+        elif name == "info":
+            self.info.show()
 
         elif name == "exit":
             self.quit()
 
     #--------------------------------------------------------------
-    # 트레이 "창 열기" (§18)
+    # 트레이·설정 창 "화면 열기" (§18, 예전 이름 "창 열기")
     #=> 닫기를 눌러 숨긴 패널을 다시 불러낸다.
     #    1) 이미 떠 있으면 앞으로 가져와 입력 칸에 커서를 둔다
     #    2) 범위 폴더를 보고 있는 탐색기 창이 있으면 가장 최근 창 옆에 띄운다
@@ -592,7 +606,7 @@ class App:
             self.tray.notify("RAGSearchBox", SCOPE_WARN)
             return
         target = self.scope.active[0]
-        self.log.info("창 열기: 범위 폴더를 탐색기로 연다 — %s", target)
+        self.log.info("화면 열기: 범위 폴더를 탐색기로 연다 — %s", target)
         try:
             subprocess.Popen(["explorer.exe", target])
         except Exception as e:
@@ -660,8 +674,9 @@ class App:
     #--------------------------------------------------------------
     # 트레이의 자동 인덱싱 메뉴
     #    - 지금 인덱싱  : 허락을 기다리던 폴더(새 문서 많음·대량 삭제)를 진행한다
-    #    - 전체 다시 확인: 모든 폴더를 곧바로 대조한다
+    #                     (기다리는 일이 없으면 메뉴가 회색이라 눌리지 않는다)
     #    - 자동 인덱싱  : 켜고 끈다(설정 파일에도 적는다)
+    #   예전 "전체 다시 확인" 은 설정 창 인덱싱 폴더 옆 [다시 확인] 으로 옮겼다(_rescan).
     #
     # -in: name = 메뉴 이름
     #
@@ -675,9 +690,6 @@ class App:
         if name == "index_now":
             n = self.jobs.run_now()
             self.tray.notify("RAGSearchBox", "폴더 {}개를 인덱싱합니다".format(n))
-        elif name == "rescan":
-            self.jobs.rescan_all()
-            self.tray.notify("RAGSearchBox", "폴더를 다시 확인합니다")
         elif name == "autoindex":
             on = not self.jobs.enabled
             self.jobs.set_enabled(on)
@@ -693,7 +705,7 @@ class App:
         self._update_tooltip(once=True)
 
     #--------------------------------------------------------------
-    # 로그 폴더 열기
+    # 로그 폴더 열기 (설정 창의 [열기])
     #=> 탐색기로 연다. 상주 프로그램이라 사용자가 로그를 찾아갈 길이 여기뿐이다.
     #
     # -in: 없음
@@ -710,6 +722,233 @@ class App:
             self.log.exception("로그 폴더를 열지 못했다: %s", path)
 
     #--------------------------------------------------------------
+    # 지금 상태 한 줄 (트레이 툴팁)
+    #=> 마우스를 올렸을 때 보이는 자세한 상태 글이다. 메뉴 맨 위 줄은 _menu_title 이 짧게 만든다.
+    #    1) 범위 폴더가 없거나 워커를 못 찾았으면 그 안내가 먼저다
+    #    2) 아니면 워커 상태(준비됨 · 모델 · 백엔드)
+    #    3) 자동 인덱싱이 할 말이 있으면 덧붙인다(갱신 중 2/5 · 허락 대기 · 사라진 문서 등)
+    #
+    # -in: 없음
+    #
+    # -out: 상태 글 (앞에 "RAGSearchBox — " 는 붙이지 않는다)
+    # -out: error = 없음 (부르는 쪽이 예외를 감싼다)
+    #--------------------------------------------------------------
+    def _status_text(self):
+        if not self.scope.usable():
+            text = SCOPE_WARN
+        elif self.worker is None:
+            text = self.worker_error or "SimpleRAG 없음"
+        else:
+            text = self.worker.status_text()
+        if self.jobs:
+            extra = self.jobs.status_text()
+            if extra:
+                text += " · " + extra
+        return text
+
+    #--------------------------------------------------------------
+    # 설정 창에 보여 줄 값 모으기 (InfoWindow 가 1초마다 부른다, 메인 스레드)
+    #=> 워커가 아는 생성·임베딩·리랭커 모델과 백엔드, 인덱싱하는 문서 폴더, 로그 폴더를 모은다.
+    #   상태 글은 넣지 않는다 — 트레이 메뉴 맨 위 줄("RAGSearchBox — 준비됨")이 맡는다.
+    #    1) 워커가 있으면 worker.info() — 리랭커 적재가 끝나면 여기 값이 바뀐다
+    #    2) 문서 폴더는 자동 인덱싱이 지켜보는 폴더(없으면 범위 폴더)
+    #    3) 문서 수는 SimpleRAG 상태 파일에서 그 폴더들 아래 문서를 센다(못 읽으면 None)
+    #
+    # -in: 없음
+    #
+    # -out: info_window.info_rows 가 받는 dict
+    # -out: error = 없음 (값 하나를 못 구해도 나머지는 채운다)
+    #--------------------------------------------------------------
+    def _info(self):
+        info = {"log_dir": rsb_log.log_dir()}
+        if self.worker:
+            # 모델 단추를 켜고 끄는 데 쓴다 — 준비 중도 "올라가는 중" 이라 내리기 쪽으로 본다
+            info["model_up"] = self.worker.availability() != "down"
+            # 내려간 뒤에도 워커는 마지막 모델 이름을 들고 있다 — 올라가 있을 때만 보여 준다
+            if info["model_up"]:
+                info.update(self.worker.info())
+        try:
+            info["autorun"] = autorun.is_enabled()
+        except Exception:
+            pass                          # 레지스트리를 못 읽으면 체크 표시만 그대로 둔다
+        folders = list(self.jobs.roots) if self.jobs else list(self.scope.active or self.s.scope_folders)
+        info["folders"] = folders
+        keys = self._state_keys() if folders else None
+        if keys is not None:
+            # 폴더 경로 뒤에 구분자를 붙여 "D:\문서" 가 "D:\문서2" 를 세지 않게 한다
+            bases = tuple(os.path.normcase(os.path.abspath(f)).rstrip("\\/") + os.sep for f in folders)
+            info["docs"] = sum(1 for k in keys if k.startswith(bases))
+        return info
+
+    #--------------------------------------------------------------
+    # 인덱싱 폴더 바꾸기 (설정 창 [추가…] · [빼기])
+    #=> 인덱싱 폴더 = 범위 폴더([Scope] Folders)라서, 바꾸면 패널이 뜨는 폴더와 자동 인덱싱이
+    #   지켜보는 폴더가 함께 바뀐다(폴더 한정 검색 설계서 §0 "인덱싱 폴더 = 패널 폴더").
+    #    1) 비었거나 인덱싱이 돌고 있으면 바꾸지 않는다(돌던 일과 새 목록이 엇갈리면 안 된다)
+    #    2) INI 에 먼저 적는다 — 못 적으면 아무것도 바꾸지 않는다(다음에 켤 때 되돌아가지 않게)
+    #    3) 범위 폴더를 바꾸고, 자동 인덱싱(IndexJobs)과 폴더 감시를 새 목록으로 다시 꾸린다
+    #   새로 꾸린 자동 인덱싱은 시작할 때처럼 밖 문서 정리(/index-outside)와 폴더 대조를 한다.
+    #   그래서 새 폴더는 인덱싱되고, 뺀 폴더의 문서는 인덱스에서 빠진다. 양이 많으면 기존
+    #   안전장치대로 멈추고 트레이 "지금 인덱싱" 허락을 기다린다.
+    #
+    # -in: folders = 새 폴더 목록
+    #
+    # -out: (ok, 안내 글)
+    # -out: error = 없음 (실패는 False 와 이유 글로 돌려준다)
+    #--------------------------------------------------------------
+    def _set_folders(self, folders):
+        # 같은 폴더를 두 번 넣지 않게 대소문자·구분자를 맞춰 거른다
+        clean, seen = [], set()
+        for f in folders:
+            p = os.path.normpath(os.path.abspath(f))
+            key = os.path.normcase(p)
+            if key not in seen:
+                seen.add(key)
+                clean.append(p)
+        if not clean:
+            return False, "폴더가 하나는 있어야 합니다"
+        missing = [p for p in clean if not os.path.isdir(p)]
+        if missing:
+            return False, "없는 폴더입니다: {}".format(missing[0])
+        if self.jobs and self.jobs.short_state().startswith(("인덱싱 중", "인덱스 확인 중")):
+            return False, "인덱싱이 돌고 있습니다 — 끝난 뒤 다시 바꾸세요"
+
+        ok, detail = rsb_settings.save_ini_value(self.s.ini_path, "Scope", "Folders", ";".join(clean))
+        if not ok:
+            self.log.warning("범위 폴더를 저장하지 못했다: %s", detail)
+            return False, detail
+        self.log.info("인덱싱 폴더를 바꿨다: %s", ";".join(clean))
+        self.s.scope_folders = list(clean)
+        # 감시 스레드(monitor)가 같은 Scope 객체를 들고 있으므로 새로 만들지 않고 내용만 바꾼다
+        self.scope.configured = list(clean)
+        self.scope.refresh(force=True)
+
+        # 자동 인덱싱은 폴더 목록을 생성자에서 받으므로 새로 꾸린다(켜고 끈 상태는 이어받는다)
+        was_enabled = self.jobs.enabled if self.jobs else self.s.autoindex_enabled
+        self._stop_watcher()
+        self.jobs = None
+        if self._cmd:
+            self.jobs = index_jobs.IndexJobs(
+                self.s, self.worker, rsb_settings.autoindex_roots(self.s), self._cmd,
+                post=lambda fn: self.q.put(("call", fn)),
+                notify=lambda kind, msg: self.q.put(("autoindex", kind, msg)))
+            self.jobs.enabled = was_enabled
+            if was_enabled:
+                self._start_watcher()
+        # 범위 폴더가 없어서 워커를 안 올렸던 경우 — 이제 쓸 수 있으니 관리 스레드를 켠다
+        if self.worker and self.scope.usable():
+            self.worker.start()
+        self._update_tooltip(once=True)
+        if self.jobs and not was_enabled:
+            return True, "저장했습니다. 자동 인덱싱이 꺼져 있어 인덱스는 그대로입니다"
+        return True, "저장했습니다. 새 폴더는 인덱싱하고 뺀 폴더 문서는 인덱스에서 뺍니다"
+
+    #--------------------------------------------------------------
+    # 설정 창 [화면 열기] — 트레이 "화면 열기" 와 같은 동작
+    #
+    # -in: 없음
+    #
+    # -out: 안내 글(없으면 "")
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _act_open(self):
+        self._on_tray("open")
+        return ""
+
+    #--------------------------------------------------------------
+    # 설정 창 [모델 내리기] — 예전 트레이 "모델 내리기 (인덱싱 전에)"
+    #=> 메모리와 인덱스 잠금을 돌려준다. 직접 `simplerag index` 를 돌리기 전에 누른다.
+    #
+    # -in: 없음
+    #
+    # -out: 안내 글
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _act_unload(self):
+        if not self.worker:
+            return "SimpleRAG 를 찾지 못해 내릴 모델이 없습니다"
+        self._on_tray("unload")
+        return "모델을 내렸습니다 — 이제 index 명령을 실행할 수 있습니다"
+
+    #--------------------------------------------------------------
+    # 설정 창 [모델 다시 올리기] — 예전 트레이 "모델 다시 올리기"
+    #
+    # -in: 없음
+    #
+    # -out: 안내 글
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _act_reload(self):
+        if not self.worker:
+            return "SimpleRAG 를 찾지 못해 올릴 모델이 없습니다"
+        self._on_tray("reload")
+        return "모델을 올리는 중입니다 (10초 안팎)"
+
+    #--------------------------------------------------------------
+    # 설정 창 [로그인할 때 자동으로 시작] 체크 — 예전 트레이 "로그인 시 자동 시작"
+    #=> 레지스트리 값을 뒤집는다. 체크 표시는 설정 창이 다음 갱신 때 레지스트리에서 다시 읽는다.
+    #
+    # -in: 없음
+    #
+    # -out: 안내 글
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _act_autorun(self):
+        if autorun.is_enabled():
+            ok, msg = autorun.disable()
+            return "자동 시작을 껐습니다" if ok else msg
+        ok, msg = autorun.enable()
+        return "로그인할 때 자동으로 시작합니다" if ok else msg
+
+    #--------------------------------------------------------------
+    # 인덱싱 폴더 다시 확인 (설정 창 [다시 확인] — 예전 트레이 "전체 다시 확인")
+    #=> 모든 인덱싱 폴더를 곧바로 인덱스와 대조한다. 평소에는 폴더 감시·10분 순찰이 하므로
+    #   네트워크 드라이브처럼 알림을 놓칠 때를 위한 수동 단추다.
+    #
+    # -in: 없음
+    #
+    # -out: (ok, 안내 글)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _rescan(self):
+        if not self.jobs:
+            return False, "자동 인덱싱할 폴더가 없습니다"
+        # 꺼져 있으면 대조 요청이 쌓이기만 하고 돌지 않는다 — 그렇다고 알려 준다
+        if not self.jobs.enabled:
+            return False, "자동 인덱싱이 꺼져 있습니다 — 트레이에서 켜면 확인합니다"
+        self.jobs.rescan_all()
+        self._update_tooltip(once=True)
+        return True, "폴더를 다시 확인합니다"
+
+    #--------------------------------------------------------------
+    # 트레이 메뉴 맨 위 줄 (짧은 상태)
+    #=> "RAGSearchBox — 준비됨" · "RAGSearchBox — 인덱싱 중 2/5" · "RAGSearchBox — 준비 안 됨" 처럼
+    #   한눈에 보이는 낱말만 붙인다. 모델·백엔드 같은 자세한 것은 설정 창에서 본다.
+    #    1) 범위 폴더가 없거나 SimpleRAG 를 못 찾았으면 그 사실이 먼저다
+    #    2) 자동 인덱싱이 일하는 중이면 "인덱싱 중"(워커는 그동안 준비됨/인덱싱 중을 오간다)
+    #    3) 아니면 워커 상태, 허락을 기다리는 일이 있으면 " · '지금 인덱싱' 필요" 를 붙인다
+    #
+    # -in: 없음
+    #
+    # -out: 메뉴에 그대로 쓸 글
+    # -out: error = 없음 (부르는 쪽이 예외를 감싼다)
+    #--------------------------------------------------------------
+    def _menu_title(self):
+        if not self.scope.usable():
+            label = "범위 폴더 미설정"
+        elif self.worker is None:
+            label = "SimpleRAG 없음"
+        else:
+            label = self.worker.state_label()
+            extra = self.jobs.short_state() if self.jobs else ""
+            if extra.startswith(("인덱싱 중", "인덱스 확인 중")):
+                # 문서를 하나씩 넣는 사이사이 워커가 잠깐 준비됨으로 돌아온다 — 깜박이지 않게 덮어쓴다
+                label = extra
+            elif extra:
+                label += " · " + extra
+        return "RAGSearchBox — " + label
+
+    #--------------------------------------------------------------
     # 트레이 상태 글 갱신
     #=> 워커 상태와 범위 폴더 상태를 한 줄로 보여 준다.
     #   범위 폴더가 늦게 연결되는 경우(네트워크 드라이브)도 여기서 알아챈다.
@@ -724,21 +963,13 @@ class App:
             if self.scope.refresh() and self.scope.usable():
                 self.log.info("범위 폴더가 연결되었다: %s", self.scope.active)
 
-            if not self.scope.usable():
-                text = "RAGSearchBox — " + SCOPE_WARN
-            elif self.worker is None:
-                text = "RAGSearchBox — " + (self.worker_error or "SimpleRAG 없음")
-            else:
-                text = "RAGSearchBox — " + self.worker.status_text()
-            # 자동 인덱싱이 할 말이 있으면 덧붙인다(갱신 중 2/5 · 허락 대기 등)
-            if self.jobs:
-                extra = self.jobs.status_text()
-                if extra:
-                    text += " · " + extra
+            text = "RAGSearchBox — " + self._status_text()
 
             if text != self._last_tooltip:
                 self._last_tooltip = text
                 self.tray.set_tooltip(text)
+            # 메뉴 맨 위 줄은 메뉴를 열 때 읽으므로 값만 바꿔 둔다
+            self.tray.set_title(self._menu_title())
         except Exception:
             self.log.exception("트레이 상태 갱신에서 예외")
         if not once and not self._quitting:
@@ -774,6 +1005,7 @@ class App:
                          ("워커", (self.worker.shutdown if self.worker else lambda: None)),
                          ("트레이", self.tray.stop),
                          ("창", self.window.close),
+                         ("설정 창", self.info.close),
                          ("패널", self.panel.close)):
             try:
                 fn()

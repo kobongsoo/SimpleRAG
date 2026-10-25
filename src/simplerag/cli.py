@@ -75,6 +75,37 @@ def _log(msg):
 
 
 #------------------------------------------------------------------
+# 백그라운드 리랭커 적재가 끝나면 알리기 (chat 전용)
+#=> chat 은 리랭커를 "준비 완료" 뒤로 미뤄 올린다. 시작할 때는 "켬(백그라운드 적재 중)" 이라고만
+#   알 수 있어서, RAGSearchBox 정보 창이 그 상태에 머물러 있었다. 끝나는 순간을 한 줄로 알려 준다.
+#    1) 작은 데몬 스레드가 app.wait_rerank() 로 적재가 끝나기를 기다린다
+#    2) 결과를 stderr 에 "리랭커 적재 완료 (…ms)" 또는 "리랭커 적재 실패 — …" 로 찍는다
+#   stdout 은 질문 프롬프트·답변이 오가는 길이라 끼어들면 안 되므로 stderr 로 보낸다.
+#
+# -in: app = 예열을 마친 App (warmup 결과에 _rerank_deferred 가 있었던 경우에만 부른다)
+#
+# -out: 없음 (데몬 스레드 시작)
+# -out: error = 없음 (기다리다 예외가 나도 로그 한 줄만 남긴다)
+#------------------------------------------------------------------
+def _announce_rerank(app):
+    import threading
+
+    # 백그라운드 본체 — 적재가 끝날 때까지 기다렸다가 결과를 한 줄로 알린다
+    def job():
+        try:
+            res = app.wait_rerank()
+        except Exception as e:
+            res = "{}: {}".format(type(e).__name__, str(e)[:200])
+        # 문자열이면 실패 사유, 숫자(ms)면 성공 — warmup.wait_rerank 의 약속을 그대로 따른다
+        if isinstance(res, str):
+            _log("리랭커 적재 실패 — {}".format(res))
+        else:
+            _log("리랭커 적재 완료 ({:.0f}ms)".format(res or 0))
+
+    threading.Thread(target=job, name="rerank-announce", daemon=True).start()
+
+
+#------------------------------------------------------------------
 # 인덱싱 명령
 #=> 폴더의 변경된 문서만 다시 인덱싱한다. --rebuild 면 전부 다시.
 #------------------------------------------------------------------
@@ -100,9 +131,12 @@ def cmd_index(args):
             {k: v for k, v in summary.items() if k != "failed"},
             op="index", ok=True, failed=len(summary.get("failed") or [])),
             prefix="@index-summary "))
-        print("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 삭제 {}건 / 청크 {:,}개 / {:.1f}s"
+        # 이동(하위 폴더로 옮김)은 경로만 바꾸고, 복사(붙여 넣은 같은 파일)는 원본 벡터를 베낀 건수다
+        print("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 이동 {}건 · 복사 {}건 · 삭제 {}건"
+              " / 청크 {:,}개 / {:.1f}s"
               .format(summary["files"], summary["added"], summary["modified"], summary["same"],
-                      summary["removed"], summary["chunks"], summary["sec"]))
+                      summary.get("moved", 0), summary.get("copied", 0), summary["removed"],
+                      summary["chunks"], summary["sec"]))
         if summary.get("failed"):
             print("실패 {}건 (실패한 문서는 옛 버전이 그대로 남아 있습니다)".format(
                 len(summary["failed"])))
@@ -318,10 +352,16 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                         os.path.basename(folder.rstrip("\\/")) or folder, timing.get("scope_docs", "?"))
                 print("\n── 근거 {}건 ({:.0f}ms){} ─────────────────────".format(
                     len(chunks), timing["total_ms"], scope))
+                # RAGSearchBox 가 근거 [...] 팝업에 전체 본문을 보여 주려고 켠다(콘솔에서는 꺼져 있다)
+                full = os.environ.get("SIMPLERAG_EVIDENCE_FULL") == "1"
                 for i, c in enumerate(chunks, 1):
                     body = c["text"].replace("\n", " ").strip()
                     print("  [{}] {}".format(i, c["doc_name"]))
                     print("      {}{}".format(body[:160], "…" if len(body) > 160 else ""))
+                    if full:
+                        # 한 줄 ASCII JSON — 줄바꿈·cp949 로 못 쓰는 글자가 있어도 깨지지 않는다
+                        print("  @ev " + json.dumps({"no": i, "path": c.get("doc_path", ""),
+                                                     "text": c["text"]}, ensure_ascii=True))
                 print("\n── 답변 (AI 요약 — 위 근거로 확인하세요) ──")
 
             elif kind == "token":
@@ -402,6 +442,13 @@ def cmd_chat(args):
             gen_backend.label(warm.get("_backend")),
             ("켬(백그라운드 적재 중)" if warm.get("_rerank_deferred") else "켬")
             if warm.get("_rerank") else "끔"))
+        # 백그라운드로 올리는 중이면, 끝났을 때 RAGSearchBox 가 알 수 있게 stderr 로 한 줄 알린다
+        if warm.get("_rerank") and warm.get("_rerank_deferred"):
+            _announce_rerank(app)
+        # RAGSearchBox 정보 창이 임베딩·리랭커 모델 이름을 보여 주려고 이 줄을 읽는다(폴더 이름 = 모델 이름)
+        print("모델: 임베딩 {} / 리랭커 {}".format(
+            os.path.basename(config.EMBED.model_dir.rstrip("\\/")),
+            os.path.basename(config.RERANK_DIR.rstrip("\\/"))))
         # RAGSearchBox 가 이 줄로 워커가 아는 명령을 알아본다(옛 워커와 구분)
         print("기능: ask-folder index-commands")
         print("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n")

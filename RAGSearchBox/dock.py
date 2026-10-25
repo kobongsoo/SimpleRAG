@@ -82,6 +82,25 @@ def work_area(hwnd):
 
 
 #------------------------------------------------------------------
+# 한 점이 있는 모니터의 작업 영역 얻기
+#=> 트레이 메뉴에서 연 창(설정 창)은 기준 창이 없다. 마우스가 있던 모니터에 띄우려고 쓴다.
+#
+# -in: pt = (x, y) 화면 좌표 (보통 마우스 위치)
+#
+# -out: (left, top, right, bottom). 못 구하면 주 화면 크기
+# -out: error = 없음
+#------------------------------------------------------------------
+def work_area_at(pt):
+    try:
+        import win32api
+        import win32con
+        mon = win32api.MonitorFromPoint(tuple(pt), win32con.MONITOR_DEFAULTTONEAREST)
+        return tuple(win32api.GetMonitorInfo(mon)["Work"])
+    except Exception:
+        return work_area(None)
+
+
+#------------------------------------------------------------------
 # 대상 창의 상태 보기
 #=> 패널을 어떻게 할지 정하는 데 필요한 것만 한 번에 읽는다.
 #

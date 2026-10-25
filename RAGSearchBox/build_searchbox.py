@@ -39,6 +39,7 @@ DIST = os.path.join(HERE, "dist")
 BUILD = os.path.join(HERE, "build")
 APP = "RAGSearchBox"
 ICON = os.path.join(HERE, APP + ".ico")
+MOAI = os.path.join(HERE, "moai.png")    # 패널 시작 화면의 모아이 마크
 DEPLOY_DIR = os.path.join(ROOT, "dist", "simplerag")
 LIMIT_MB = 40                       # 이보다 크면 뭔가 딸려 들어온 것이다
 
@@ -109,6 +110,9 @@ def build(gen_mods):
         cmd += ["--add-data", "{}{}.".format(ICON, os.pathsep)]
     else:
         print("  ⚠️ 아이콘이 없습니다. make_icon.py 를 먼저 실행하세요: {}".format(ICON))
+    # 패널이 settings.asset_path("moai.png") 로 찾는다 — 없으면 마크 없이 뜬다
+    if os.path.isfile(MOAI):
+        cmd += ["--add-data", "{}{}.".format(MOAI, os.pathsep)]
 
     for m in HIDDEN + ["comtypes.gen." + g for g in gen_mods]:
         cmd += ["--hidden-import", m]

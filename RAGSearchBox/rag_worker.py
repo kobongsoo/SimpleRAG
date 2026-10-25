@@ -50,6 +50,57 @@ MODEL_RE = re.compile(r"([^/\\\s]+\.gguf)")
 RESTART_WINDOW_S = 300
 # 인덱스를 다른 프로세스가 잡고 있을 때 SimpleRAG 가 내는 문구
 LOCK_HINT = "already accessed"
+# 백그라운드 리랭커 적재가 끝나면 워커가 stderr 에 내는 줄의 머리(simplerag cli._announce_rerank)
+RERANK_DONE = "리랭커 적재 완료"
+RERANK_FAIL = "리랭커 적재 실패"
+# 시작할 때 "생성 … / 리랭킹 켬(백그라운드 적재 중)" 의 리랭킹 쪽 값
+RERANK_LOADING = "켬(백그라운드 적재 중)"
+
+
+#------------------------------------------------------------------
+# 백엔드 줄 나누기
+#=> 워커가 시작할 때 내는 "생성 iGPU(Vulkan) / 리랭킹 켬(백그라운드 적재 중)" 한 줄을
+#   설정 창에 따로따로 보여 주려고 두 토막으로 나눈다.
+#    1) " / 리랭킹 " 을 기준으로 앞(생성)과 뒤(리랭킹)를 가른다
+#    2) 앞에서 "생성 " 머리를 떼어 백엔드 이름만 남긴다
+#
+# -in: line = 워커의 백엔드 줄(비어 있을 수 있다)
+#
+# -out: (생성 백엔드, 리랭킹 상태) — 모르는 쪽은 ""
+# -out: error = 없음 (형식이 달라도 아는 만큼만 돌려준다)
+#------------------------------------------------------------------
+def split_backend(line):
+    line = (line or "").strip()
+    gen, _, rerank = line.partition(" / 리랭킹 ")
+    # 옛 워커·다른 형식이어도 "생성 " 머리만 떼고 남은 글을 그대로 보여 준다
+    if gen.startswith("생성 "):
+        gen = gen[len("생성 "):]
+    return gen.strip(), rerank.strip()
+
+
+#------------------------------------------------------------------
+# 모델 줄 나누기
+#=> 워커가 시작할 때 내는 "모델: 임베딩 e5-small-ko / 리랭커 bge-reranker-base-int8" 을
+#   설정 창에 칸별로 보여 주려고 두 이름으로 나눈다.
+#    1) "모델:" 머리를 뗀다
+#    2) " / " 로 가르고 각 토막에서 "임베딩 " · "리랭커 " 머리를 뗀다
+#
+# -in: line = 워커의 모델 줄
+#
+# -out: (임베딩 모델, 리랭커 모델) — 모르는 쪽은 ""
+# -out: error = 없음 (형식이 달라도 아는 만큼만 돌려준다)
+#------------------------------------------------------------------
+def split_models(line):
+    body = (line or "").split(":", 1)[-1]
+    embed = rerank = ""
+    for part in body.split(" / "):
+        part = part.strip()
+        # 순서가 바뀌어도 머리말로 어느 모델인지 가린다
+        if part.startswith("임베딩 "):
+            embed = part[len("임베딩 "):].strip()
+        elif part.startswith("리랭커 "):
+            rerank = part[len("리랭커 "):].strip()
+    return embed, rerank
 
 
 #------------------------------------------------------------------
@@ -116,6 +167,7 @@ def _assign_job(job, pid):
 # -필드: detail   = 상태를 사람 말로 (트레이 툴팁용)
 # -필드: backend  = 워커가 알려 준 생성 백엔드 줄("생성 iGPU(Vulkan) / 리랭킹 켬")
 # -필드: model    = 워커가 올린 생성 모델 파일 이름("Qwen3-0.6B-Q4_K_M.gguf")
+# -필드: embed_model / rerank_model = 워커가 알린 임베딩·리랭커 모델 이름("e5-small-ko"). 옛 워커면 ""
 # -필드: features = 워커가 시작할 때 알린 기능들({"ask-folder", "index-commands"}). 옛 워커면 빈 집합
 #------------------------------------------------------------------
 class RagWorker:
@@ -156,6 +208,9 @@ class RagWorker:
         self.detail = "시작 전"
         self.backend = ""
         self.model = ""
+        self._rerank_note = None       # stderr 로 받은 리랭커 적재 결과("켬" / 실패 문구)
+        self.embed_model = ""
+        self.rerank_model = ""
         self.ready_line = ""
         self.startup_lines = []
         self.features = set()
@@ -365,7 +420,59 @@ class RagWorker:
             extra = "{} · {}".format(short, extra) if extra else short
         return "{} · {}".format(name, extra) if extra else name
 
+    #--------------------------------------------------------------
+    # 지금 상태를 짧은 말로 (트레이 메뉴 맨 위 줄)
+    #=> 메뉴 맨 위에는 "RAGSearchBox — 준비됨" 처럼 한 낱말만 붙인다. 모델·백엔드는 설정 창에서 본다.
+    #
+    # -in: 없음
+    #
+    # -out: "준비 안 됨" | "준비 중" | "준비됨" | "답변 중" | "인덱싱 중"
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def state_label(self):
+        with self._lock:
+            return {STOPPED: "준비 안 됨", STARTING: "준비 중", READY: "준비됨", BUSY: "답변 중",
+                    INDEXING: "인덱싱 중"}[self.state]
+
+    #--------------------------------------------------------------
+    # 설정 창에 보여 줄 값들
+    #=> 트레이 "설정" 창이 모델·리랭킹·백엔드를 한 칸씩 보여 주려고 부른다.
+    #    1) 모델 파일 이름을 짧게 줄인다("Qwen3-1.7B-Q4_K_M.gguf" → "Qwen3-1.7B")
+    #    2) 백엔드 줄을 생성 쪽·리랭킹 쪽으로 나눈다(split_backend)
+    #   워커가 아직 안 떴거나 내려가 있으면 그 칸은 "" 로 둔다(부르는 쪽이 안내 글을 넣는다).
+    #
+    # -in: 없음
+    #
+    # -out: {"model": 짧은 모델 이름, "gen": 생성 백엔드, "rerank": 리랭킹 상태,
+    #        "embed_model": 임베딩 모델, "rerank_model": 리랭커 모델}
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def info(self):
+        with self._lock:
+            model = self.model
+            backend = self.backend
+        short = model.split("-Q4")[0].split(".gguf")[0] if model else ""
+        gen, rerank = split_backend(backend)
+        return {"model": short, "gen": gen, "rerank": rerank,
+                "embed_model": self.embed_model, "rerank_model": self.rerank_model}
+
     # ── 안에서 쓰는 것들 ──────────────────────────────
+
+    #--------------------------------------------------------------
+    # 리랭커 적재 결과를 백엔드 줄에 반영
+    #=> 시작 때 받은 "리랭킹 켬(백그라운드 적재 중)" 을 stderr 로 받은 결과로 바꾼다.
+    #   stdout(백엔드 줄)과 stderr(적재 결과)는 다른 스레드가 읽으므로 어느 쪽이 먼저 와도
+    #   맞게 되도록 결과를 _rerank_note 에 들고 있다가 양쪽에서 부른다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _apply_rerank_note(self):
+        with self._lock:
+            if self._rerank_note and RERANK_LOADING in self.backend:
+                self.backend = self.backend.replace(RERANK_LOADING, self._rerank_note)
 
     #--------------------------------------------------------------
     # 이벤트 전달
@@ -437,6 +544,9 @@ class RagWorker:
             self._stderr_tail = []
             self.backend = ""
             self.model = ""
+            self._rerank_note = None
+            self.embed_model = ""
+            self.rerank_model = ""
             self.ready_line = ""
             self.startup_lines = []
             self.features = set()
@@ -481,6 +591,8 @@ class RagWorker:
                 for ln in text.splitlines():
                     if ln.startswith("생성 "):
                         self.backend = ln.strip()
+                        # 리랭커 적재 끝 알림(stderr)이 이 줄보다 먼저 읽혔어도 놓치지 않게 반영한다
+                        self._apply_rerank_note()
                     elif ln.startswith("준비 완료"):
                         # 실제 줄: "준비 완료 (9.3초) — 498청크 / Qwen3-0.6B-Q4_K_M.gguf (빠름 모드)"
                         # 어느 모델이 올라갔는지는 여기서만 알 수 있다. 설정 파일을 뒤지지 않고도
@@ -489,6 +601,9 @@ class RagWorker:
                         m = MODEL_RE.search(ln)
                         self.model = m.group(1) if m else ""
                         self.ready_line = ln.strip()
+                    elif ln.startswith("모델:"):
+                        # "모델: 임베딩 e5-small-ko / 리랭커 bge-reranker-base-int8" — 설정 창이 보여 준다
+                        self.embed_model, self.rerank_model = split_models(ln)
                     elif ln.startswith("기능:"):
                         # "기능: ask-folder index-commands" — 옛 워커는 이 줄이 없다
                         self.features = set(ln.split(":", 1)[1].split())
@@ -574,6 +689,14 @@ class RagWorker:
                     if LOCK_HINT in line:
                         self._blocked = ("SimpleRAG chat/index 가 실행 중입니다 — "
                                          "끝낸 뒤 다시 질문하세요")
+                    # 백그라운드 리랭커 적재가 끝났다 — 시작 때 받은 "적재 중" 을 결과로 바꾼다
+                    # (트레이 글·설정 창이 이 값을 읽는다)
+                    if line.startswith(RERANK_DONE):
+                        self._rerank_note = "켬"
+                        self._apply_rerank_note()
+                    elif line.startswith(RERANK_FAIL):
+                        self._rerank_note = "적재 실패(리랭킹 없이 답함)"
+                        self._apply_rerank_note()
 
     #--------------------------------------------------------------
     # 대기 중인 질문 보내기

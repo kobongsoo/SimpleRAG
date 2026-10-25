@@ -103,8 +103,9 @@ def main(seconds):
         answer = t.txt_answer.get("1.0", "end").strip() if (t and t.txt_answer) else ""
         results.append(("마지막 마디에 답변이 들어왔다", len(answer) > 0))
         results.append(("입력 칸이 비워졌다", not panel.txt_input.get("1.0", "end").strip()))
-        results.append(("근거 파일 보기 단추가 열렸다",
-                        str(panel.btn_files.cget("state")) == "normal"))
+        # 예전 "근거 파일 보기" 단추는 출처 머리의 "탐색기에서 보기" 링크로 옮겼다
+        results.append(("출처(참조 원문)가 답 아래에 그려졌다",
+                        bool(t and t.src and t.src.winfo_children())))
         results.append(("패널이 전경 창을 뺏지 않았다", user32.GetForegroundWindow() != h))
 
         print("")

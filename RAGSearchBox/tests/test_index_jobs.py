@@ -139,6 +139,37 @@ class TestWithWorker(unittest.TestCase):
         self.assertEqual(jobs.waiting_new, {})
 
     #--------------------------------------------------------------
+    # 하위 폴더로 옮긴 문서(move)는 새 문서 한도에 세지 않고 바로 보낸다
+    #=> 폴더 정리로 많이 옮겨도 "새 문서 N건 — 지금 인덱싱" 으로 멈추지 않아야 한다.
+    #   워커가 경로만 바꾸고(moved) 키워드 색인은 다시 만들지 않는다.
+    #--------------------------------------------------------------
+    def test_move_not_held(self):
+        moves = [ROOT + r"\sub\m%d.pdf" % i for i in range(5)]
+        w = FakeWorker({"ok": True, "add": [], "modify": [], "move": moves, "remove": [],
+                        "delete_blocked": "", "bm25_stale": False})
+        w.doc_result = {"ok": True, "result": "moved", "chunks": 4, "from": ROOT + r"\m.pdf"}
+        jobs, notes = make(w, ask_above=3)
+        spin(jobs)
+        self.assertEqual(w.ops().count("/index-doc"), 5)
+        self.assertEqual(jobs.waiting_new, {})
+        self.assertNotIn("/bm25", w.ops())
+        self.assertFalse(any(k == "warn" for k, m in notes))
+
+    #--------------------------------------------------------------
+    # 붙여 넣은 복사본(copied)은 반영으로 세고 키워드 색인을 다시 만든다
+    #=> 워커가 원본 벡터를 베껴 새 점이 생겼으므로 BM25 에도 넣어야 한다.
+    #--------------------------------------------------------------
+    def test_copied_rebuilds_bm25(self):
+        w = FakeWorker({"ok": True, "add": [ROOT + r"\sub\a.pdf"], "modify": [], "remove": [],
+                        "delete_blocked": "", "bm25_stale": False})
+        w.doc_result = {"ok": True, "result": "copied", "chunks": 6, "from": ROOT + r"\a.pdf"}
+        jobs, notes = make(w, bm25_idle=0)
+        spin(jobs)
+        self.assertEqual(w.ops().count("/index-doc"), 1)
+        self.assertEqual(w.ops().count("/bm25"), 1)
+        self.assertTrue(any("복사" in m for k, m in notes if k == "doc"))
+
+    #--------------------------------------------------------------
     # 삭제가 멈췄으면 알리고, "지금 인덱싱" 이면 allow_delete 로 다시 대조
     #--------------------------------------------------------------
     def test_delete_blocked(self):
@@ -248,6 +279,24 @@ class TestOutside(unittest.TestCase):
         w.avail = "up"
         spin(jobs)
         self.assertEqual(w.ops().count("/index-outside"), 2)
+
+
+class TestHasWaiting(unittest.TestCase):
+    #--------------------------------------------------------------
+    # 트레이 "지금 인덱싱" 은 허락을 기다리는 일이 있을 때만 누를 수 있다
+    #=> 새 문서가 많거나 삭제가 많아 멈췄을 때만 True, 꺼져 있으면 False.
+    #--------------------------------------------------------------
+    def test_has_waiting(self):
+        jobs, _ = make(FakeWorker())
+        jobs.enabled = True
+        self.assertFalse(jobs.has_waiting())
+        jobs.waiting_new[ROOT] = 80
+        self.assertTrue(jobs.has_waiting())
+        jobs.waiting_new.clear()
+        jobs.waiting_delete["(지정 폴더 밖)"] = "46건"
+        self.assertTrue(jobs.has_waiting())
+        jobs.enabled = False                      # 꺼져 있으면 눌러도 돌지 않는다
+        self.assertFalse(jobs.has_waiting())
 
 
 class TestWorkerDown(unittest.TestCase):

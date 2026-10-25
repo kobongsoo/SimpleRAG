@@ -246,6 +246,68 @@ class TestFailures(WorkerTestBase):
             self.assertEqual(m.group(1), want, line)
 
     #--------------------------------------------------------------
+    # 설정 창용 값 — 백엔드 줄을 생성·리랭킹으로 나눈다
+    #=> "생성 iGPU(Vulkan) / 리랭킹 켬(백그라운드 적재 중)" → ("iGPU(Vulkan)", "켬(백그라운드 적재 중)")
+    #--------------------------------------------------------------
+    def test_split_backend(self):
+        cases = [
+            ("생성 iGPU(Vulkan) / 리랭킹 켬(백그라운드 적재 중)",
+             ("iGPU(Vulkan)", "켬(백그라운드 적재 중)")),
+            ("생성 CPU / 리랭킹 끔", ("CPU", "끔")),
+            ("", ("", "")),
+            ("생성 CPU", ("CPU", "")),          # 리랭킹 쪽이 없는 형식이어도 아는 만큼만
+        ]
+        for line, want in cases:
+            self.assertEqual(rag_worker.split_backend(line), want, line)
+
+    #--------------------------------------------------------------
+    # 리랭커 백그라운드 적재가 끝나면 "적재 중" 이 "켬" 으로 바뀐다
+    #=> 워커가 stderr 로 "리랭커 적재 완료" 를 내면 백엔드 줄·설정 창 값이 갱신돼야 한다.
+    #--------------------------------------------------------------
+    def test_rerank_deferred_done(self):
+        os.environ["FAKE_RERANK_DEFER"] = "0.5"
+        self.addCleanup(os.environ.pop, "FAKE_RERANK_DEFER", None)
+        w, col = self.make()
+        w.ensure_started()
+        self.assertTrue(wait_for(lambda: w.state == READY))
+        self.assertTrue(wait_for(lambda: w.info()["rerank"] == "켬", timeout=10), w.backend)
+        info = w.info()
+        self.assertEqual(info["model"], "Qwen3-0.6B")
+        self.assertEqual(info["gen"], "iGPU(Vulkan)")
+        # 시작 때 알린 임베딩·리랭커 모델 이름도 설정 창 값에 들어온다
+        self.assertEqual(info["embed_model"], "e5-small-ko")
+        self.assertEqual(info["rerank_model"], "bge-reranker-base-int8")
+        self.assertEqual(w.state_label(), "준비됨")
+        self.assertNotIn("적재 중", w.status_text())
+
+    #--------------------------------------------------------------
+    # 모델 줄을 임베딩·리랭커로 나눈다
+    #=> "모델: 임베딩 e5-small-ko / 리랭커 bge-reranker-base-int8"
+    #--------------------------------------------------------------
+    def test_split_models(self):
+        cases = [
+            ("모델: 임베딩 e5-small-ko / 리랭커 bge-reranker-base-int8",
+             ("e5-small-ko", "bge-reranker-base-int8")),
+            ("모델: 리랭커 rr / 임베딩 em", ("em", "rr")),      # 순서가 바뀌어도
+            ("모델: 임베딩 em", ("em", "")),
+            ("", ("", "")),
+        ]
+        for line, want in cases:
+            self.assertEqual(rag_worker.split_models(line), want, line)
+
+    #--------------------------------------------------------------
+    # 적재 결과가 백엔드 줄보다 먼저 와도 놓치지 않는다
+    #=> stdout·stderr 를 다른 스레드가 읽으므로 순서가 뒤바뀔 수 있다.
+    #--------------------------------------------------------------
+    def test_rerank_note_before_backend(self):
+        w = RagWorker(FAKE, lambda ev: None)
+        w._rerank_note = "적재 실패(리랭킹 없이 답함)"
+        w._apply_rerank_note()                      # 아직 백엔드 줄이 없다 — 아무 일 없음
+        w.backend = "생성 CPU / 리랭킹 " + rag_worker.RERANK_LOADING
+        w._apply_rerank_note()
+        self.assertEqual(w.info()["rerank"], "적재 실패(리랭킹 없이 답함)")
+
+    #--------------------------------------------------------------
     # 인덱스가 잠겨 있으면 자동 재시작하지 않는다 (설계서 §10)
     #=> chat 이나 index 가 이미 돌고 있으면 Qdrant 가 폴더를 내주지 않는다.
     #   계속 다시 띄워 봐야 같은 이유로 죽으므로, 사용자에게 알리고 멈춘다.

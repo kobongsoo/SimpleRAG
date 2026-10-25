@@ -283,8 +283,22 @@ def autoindex_roots(s):
 # -out: error = 없음
 #------------------------------------------------------------------
 def icon_path():
+    return asset_path("RAGSearchBox.ico")
+
+
+#------------------------------------------------------------------
+# 함께 묶은 그림 파일 찾기 (아이콘 · 패널 시작 화면의 모아이 마크)
+#=> exe 로 묶으면 PyInstaller 가 임시 폴더(sys._MEIPASS)에 풀어 놓으므로 거기를 먼저 보고,
+#   소스 실행이면 이 파일 옆을 본다.
+#
+# -in: name = 파일 이름(예: "moai.png")
+#
+# -out: 경로 또는 None(없으면 부르는 쪽이 그림 없이 그린다)
+# -out: error = 없음
+#------------------------------------------------------------------
+def asset_path(name):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    p = os.path.join(base, "RAGSearchBox.ico")
+    p = os.path.join(base, name)
     return p if os.path.isfile(p) else None
 
 
