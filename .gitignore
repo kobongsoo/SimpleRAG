@@ -30,9 +30,13 @@ exp10_chunkfix/
 
 # ── 사내 문서와 그 원문이 들어간 파일 (공개 금지) ────
 # sample: 실제 규정 문서 / dataset: 골든셋(원문 인용) / results: 측정 로그(청크 원문)
+# sample_pdf: 비교 평가용 PDF 30건 / report: 평가 보고서(질문·답변·원문 발췌)
 sample/
+sample_pdf/
+sample_pdf.zip
 dataset/
 results/
+report/
 
 # ── 기타 ─────────────────────────────────────────────
 __pycache__/
