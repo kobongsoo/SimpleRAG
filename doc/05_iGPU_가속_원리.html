@@ -153,7 +153,7 @@ footer.doc {
 <header class="doc">
   <div class="eyebrow">SimpleRAG 구현 해설 · 05</div>
   <h1>SimpleRAG 는 어떻게 iGPU 를 쓰는가</h1>
-  <p class="sub">내장 그래픽(Vulkan) 가속 구조와, 그 배경이 되는 prefill · KV 캐시 개념</p>
+  <p class="sub">내장 그래픽(Vulkan) 가속 구조와, 그 배경이 되는 prefill · KV 캐시 · iGPU 메모리 개념</p>
 </header>
 
 <div class="toc">
@@ -171,7 +171,9 @@ footer.doc {
     <li><a href="#s10">iGPU 와 리랭킹</a></li>
     <li><a href="#s11">prefill 이란</a></li>
     <li><a href="#s12">KV 캐시란</a></li>
-    <li><a href="#s13">확인 방법</a></li>
+    <li><a href="#s13">iGPU 메모리 구조</a></li>
+    <li><a href="#s14">KV 캐시·GPU 메모리 계산</a></li>
+    <li><a href="#s15">확인 방법</a></li>
   </ol>
 </div>
 
@@ -461,13 +463,20 @@ decode:   새 토큰 1개만 계산  → 캐시에 1칸씩 덧붙임</code></pre
 
 <h3>크기 감각 — n_ctx 를 크게 잡으면 손해인 이유</h3>
 <p>캐시 크기는 <code>n_ctx</code>(최대 문맥 길이)에 비례해 <strong>미리 통째로 잡아 둔다</strong>.
-<span class="src">config.py:293</span>:</p>
+<span class="src">config.py:304</span>:</p>
 
 <pre><code>GEN_N_CTX = 2048    # top-3 x 128토큰이면 충분. 크게 잡을수록 손해</code></pre>
 
-<p><code>n_ctx=32768</code> 로 잡으면 실제로 611토큰만 쓰더라도 <strong>32768토큰분의 메모리를 미리 예약</strong>해서
-수백 MB~GB 를 먹는다. iGPU 는 시스템 메모리를 공유하므로 더 아프다.
-RAG 는 검색된 근거 3건만 넣으니 2048 이면 충분하다.</p>
+<p>SimpleRAG 의 Qwen3 는 토큰 1개당 KV 캐시가 <strong>112 KiB</strong> 다. 그래서 <code>n_ctx=2048</code> 이면 <strong>224 MiB</strong>,
+<code>n_ctx=32768</code> 이면 실제로 611토큰만 쓰더라도 <strong>3.5 GiB 를 미리 예약</strong>한다.
+iGPU 는 시스템 메모리를 공유하므로 더 아프다. RAG 는 검색된 근거 3건만 넣으니 2048 이면 충분하다.
+계산 방법과 실측은 <a href="#s14">14장</a>에 따로 정리했다.</p>
+
+<div class="callout warn">
+  <span class="tag">헷갈리기 쉬운 점</span>
+  <p><code>n_ctx</code> 를 키우는 비용은 <strong>메모리</strong>다. 첫 글자 속도(TTFT)를 늘리는 것은 <code>n_ctx</code> 값이 아니라
+  <strong>실제로 넣은 프롬프트 토큰 수</strong>다 — <code>n_ctx</code> 를 4096 으로 올려도 프롬프트가 600토큰이면 prefill 은 거의 그대로다.</p>
+</div>
 
 <h3>SimpleRAG 코드에 KV 캐시가 등장하는 세 곳</h3>
 
@@ -509,7 +518,257 @@ iGPU <code>False</code>(속도 차 0, 정답률 근소 우위).</p>
   미리 채워 첫 질문을 빠르게 만든다.</p>
 </div>
 
-<h2 id="s13"><span class="num">13</span>직접 확인하는 법</h2>
+<h2 id="s13"><span class="num">13</span>배경 개념 ③ — iGPU 메모리는 몇 GB 인가</h2>
+
+<h3>iGPU 는 "자기 메모리"가 없다</h3>
+
+<p>외장 GPU(dGPU)는 보드에 VRAM 칩이 따로 붙어 있다.
+<strong>iGPU 는 CPU 안에 들어 있어서 메모리 칩이 없다.</strong> 그래서 시스템 RAM 을 빌려 쓴다.</p>
+
+<pre><code>[ dGPU ]  CPU ─ RAM(16GB)        GPU ─ VRAM(8GB)     ← 완전히 별개
+[ iGPU ]  CPU ─ RAM(16GB) ─ GPU                      ← 같은 RAM 을 나눠 씀
+              └─ 여기서 일부를 GPU 몫으로 떼어 감</code></pre>
+
+<h3>전용 메모리 vs 공유 메모리</h3>
+
+<table>
+  <tr><th>항목</th><th>뜻</th><th>일반적 크기</th></tr>
+  <tr><td><strong>전용 GPU 메모리</strong><br><span class="src">Dedicated</span></td>
+      <td>BIOS 가 부팅 때 <strong>미리 떼어 고정 예약</strong>한 몫<br>(Intel DVMT Pre-Allocated / AMD UMA Frame Buffer)</td>
+      <td>128MB ~ 1GB<br>(의외로 작다)</td></tr>
+  <tr><td><strong>공유 GPU 메모리</strong><br><span class="src">Shared</span></td>
+      <td>모자랄 때 OS 가 <strong>실시간으로 빌려주는</strong> 상한</td>
+      <td>시스템 RAM 의 약 50%</td></tr>
+  <tr><td><strong>총 그래픽 메모리</strong><br><span class="src">Display Memory</span></td>
+      <td>전용 + 공유 = <strong>실제로 쓸 수 있는 상한</strong></td>
+      <td>RAM 의 약 50% + α</td></tr>
+</table>
+
+<div class="callout warn">
+  <span class="tag">헷갈리기 쉬운 점</span>
+  <p><strong>전용 메모리가 128MB 라고 해서 iGPU 가 128MB 만 쓰는 게 아니다.</strong>
+  DVMT(동적 비디오 메모리 기술)가 부족분을 실시간으로 시스템 RAM 에서 끌어온다.
+  전용 메모리는 화면 출력용 최소 버퍼일 뿐이고, <strong>LLM 을 올릴 때 봐야 할 숫자는
+  <code>Display Memory</code></strong> 다.</p>
+</div>
+
+<h3>개발 노트북 실측</h3>
+
+<pre><code>시스템 RAM      : 15.7 GB
+GPU             : Intel(R) Iris(R) Xe Graphics
+
+Display Memory  : 8161 MB    ← 총합 (RAM 의 약 절반)
+Dedicated Memory:  128 MB    ← 실제 고정 예약분
+Shared Memory   : 8033 MB    ← RAM 에서 빌려 쓰는 몫</code></pre>
+
+<p>전용이 0.1GB 라 <strong>작업 관리자에서는 <code>0.0 GB</code> 로 반올림되거나 줄 자체가 생략</strong>된다.
+고장이 아니라 원래 그렇게 작다.</p>
+
+<h3>칩별 대략치</h3>
+
+<table>
+  <tr><th>종류</th><th>전용(고정)</th><th>공유 상한</th><th>비고</th></tr>
+  <tr><td>Intel UHD / Iris Xe</td><td>128MB ~ 1GB</td><td>RAM 의 50%</td><td>대부분의 사무용 노트북</td></tr>
+  <tr><td>Intel Arc iGPU (Meteor Lake~)</td><td>동적</td><td>RAM 의 50%</td><td></td></tr>
+  <tr><td>AMD Ryzen APU</td><td>BIOS 에서 512MB~16GB 선택</td><td>+ GTT 동적 추가</td><td><strong>사용자가 조절 가능</strong></td></tr>
+  <tr><td>휴대용 게임기 (Steam Deck 등)</td><td>1 ~ 8GB 설정</td><td></td><td>설정 메뉴에서 직접 조절</td></tr>
+  <tr><td>Apple Silicon (M 시리즈)</td><td colspan="2">통합 메모리 — RAM 전체</td><td>구분 자체가 없음</td></tr>
+</table>
+
+<h3>전용 메모리 확인 방법</h3>
+
+<h4>① dxdiag — 가장 정확 ⭐</h4>
+<p><code>Win + R</code> → <code>dxdiag</code> → <strong>디스플레이</strong> 탭. 명령으로 바로 뽑으려면:</p>
+<pre><code>dxdiag /t "%TEMP%\dxd.txt"
+findstr /C:"Dedicated Memory" /C:"Shared Memory" /C:"Card name" "%TEMP%\dxd.txt"</code></pre>
+
+<h4>② 어댑터 속성 — 클릭으로 가는 길</h4>
+<p>설정 → 시스템 → 디스플레이 → <strong>고급 디스플레이</strong> → <strong>어댑터 속성 표시</strong> → "전용 비디오 메모리"</p>
+
+<h4>③ 레지스트리 — 드라이버 신고값 (참고용)</h4>
+<pre><code>HKLM\SYSTEM\CurrentControlSet\Control\Class\
+     {4d36e968-e325-11ce-bfc1-08002be10318}\0000
+       → HardwareInformation.MemorySize</code></pre>
+<div class="callout">
+  <span class="tag">주의</span>
+  <p>이 노트북에서 레지스트리는 <code>1024 MB</code>, dxdiag 는 <code>128 MB</code> 로 <strong>서로 다르게 나온다</strong>.
+  레지스트리 값은 드라이버가 앱에 "나 이만큼 있다"고 알리는 광고용 숫자이고,
+  물리적 예약분이 아니다. <strong>판단은 dxdiag 쪽을 믿는다.</strong></p>
+</div>
+
+<h4>④ BIOS/UEFI — 값을 바꾸려면 여기</h4>
+<p>전용 메모리 크기는 BIOS 에서 정해지므로 <strong>Windows 에서는 못 바꾼다.</strong></p>
+<table>
+  <tr><th>제조사</th><th>메뉴 이름</th></tr>
+  <tr><td>Intel</td><td><code>DVMT Pre-Allocated</code> (32M / 64M / 128M / 256M / 512M / 1G …)</td></tr>
+  <tr><td>AMD</td><td><code>UMA Frame Buffer Size</code> 또는 VRAM 할당 (512M ~ 16G)</td></tr>
+</table>
+<p>단, 완제품 노트북은 이 메뉴 자체를 막아 둔 경우가 많다.</p>
+
+<h3>SimpleRAG 에 적용하면</h3>
+
+<p><code>n_gpu_layers=-1</code> 로 모델 전체를 iGPU 에 올려도, 실제로는 <strong>같은 RAM 안에서 자리만 옮기는 셈</strong>이다.
+필요한 양은:</p>
+
+<table>
+  <tr><th>항목</th><th>빠름 모드 (0.6B)</th><th>정밀 모드 (1.7B)</th></tr>
+  <tr><td>모델 가중치 (Q4_K_M)</td><td>379 MB</td><td>1.1 GB</td></tr>
+  <tr><td>KV 캐시 (<code>n_ctx=2048</code>, 실측)</td><td>224 MiB</td><td>224 MiB</td></tr>
+  <tr><td><strong>합계</strong></td><td class="hl-good"><strong>약 0.6 GB</strong></td><td class="hl-good"><strong>약 1.3 GB</strong></td></tr>
+  <tr><td>전용 128MB 만으로 되나?</td><td>❌</td><td>❌</td></tr>
+  <tr><td>Display Memory 8.1GB 로 되나?</td><td>✅ 여유</td><td>✅ 여유</td></tr>
+</table>
+
+<p>애초에 SimpleRAG 가 <strong>Q4_K_M 양자화된 소형 모델</strong>을 고른 이유이기도 하다 —
+사무용 노트북 iGPU 에 무리 없이 올라가야 하니까.
+<code>GEN_N_CTX = 2048</code> 로 작게 잡은 것도 같은 맥락이다.
+<code>n_ctx</code> 를 32768 로 키우면 KV 캐시가 GB 단위로 불어나고,
+<strong>iGPU 에서는 그게 곧 시스템 RAM 을 먹는 것</strong>이라 브라우저·문서 작업이 같이 느려진다
+(→ <a href="#s12">12장</a>).</p>
+
+<div class="callout warn">
+  <span class="tag">숨은 제약</span>
+  <p>Vulkan 드라이버는 "한 번에 할당 가능한 최대 크기(<code>maxMemoryAllocationSize</code>)"를 따로 두는데,
+  Intel iGPU 는 흔히 2~4GB 다. 공유 메모리가 8GB 있어도
+  <strong>7B 급 모델(4GB+)을 통째로 올리려다 할당에 실패</strong>하는 경우가 이래서 생긴다.
+  SimpleRAG 규모(최대 1.1GB)에서는 걸릴 일이 없다.</p>
+</div>
+
+<h2 id="s14"><span class="num">14</span>배경 개념 ④ — KV 캐시와 GPU 메모리 계산하기</h2>
+
+<p>"이 모델을 이 조건으로 돌리려면 GPU 메모리가 얼마나 필요한가"는 세 덩어리를 더하면 나온다.</p>
+
+<pre><code>필요한 GPU 메모리 = ① 모델 가중치 + ② KV 캐시 + ③ 부가 메모리(연산 버퍼·런타임)</code></pre>
+
+<h3>먼저 용어 두 개</h3>
+<table>
+  <tr><th>용어</th><th>뜻</th><th>흔한 오해</th></tr>
+  <tr><td><strong>문맥 길이</strong></td><td>입력 프롬프트 <strong>+ 생성되는 답변</strong> 토큰 수</td><td>입력만 센다 — 답변도 한 토큰씩 만들어질 때마다 KV 캐시에 쌓인다</td></tr>
+  <tr><td><strong>동시 요청 수</strong></td><td><strong>같은 순간에 처리 중인</strong> 요청 수</td><td>접속자 수 — 답을 읽는 동안엔 요청이 없으니 실제 동시 요청은 보통 더 적다. 설계는 최악(전원 동시 질문)으로 잡는다</td></tr>
+</table>
+
+<h3>① 모델 가중치</h3>
+<pre><code>가중치 ≈ 파라미터 수 × 자료형 비트 ÷ 8
+
+fp16 / bf16     : 16비트  → 파라미터 1B 당 2 GB
+fp8             :  8비트  → 1B 당 1 GB
+Q4_K_M · AWQ 4비트 : 실효 약 4.8비트 → 1B 당 약 0.6 GB  (스케일·임베딩 등 부가정보 포함)</code></pre>
+<p>실제로는 <strong>모델 파일 크기</strong>가 곧 가중치 크기라 그걸 보는 게 가장 정확하다
+(예: <code>Qwen3-1.7B-Q4_K_M.gguf</code> 1.1 GB).</p>
+
+<h3>② KV 캐시 — 공식</h3>
+<pre><code>토큰 1개당 KV = 2(K와 V) × 층 수 × KV 헤드 수 × 헤드 차원 × 자료형 바이트(f16 = 2)
+
+전체 KV       = 토큰 1개당 KV × 문맥 길이 × 동시 요청 수</code></pre>
+
+<p>필요한 값 세 개는 모델의 <code>config.json</code> 에 있다.</p>
+<table>
+  <tr><th>공식의 항목</th><th><code>config.json</code> 키</th><th>llama.cpp 로그(<code>verbose=True</code>)</th></tr>
+  <tr><td>층 수</td><td><code>num_hidden_layers</code></td><td><code>n_layer</code></td></tr>
+  <tr><td>KV 헤드 수</td><td><code>num_key_value_heads</code></td><td><code>n_head_kv</code></td></tr>
+  <tr><td>헤드 차원</td><td><code>head_dim</code> (없으면 <code>hidden_size ÷ num_attention_heads</code>)</td><td><code>n_embd_head_k</code></td></tr>
+</table>
+
+<div class="callout">
+  <span class="tag">핵심</span>
+  <p>KV 캐시는 <strong>파라미터 수(0.6B·1.7B)가 아니라 구조(층·KV 헤드·헤드 차원)</strong>로 정해진다.
+  그래서 "가중치의 몇 %" 같은 고정 비율이 없다. 최근 모델이 쓰는 GQA(KV 헤드를 쿼리 헤드보다 적게 — Qwen3 는 쿼리 16 · KV 8)나
+  MLA(DeepSeek)는 바로 이 토큰당 크기를 줄이려는 설계다.</p>
+</div>
+
+<h3>예시 1 — SimpleRAG 실측 (Qwen3-0.6B / 1.7B, llama.cpp)</h3>
+<pre><code>Qwen3-0.6B · 1.7B 모두: 층 28 · KV 헤드 8 · 헤드 차원 128
+토큰당 = 2 × 28 × 8 × 128 × 2바이트 = 114,688바이트 = 112 KiB
+× 2048토큰 = 224 MiB
+× 4096토큰 = 448 MiB</code></pre>
+
+<p>두 모델을 실제로 적재해 llama.cpp 가 출력한 값과 정확히 일치한다(CPU 경로):</p>
+<pre><code>llama_kv_cache: size = 224.00 MiB (2048 cells, 28 layers, 1/1 seqs), K (f16): 112.00 MiB, V (f16): 112.00 MiB</code></pre>
+
+<table>
+  <tr><th>모델</th><th>가중치 (적재 실측)</th><th>KV, n_ctx=2048</th><th>KV, n_ctx=4096</th><th>가중치 대비 KV (2048)</th></tr>
+  <tr><td>Qwen3-0.6B Q4_K_M</td><td>205 MiB</td><td>224 MiB</td><td>448 MiB</td><td class="hl-bad">약 110%</td></tr>
+  <tr><td>Qwen3-1.7B Q4_K_M</td><td>646 MiB</td><td>224 MiB</td><td>448 MiB</td><td>약 35%</td></tr>
+</table>
+<p>1.7B 가 더 큰 것은 층 안쪽의 은닉 크기·FFN 폭 때문이고, 이것은 KV 캐시와 무관하다. 그래서 두 모델의 KV 캐시가 같다.
+빠름 모드(0.6B)에서는 <strong>KV 캐시가 가중치보다 크다</strong> — 가중치는 4비트로 줄였지만 KV 캐시는 여전히 16비트이기 때문이다.
+<code>GEN_N_CTX</code> 를 작게 잡은 이유가 여기서 가장 분명하게 드러난다.</p>
+
+<h3>"가중치의 몇 %" 는 경우마다 다르다</h3>
+<table>
+  <tr><th>모델 / 조건</th><th>가중치</th><th>KV 캐시</th><th>가중치 대비</th></tr>
+  <tr><td>Qwen3-0.6B Q4, 문맥 2048, 1요청 (실측)</td><td>205 MiB</td><td>224 MiB</td><td>약 110%</td></tr>
+  <tr><td>Qwen3-1.7B Q4, 문맥 2048, 1요청 (실측)</td><td>646 MiB</td><td>224 MiB</td><td>약 35%</td></tr>
+  <tr><td>Llama-3-8B fp16, 문맥 8K, 1요청 (계산 · 토큰당 128 KiB)</td><td>약 16 GB</td><td>1 GiB</td><td>약 6%</td></tr>
+  <tr><td>Llama-3-8B fp16, 문맥 8K, 동시 32요청 (계산)</td><td>약 16 GB</td><td>32 GiB</td><td>약 200%</td></tr>
+</table>
+<p>KV 비중이 커지는 조건은 세 가지다 — <strong>작은 모델을 양자화했을 때</strong>, <strong>문맥이 길 때</strong>, <strong>동시 요청이 많을 때</strong>.</p>
+
+<h3>③ 부가 메모리</h3>
+<p>연산 중간 결과를 담는 버퍼, CUDA 컨텍스트, vLLM 의 CUDA Graph 등이다. 서버용 vLLM 은 경험상 <strong>1~3 GB</strong>
+(아래 예시에서는 2 GB 로 잡는다). llama.cpp 소형 모델은 수십~수백 MB 수준이다.</p>
+
+<h3>llama.cpp 와 vLLM 은 KV 캐시를 잡는 방식이 다르다</h3>
+<table>
+  <tr><th></th><th>llama.cpp (SimpleRAG)</th><th>vLLM (GPU 서버)</th></tr>
+  <tr><td>크기 결정</td><td><code>n_ctx</code> × 토큰당 크기 — 사용자가 정함</td><td>(GPU × <code>gpu_memory_utilization</code>) − 가중치 − 부가 = <strong>남는 전부</strong></td></tr>
+  <tr><td>할당 방식</td><td>시작할 때 통째로 예약</td><td>PagedAttention — 16토큰 블록을 필요할 때 나눠 줌</td></tr>
+  <tr><td>목적</td><td>요청 1개를 적은 메모리로</td><td>많은 요청을 동시에(처리량)</td></tr>
+  <tr><td>꽉 차면</td><td>프롬프트가 <code>n_ctx</code> 를 넘으면 오류 → SimpleRAG 는 <code>_fit_prompt</code> 로 근거를 깎아 막는다</td><td>새 요청은 대기, 진행 중 요청 일부를 선점(preemption)했다가 나중에 다시 계산</td></tr>
+  <tr><td>조절 손잡이</td><td><code>n_ctx</code></td><td><code>gpu_memory_utilization</code>(기본 0.9) · <code>max_model_len</code> · <code>kv_cache_dtype=fp8</code>(절반) · prefix caching</td></tr>
+</table>
+<p>vLLM 의 <code>max_model_len</code> 은 KV 캐시 전체 크기가 아니라 <strong>요청 하나의 최대 길이</strong>다.
+시작할 때 "이 길이 요청 하나라도 들어가는가"만 검사하고, 안 들어가면 값을 줄이라는 오류를 낸다.</p>
+
+<h3>예시 2 — GPU 서버 산정 (Qwen3-32B 4비트, vLLM)</h3>
+<p>조건: 입력 프롬프트 <strong>2,000토큰</strong> + 답변 <strong>500토큰</strong>(가정) = 요청당 2,500토큰, 동시 요청 <strong>5개</strong>.</p>
+
+<pre><code>① 가중치   32.8B × 4.8비트 ÷ 8                          ≈ 20 GB
+
+② KV 캐시  config.json: 층 64 · KV 헤드 8 · 헤드 차원 128
+           토큰당   = 2 × 64 × 8 × 128 × 2바이트 = 256 KiB   (SimpleRAG Qwen3 의 2.3배 — 층이 28 → 64)
+           요청 1개 = 2,500 × 256 KiB                        ≈ 0.61 GiB
+           5개 동시 = 12,500 × 256 KiB                       ≈ 3.1 GiB
+
+③ 부가                                                      ≈ 2 GB
+─────────────────────────────────────────────────────────
+합계       20 + 3.1 + 2                                      ≈ 25 GB
+vLLM 은 기본으로 GPU 의 90% 만 쓴다 → 25 ÷ 0.9              ≈ 28 GB 이상 필요</code></pre>
+
+<table>
+  <tr><th>GPU</th><th>쓸 수 있는 양</th><th>가중치+부가(22 GB) 뺀 KV 자리</th><th>들어가는 토큰</th><th>2,500토큰 요청 동시 처리</th></tr>
+  <tr><td>24 GB, 사용률 0.90</td><td>21.6 GB</td><td>없음</td><td>—</td><td class="hl-bad">❌ 적재 불가</td></tr>
+  <tr><td>24 GB, 사용률 0.95 + KV fp8</td><td>22.8 GB</td><td>약 0.8 GB</td><td>약 6,500</td><td class="hl-bad">❌ 약 2.6개</td></tr>
+  <tr><td>32 GB, 사용률 0.90</td><td>28.8 GB</td><td>약 6.8 GB</td><td>약 27,800</td><td class="hl-good">✅ 약 11개</td></tr>
+  <tr><td>48 GB, 사용률 0.90</td><td>43.2 GB</td><td>약 21 GB</td><td>약 86,800</td><td class="hl-good">✅ 약 34개</td></tr>
+</table>
+<p>→ 이 조건이면 <strong>최소 32 GB GPU</strong>가 안전하다. (KV fp8 은 토큰당 128 KiB 로 계산)</p>
+
+<div class="callout warn">
+  <span class="tag">주의</span>
+  <p><strong>Qwen3 의 thinking 모드</strong>는 답변 전에 <code>&lt;think&gt;</code> 추론을 수천 토큰 만들 수 있다. 그러면 요청당 2,500 이 아니라
+  5,000~10,000토큰이 되어 KV 캐시가 2~4배 필요하다. RAG 용도면 thinking 을 끄거나 그만큼 잡아야 한다.
+  또 같은 27~32B 급이라도 구조가 다르면(KV 헤드 수·층 수, 선형 어텐션 혼합 여부) 토큰당 크기가 몇 배 달라지므로,
+  모델이 정해지면 반드시 그 모델의 <code>config.json</code> 으로 다시 계산한다.</p>
+</div>
+
+<h3>계산이 맞는지 확인하는 법</h3>
+<ul>
+  <li><strong>llama.cpp</strong> — <code>Llama(model_path=..., n_ctx=2048, verbose=True)</code> 로 적재하면
+    <code>llama_kv_cache: size = … MiB</code> 줄이 찍힌다. 예시 1 의 실측이 이 방법이다.</li>
+  <li><strong>vLLM</strong> — 시작 로그의 두 줄을 본다.
+    <pre><code>GPU KV cache size: 27,800 tokens
+Maximum concurrency for 2,500 tokens per request: 11.1x</code></pre>
+    첫 줄이 <code>요청당 토큰 × 동시 요청 수</code>(예시 2 는 12,500) 이상이면 조건을 만족한다.</li>
+</ul>
+
+<div class="callout good">
+  <span class="tag">한 줄 정리</span>
+  <p><strong>GPU 메모리 = 가중치(파일 크기) + 토큰당 KV × (입력+답변) × 동시 요청 + 부가 1~3 GB</strong>, vLLM 이면 이것을 0.9 로 나눈다.
+  "가중치의 몇 %"로 어림하지 말고, 동시 요청 수와 문맥 길이로 직접 곱한다.</p>
+</div>
+
+<h2 id="s15"><span class="num">15</span>직접 확인하는 법</h2>
 
 <p>현재 이 PC 가 무엇으로 답을 만드는지, 왜 그렇게 골랐는지 보여 준다.
 인덱스를 열지 않으므로 다른 명령과 겹쳐 실행해도 된다.</p>
@@ -544,9 +803,9 @@ iGPU <code>False</code>(속도 차 0, 정답률 근소 우위).</p>
 </table>
 
 <footer class="doc">
-  SimpleRAG 구현 해설 05 — iGPU 가속 원리 · prefill · KV 캐시<br>
+  SimpleRAG 구현 해설 05 — iGPU 가속 원리 · prefill · KV 캐시 · iGPU 메모리 · GPU 메모리 산정<br>
   본문의 실측 수치는 개발 노트북(Intel Iris Xe, 8스레드, Qwen3-0.6B-Q4_K_M) 기준이며
-  <code>gen_backend.json</code> 과 REPORT §31·§32 에 근거한다.
+  <code>gen_backend.json</code>, dxdiag 실측, REPORT §31·§32 에 근거한다.
 </footer>
 
 </div>

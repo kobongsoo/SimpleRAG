@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>simplerag.exe 질의응답 테스트</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+.gap { color: var(--bad); font-weight: 600; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.prio { font-family: var(--mono); font-weight: 600; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+
+
+pre.cmd { background: var(--ink); color: var(--ground); }
+pre.cmd .c { color: var(--muted); }
+.steps { counter-reset: st; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: st; position: relative; padding-left: 40px; margin: 14px 0; }
+.steps > li::before { content: counter(st); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+td code { white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · 사용 가이드 · 2026-10-23</div>
+  <h1>simplerag.exe 로 cmd 에서 질문·답변 테스트하기</h1>
+  <p class="lede">트레이 앱(RAGSearchBox.exe) 없이, 명령 프롬프트(cmd)에서 <code>simplerag.exe</code> 를 직접 실행해 질문을 던지고
+  근거·답변·소요 시간을 확인하는 방법이다. 아래 출력 예시는 이 PC 의 <code>dist\simplerag</code> 배포본으로 실제 실행한 결과다.</p>
+  <div class="meta">대상: dist\simplerag\simplerag.exe (2026-10-22 빌드) · 인덱스 76문서 / 8,749청크 · Qwen3-1.7B · iGPU(Vulkan) · 리랭커 있음</div>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">빠른 시작 (3줄)</a></li>
+  <li><a href="#s2">준비 — 폴더와 주의점</a></li>
+  <li><a href="#s3">상태 확인 — status</a></li>
+  <li><a href="#s4">1회 질문 — ask</a></li>
+  <li><a href="#s5">대화형 — chat</a></li>
+  <li><a href="#s6">검색만 — search</a></li>
+  <li><a href="#s7">옵션 정리</a></li>
+  <li><a href="#s8">문서 넣기 — index · extract</a></li>
+  <li><a href="#s9">문제 해결</a></li>
+  <li><a href="#s10">테스트 체크리스트</a></li>
+</ol></nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>빠른 시작</h2>
+<pre class="cmd">cd /d D:\Project\SimpleRAG\dist\simplerag
+simplerag.exe status
+simplerag.exe ask "본인 결혼 시 경조금은 얼마인가요?"</pre>
+  <p>여러 질문을 연달아 해 보려면 <code>simplerag.exe chat</code> — 모델을 한 번만 올려서 두 번째 질문부터 빠르다.</p>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>준비 — 폴더와 주의점</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td>실행 위치</td><td><code>simplerag.exe</code> 가 있는 폴더에서 실행한다. exe 는 <b>자기 폴더</b>를 데이터 폴더로 쓴다 —
+        <code>qdrant_data</code>(벡터 인덱스) · <code>bm25_index.npz</code> · <code>index_state.json</code> · <code>config.yaml</code> · <code>models</code></td></tr>
+      <tr><td>RAGSearchBox</td><td>트레이 앱이 <b>같은 인덱스 폴더</b>를 쓴다. 테스트 중 인덱스가 바뀌거나 파일이 잠기는 일을 피하려면
+        트레이 메뉴 <b>종료</b>로 끄고 테스트하는 것을 권한다.</td></tr>
+      <tr><td>인덱스</td><td>질문 전에 인덱스가 있어야 한다. <code>status</code> 의 "문서 N건" 이 0 이면 먼저 <a href="#s8">index</a>.</td></tr>
+      <tr><td>도움말</td><td><code>simplerag.exe --help</code>, 명령별로 <code>simplerag.exe ask --help</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>상태 확인 — status</h2>
+  <p>질문 전에 지금 어떤 인덱스·모델·백엔드로 동작하는지 본다. 모델을 올리지 않아 바로 끝난다.</p>
+<pre class="cmd">simplerag.exe status</pre>
+<pre>인덱스   : 8,749청크 / 39.2MB
+문서     : 76건
+BM25캐시 : 있음
+설정파일 : D:\Project\SimpleRAG\dist\simplerag\config.yaml
+청킹     : 128토큰 / 겹침 16 / structured / 머리글 상한 64
+추출엔진 : blocks (인덱스: blocks)
+검색     : dense 10 + BM25 10 → RRF(k=60) → 리랭커 입력 10 → sLLM 근거 3건
+생성모델 : Qwen3-1.7B-Q4_K_M.gguf (정밀 모드)   ← 다른 모델: ask --model qwen3-0.6b-q4 | midm-2.0-mini-q4
+생성백엔드: iGPU(Vulkan) — iGPU prefill 293 t/s = CPU 60 t/s 의 4.8배
+리랭커   : 있음</pre>
+  <p><code>simplerag.exe status -v</code> 는 문서 목록까지 자세히 보여 준다.</p>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>1회 질문 — ask</h2>
+  <p>질문 하나를 던지고 끝낸다. 실행할 때마다 모델을 새로 올리므로 전체 시간은 15초 안팎이다(이 PC 실측 15.7초).</p>
+<pre class="cmd">simplerag.exe ask "본인 결혼 시 경조금은 얼마인가요?"</pre>
+<pre>── 근거 3건 (591ms) ─────────────────────
+  [1] 37_김영란법_상담사례집-상의-160900[1].pdf
+      [37_김영란법_상담사례집-상의-160900[1]] 직무수행이나 사교의 목적’으로 보기 어려운 만큼, …
+  [2] 03.경조사지원규정_12.01.01.doc
+      [03.경조사지원규정_12.01.01 > 2. 경조사 지원기준] … | 경 사 | 본인 결혼 | 5 | 500,000 | 화환 지급 | …
+  [3] 03.경조사지원규정_12.01.01.pdf
+      [03.경조사지원규정_12.01.01 > 2. 경조사 지원기준] …
+
+── 답변 (AI 요약 — 위 근거로 확인하세요) ──
+본인 결혼 시 경조금은 500,000 원입니다. [1]
+
+── 소요 ─────────────────────────────────
+  검색 591ms (임베딩 23 + dense 25 + BM25 3 + 리랭킹 540)
+  첫 글자 6.35s / 완료 7.46s
+  답변모델 qwen3-1.7b-q4 (정밀) · parent section(상한 400토큰)
+  인용 근거: [1]</pre>
+  <h3>출력 읽는 법</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>블록</th><th>보는 것</th></tr></thead>
+    <tbody>
+      <tr><td>근거 N건</td><td>LLM 에 넘긴 검색 결과. 정답이 들어 있는 문서가 있는지 먼저 본다(위 예: [2]·[3] 에 500,000).</td></tr>
+      <tr><td>답변</td><td>근거를 요약한 AI 답. 끝의 <code>[번호]</code> 는 인용한 근거 번호다.
+        <b>번호가 틀릴 수 있다</b> — 위 예에서 답은 맞지만 [1](김영란법)을 인용했다. 사실 확인은 근거 본문으로 한다.</td></tr>
+      <tr><td>소요</td><td>검색 시간과 단계별 분해, <b>첫 글자</b>(TTFT)·<b>완료</b> 시간, 쓴 모델. ask 는 모델 적재가 끝난 뒤부터 잰 값이다.</td></tr>
+    </tbody>
+  </table></div>
+  <p>질문을 생략하면(<code>simplerag.exe ask</code>) 대화형으로 들어간다 — chat 과 같다.</p>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>대화형 — chat</h2>
+  <p>모델을 한 번 올려 두고 질문을 계속 받는다. 준비는 약 5초(이 PC 실측 4.9초), 그 뒤 질문마다 근거→답변만 걸린다.
+  리랭커는 준비 완료 뒤 백그라운드로 올라온다.</p>
+<pre class="cmd">simplerag.exe chat</pre>
+<pre>모델 적재 중...
+준비 완료 (4.9초) — 8,749청크 / Qwen3-1.7B-Q4_K_M.gguf (정밀 모드)
+생성 iGPU(Vulkan) / 리랭킹 켬(백그라운드 적재 중)
+기능: ask-folder index-commands
+질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help
+
+질문&gt; </pre>
+  <h3>대화 중 명령</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>명령</th><th>하는 일</th></tr></thead>
+    <tbody>
+      <tr><td><code>/help</code></td><td>명령 목록</td></tr>
+      <tr><td><code>/topk N</code></td><td>근거 개수 변경 (기본 3)</td></tr>
+      <tr><td><code>/status</code></td><td>인덱스 청크 수·용량</td></tr>
+      <tr><td><code>/folder &lt;폴더&gt;</code></td><td>이후 질문은 그 폴더(하위 포함) 문서에서만 찾는다. 경로 없이 <code>/folder</code> 만 치면 해제</td></tr>
+      <tr><td><code>/index-doc &lt;경로&gt;</code></td><td>문서 한 건을 인덱스에 반영(추가·수정)</td></tr>
+      <tr><td><code>/remove-doc &lt;경로&gt;</code></td><td>지운 문서를 인덱스에서 뺀다</td></tr>
+      <tr><td><code>/bm25</code></td><td>키워드 색인 다시 만들기</td></tr>
+      <tr><td><code>/index-plan &lt;폴더&gt;</code></td><td>폴더와 인덱스 비교(바꾸지 않음)</td></tr>
+      <tr><td><code>exit</code> · Ctrl+D</td><td>종료</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">질문 여러 개를 파일로 준비해 한 번에 넣을 수도 있다:
+  <code>type questions.txt | simplerag.exe chat --no-stream &gt; result.txt</code> — 한 줄에 질문 하나, 마지막 줄에 <code>exit</code>.</div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>검색만 — search</h2>
+  <p>LLM 을 올리지 않고 <b>검색 결과만</b> 본다. "답이 틀렸을 때 검색이 문제인지 생성이 문제인지" 가를 때 쓴다.</p>
+<pre class="cmd">simplerag.exe search "본인 결혼 경조금" --top-k 3 --chars 120</pre>
+<pre>질의: 본인 결혼 경조금
+검색 532ms (임베딩 8 + dense 17 + BM25 1 + 융합 0 + 리랭킹 505)
+
+[1] 03.경조사지원규정_12.01.01.doc  (폴더: sample)
+    [03.경조사지원규정_12.01.01 > 2. 경조사 지원기준] … | 경 사 | 본인 결혼 | 5 | 500,000 | 화환 지급 |…
+[2] 03.경조사지원규정_12.01.01.pdf  (폴더: sample_pdf)
+    …
+[3] 37_청탁금지법_해설집(최종)[1].pdf  (폴더: sample)
+    …</pre>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>옵션 정리 (ask · chat)</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>옵션</th><th>뜻</th><th>예</th></tr></thead>
+    <tbody>
+      <tr><td><code>--folder &lt;폴더&gt;</code></td><td>(ask·search) 그 폴더(하위 포함) 문서만 근거로 쓴다</td><td><code>ask "출장 일비는?" --folder "D:\Project\SimpleRAG\sample"</code></td></tr>
+      <tr><td><code>--model &lt;이름&gt;</code></td><td>생성 모델 직접 지정: <code>qwen3-0.6b-q4</code> · <code>qwen3-1.7b-q4</code> · <code>midm-2.0-mini-q4</code></td><td><code>ask "…" --model qwen3-0.6b-q4</code></td></tr>
+      <tr><td><code>--precise</code></td><td>정밀 모드(1.7B). 기본 모델은 <code>config.yaml</code> 의 설정을 따른다(지금 배포본은 1.7B)</td><td><code>chat --precise</code></td></tr>
+      <tr><td><code>--top-k N</code></td><td>LLM 에 넘길 근거 개수 (기본 3)</td><td><code>ask "…" --top-k 5</code></td></tr>
+      <tr><td><code>--max-tokens N</code></td><td>답변 최대 토큰 수</td><td><code>ask "…" --max-tokens 300</code></td></tr>
+      <tr><td><code>--no-stream</code></td><td>답변을 다 만든 뒤 한 번에 출력 — 콘솔에서 글자가 깨지거나 파일로 저장할 때</td><td><code>ask "…" --no-stream &gt; out.txt</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>그 밖의 명령: <code>backend</code>(CPU/iGPU 선택 근거, <code>--reprobe</code> 로 재측정) · <code>warmup</code>(예열 단계별 시간) ·
+  <code>clear</code>(인덱스 삭제 — <b>되돌릴 수 없다</b>. 쓰는 법과 백업은 <a href="#s8">8-1</a>).</p>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>문서 넣기 — index · extract</h2>
+<pre class="cmd"><span class="c">rem 폴더의 바뀐 문서만 반영(증분)</span>
+simplerag.exe index --dir "D:\Project\SimpleRAG\sample_pdf"
+
+<span class="c">rem 인덱싱 전에 추출이 잘 되는지 한 파일만 미리보기</span>
+simplerag.exe extract "D:\Project\SimpleRAG\sample_pdf\취업규칙.pdf" --chars 800</pre>
+  <ul>
+    <li><code>--rebuild</code> 는 인덱스를 처음부터 다시 만든다 — 다른 폴더로 넣었던 문서까지 모두 사라진다.</li>
+    <li>폴더에서 지워진 문서가 많으면(30% 또는 50건 이상) 안전장치로 삭제를 멈춘다. 정말 지운 것이면 <code>--allow-delete</code>.</li>
+    <li>새 폴더를 추가로 넣으면 기존 인덱스에 더해진다(지금 배포본은 <code>sample</code> + <code>sample_pdf</code> = 76건).</li>
+  </ul>
+
+  <div class="note"><b>인덱스를 바꾸기 전에 RAGSearchBox 를 끈다.</b> 인덱스 폴더(<code>qdrant_data</code>)는 한 프로세스만 열 수 있다.
+  트레이 앱이 떠 있으면 <code>index</code> · <code>clear</code> 가 잠금 오류("already accessed")로 실패한다 — 트레이 메뉴 → <b>종료</b>.</div>
+
+  <h3>8-1. 기존 인덱스 제거 — clear</h3>
+  <p><code>clear</code> 는 데이터 폴더의 인덱스 세 가지(벡터 인덱스 <code>qdrant_data</code> · BM25 캐시 <code>bm25_index.npz</code> ·
+  증분 상태 <code>index_state.json</code>)를 지운다. 모델·<code>config.yaml</code>·원본 문서는 건드리지 않는다.</p>
+<pre class="cmd"><span class="c">rem 인덱스 전체 삭제 — 지울 목록을 보여 주고 [y/N] 로 한 번 더 묻는다</span>
+simplerag.exe clear
+
+<span class="c">rem 묻지 않고 바로 삭제(스크립트용)</span>
+simplerag.exe clear -y
+
+<span class="c">rem 문서 한 건만 인덱스에서 빼기 — 경로는 인덱싱할 때와 똑같아야 한다(status -v 로 확인)</span>
+simplerag.exe clear --doc "D:\Project\SimpleRAG\sample_pdf\15.의료비 지원 규정_17.03.14.pdf"</pre>
+<pre>데이터 루트: D:\Project\SimpleRAG\dist\simplerag
+문서 3건 / 다음 항목을 삭제합니다:
+  벡터 인덱스            0.2 MB  qdrant_data
+  BM25 캐시           0.0 MB  bm25_index.npz
+  증분 상태             0.0 MB  index_state.json
+  삭제: 벡터 인덱스
+  삭제: BM25 캐시
+  삭제: 증분 상태
+
+삭제 완료. `index --dir &lt;폴더&gt;` 로 다시 인덱싱하세요.</pre>
+  <ul>
+    <li><b>되돌릴 수 없다.</b> 지금 인덱스를 남겨 두려면 먼저 세 항목을 다른 폴더로 복사해 둔다
+      (예: <code>qdrant_data</code> · <code>bm25_index.npz</code> · <code>index_state.json</code> → <code>..\backup_YYYYMMDD\</code>). 되돌릴 때는 다시 복사해 넣으면 된다.</li>
+    <li>삭제 뒤 <code>status</code> 는 <code>0청크 · 문서 0건 · BM25캐시 없음</code> 으로 나온다.</li>
+    <li><code>clear --doc</code> 뒤에는 BM25 가 다음 <code>index --dir</code> 때 다시 만들어진다. 그 전에도 뺀 문서는 근거로 나오지 않는다.</li>
+  </ul>
+
+  <h3>8-2. 처음부터 폴더 지정해서 인덱싱</h3>
+  <p>인덱스를 비우고 원하는 폴더만 새로 넣는다. 아래 두 방법은 결과가 같다.</p>
+<pre class="cmd"><span class="c">rem 방법 A — 지우고 넣기(두 단계라 중간 상태를 확인할 수 있다)</span>
+simplerag.exe clear -y
+simplerag.exe index --dir "D:\Project\SimpleRAG\sample_pdf"
+
+<span class="c">rem 방법 B — 한 번에(기존 인덱스를 버리고 이 폴더로 새로 만든다)</span>
+simplerag.exe index --dir "D:\Project\SimpleRAG\sample_pdf" --rebuild
+
+<span class="c">rem 하위 폴더는 빼고 그 폴더 바로 아래 문서만</span>
+simplerag.exe index --dir "D:\Project\SimpleRAG\sample_pdf" --no-recursive
+
+<span class="c">rem 확인</span>
+simplerag.exe status</pre>
+<pre>  [1/3] [추가] 03.경조사지원규정_12.01.01.pdf                         6청크  (2.2 문서/s, 남은시간 1s)
+  [2/3] [추가] 15.의료비 지원 규정_17.03.14.pdf                      14청크  (1.0 문서/s, 남은시간 1s)
+  [3/3] [추가] 07.동호회규정_11.06.01.pdf                          28청크  (0.7 문서/s, 남은시간 0s)
+BM25 인덱스 구축 중...
+BM25 인덱스 48건 구축 0.0s
+@index-summary {"files":3,"changed":3,"added":3,...,"chunks":48,"sec":3.2,"op":"index","ok":true,"failed":0}
+
+문서 3건 / 추가 3건 · 수정 0건 · 내용 같음 0건 · 삭제 0건 / 청크 48개 / 3.2s</pre>
+  <ul>
+    <li>폴더를 여러 개 넣으려면 <code>index --dir</code> 를 폴더마다 한 번씩 실행한다(<code>--rebuild</code> 는 첫 폴더에만).</li>
+    <li>넣는 파일 형식: <code>.pdf .doc .docx .ppt .pptx .xls .xlsx .hwp .hwpx .txt .md .html .htm</code> 등.
+      Office 임시 파일(<code>~$…</code>)은 건너뛴다.</li>
+    <li><code>@index-summary {…}</code> 줄은 RAGSearchBox 가 읽는 기계용 요약이다. 사람은 마지막 "문서 N건 / 추가 …" 줄을 보면 된다.</li>
+    <li>RAGSearchBox 를 쓸 거라면 인덱싱한 폴더를 <code>RAGSearchBox.ini</code> 의 <code>[Scope] Folders</code> 에도 적는다.
+      범위 밖 문서는 트레이가 "지정 폴더 밖 문서 N건" 으로 알리고, <b>지금 인덱싱</b>을 누르면 인덱스에서 뺀다.</li>
+  </ul>
+
+  <h3>8-3. 파일 하나만 지정해서 인덱싱</h3>
+  <p><code>index</code> 는 폴더(<code>--dir</code>)만 받는다. 파일 한 건은 <code>chat</code> 의 <code>/index-doc</code> 로 넣는다 —
+  기존 인덱스에 그 문서만 더하거나(이미 있으면 새 내용으로 바꾼다), <code>clear</code> 뒤에 하면 그 파일 하나짜리 인덱스가 된다.</p>
+<pre class="cmd">simplerag.exe chat
+질문&gt; /index-doc D:\Project\SimpleRAG\sample_pdf\07.동호회규정_11.06.01.pdf
+질문&gt; /bm25
+질문&gt; /status
+질문&gt; exit</pre>
+<pre>질문&gt; @index {"op":"index-doc","ok":true,"path":"…\\07.동호회규정_11.06.01.pdf","result":"added","chunks":28,"ms":602}
+질문&gt; @index {"op":"bm25","ok":true,"chunks":28,...}
+질문&gt;   28청크 / 0.1MB</pre>
+  <ul>
+    <li><code>"ok":true</code> · <code>"result":"added"</code>(새로 넣음) 또는 <code>"modified"</code>(바꿈)이면 성공이다. 실패하면 <code>"ok":false</code> 와 <code>"why"</code>(예: "파일이 없습니다").</li>
+    <li><b><code>/index-doc</code> 뒤에 <code>/bm25</code> 를 꼭 한 번</b> 실행한다. 안 하면 키워드 색인에 그 문서가 빠져 dense 검색으로만 찾는다
+      (<code>status</code> 에 "BM25캐시 : 없음" 으로 보인다). 여러 파일을 넣을 때는 <code>/index-doc</code> 를 다 한 뒤 마지막에 한 번.</li>
+    <li>경로는 따옴표 없이 쓴다. 콘솔에서 직접 치면 한글 경로도 그대로 된다. 파이프로 넣을 때 한글이 깨지면
+      <code>/index-doc {"path": "D:\\…\\파일.pdf"}</code> 처럼 JSON 으로 쓴다.</li>
+    <li>chat 없이 하고 싶으면, 그 파일만 든 폴더를 만들어 <code>index --dir &lt;그 폴더&gt;</code> 를 써도 된다.
+      다만 나중에 그 폴더를 지우고 다른 폴더로 <code>index</code> 해도 이 문서는 인덱스에 남는다(<code>clear --doc</code> 로 뺀다).</li>
+  </ul>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>문제 해결</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>증상</th><th>해결</th></tr></thead>
+    <tbody>
+      <tr><td>'simplerag.exe' is not recognized</td><td>exe 폴더로 이동하지 않았다. <code>cd /d D:\Project\SimpleRAG\dist\simplerag</code> 후 실행하거나 전체 경로로 실행.</td></tr>
+      <tr><td>한글이 깨진다</td><td><code>chcp 65001</code> 로 콘솔을 UTF-8 로 바꾸고 다시 실행. 그래도 깨지면 <code>--no-stream</code>.</td></tr>
+      <tr><td>결과를 파일로 남기고 싶다</td><td><code>simplerag.exe ask "…" --no-stream &gt; result.txt</code> — 파일은 UTF-8 로 저장된다(메모장·VS Code 로 열기).</td></tr>
+      <tr><td>"검색된 근거가 없습니다" / 관련 근거 없음</td><td>인덱스에 그 문서가 없거나 질문이 문서와 동떨어졌다. <code>status</code> 로 문서 수 확인 → <code>search</code> 로 검색 결과 확인.</td></tr>
+      <tr><td>첫 질문이 느리다</td><td>ask 는 매번 모델을 올린다(약 5~8초). 여러 질문은 <code>chat</code> 으로.</td></tr>
+      <tr><td>설정 경고가 먼저 나온다</td><td><code>config.yaml</code> 에 오타·범위 밖 값이 있다. 경고 문구대로 고치거나 <code>status</code> 의 설정파일 경로를 확인.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>테스트 체크리스트</h2>
+  <ol class="steps">
+    <li><b>RAGSearchBox 종료</b> — 트레이 메뉴 → 종료</li>
+    <li><b><code>status</code></b> — 문서 수 · 생성모델 · 백엔드(iGPU/CPU) · 리랭커 "있음" 확인</li>
+    <li><b><code>search "질문"</code></b> — 정답 문서가 상위 3건에 들어오는지</li>
+    <li><b><code>ask "질문"</code></b> — 근거 · 답변 · 첫 글자/완료 시간 확인. 답의 사실은 근거 본문으로 검증</li>
+    <li><b><code>chat</code></b> — 질문 3~5개 연속. 두 번째부터 빨라지는지, <code>/folder</code> 한정 검색이 되는지</li>
+    <li><b>끝나면</b> <code>exit</code> → 필요하면 RAGSearchBox 다시 실행</li>
+  </ol>
+</section>
+
+<footer>관련 문서: 03_exe_배포_가이드.md (빌드·배포) · 02_테스트_가이드.md · 작성 2026-10-23</footer>
+</div>
+</body>
+</html>
