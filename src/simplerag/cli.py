@@ -337,7 +337,12 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                     writer.finish(clean)
                 else:
                     # 비스트리밍은 파이프라인이 이미 정리한 본문을 그대로 쓴다.
-                    print(d["answer"].strip())
+                    print(d["answer"].strip(), end="")
+                # 반복·상한으로 잘라 냈으면 본문 뒤에 표시(인용 번호 정리가 끝난 뒤라 따로 붙인다)
+                if d.get("note"):
+                    print(" " + d["note"], end="")
+                if not stream:
+                    print()
 
                 t = d["timing"]
                 if show_timing:

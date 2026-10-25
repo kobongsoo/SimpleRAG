@@ -18,6 +18,7 @@ import time
 from .. import config
 from .base import Generator, GenerateError
 from .chatformat import build_chat_prompt, stop_strings
+from .outguard import TAIL_WINDOW, OutGuard
 from .prompts import active_system_prompt, build_user_message
 
 
@@ -193,6 +194,10 @@ class GgufGenerator(Generator):
     # -in: max_tokens = 답변 토큰 상한(None 이면 설정값)
     # -in: system     = 시스템 지시문(None 이면 설정 generation.prompt 의 지시문, 기본 V0)
     #
+    #   반복 루프·상한 처리(outguard): 같은 문장이 되풀이되면 거기서 멈추고 반복분을 잘라 내며,
+    #   상한에서 멈추면 마지막 완결 문장까지만 내보낸다. 잘라 냈으면 self.last_note 에 표시를 남긴다
+    #   (본문과 따로 — 인용 번호 정리에 끼지 않게 호출자가 뒤에 붙인다).
+    #
     # -out: Iterator[str] = 답변 조각
     # -out: error = 로딩 실패 시 GenerateError
     #------------------------------------------------------------------
@@ -204,23 +209,53 @@ class GgufGenerator(Generator):
         # 지시문은 설정에서 고른다(계획서 1-3 실험) — 기본 V0 는 종전과 글자까지 같다
         prompt = self._fit_prompt(system or active_system_prompt(), query, chunks, n_out)
 
+        self.last_note = None
+        guard = OutGuard()
+        finish = None
+        n_piece = 0
         with self._infer_lock:
-            for piece in self._llm.create_completion(
+            it = self._llm.create_completion(
                 prompt,
                 max_tokens=n_out,
                 temperature=config.GEN_TEMPERATURE,
                 stop=stop_strings(self.alias),
                 stream=True,
-            ):
-                text = piece["choices"][0]["text"]
-                if text:
-                    yield text
+            )
+            try:
+                for piece in it:
+                    ch = piece["choices"][0]
+                    finish = ch.get("finish_reason") or finish
+                    text = ch["text"]
+                    if not text:
+                        continue
+                    # 조각 하나 ≈ 토큰 하나 — 상한까지 남은 수를 어림한다
+                    n_piece += 1
+                    emit = guard.push(text, n_out - n_piece)
+                    if emit:
+                        yield emit
+                    if guard.halt:
+                        # 반복 루프 — 더 만들지 않는다
+                        break
+            finally:
+                # 중간에 멈췄으면 생성기를 닫아 llama 쪽 생성을 끝낸다(시험용 가짜 반복자는 close 가 없다)
+                close = getattr(it, "close", None)
+                if close:
+                    close()
+        # 아주 짧은 상한(예열 1토큰)은 일부러 그렇게 부른 것이라 자르지 않는다
+        emit, _, note = guard.finish(capped=(finish == "length" and n_out >= TAIL_WINDOW))
+        self.last_note = note
+        if emit:
+            yield emit
 
     #------------------------------------------------------------------
     # 비스트리밍 생성 (배치/평가용)
     #=> 스트리밍 오버헤드(약 30%)가 없어 일괄 처리에 유리하다.
+    #   스트리밍과 같은 반복 루프·상한 처리를 다 받은 글에 적용한다(표시는 self.last_note).
     #
-    # -out: text = 답변 전문
+    # -in: query, chunks, max_tokens, system = stream 과 같음
+    #
+    # -out: text = 답변 전문(반복분·덜 끝난 문장을 잘라 낸 뒤)
+    # -out: error = 로딩 실패 시 GenerateError
     #------------------------------------------------------------------
     def generate(self, query, chunks, max_tokens=None, system=None):
         self.ensure_loaded()
@@ -234,4 +269,15 @@ class GgufGenerator(Generator):
                 temperature=config.GEN_TEMPERATURE,
                 stop=stop_strings(self.alias),
             )
-        return r["choices"][0]["text"]
+        ch = r["choices"][0]
+        # 스트리밍과 같은 반복·상한 처리를 다 받은 글에 적용한다(평가 답이 화면 답과 같게).
+        #   토큰 경계를 모르니 4글자씩(토큰 하나쯤) 넣는다
+        guard = OutGuard()
+        text = ch["text"]
+        for i in range(0, len(text), 4):
+            guard.push(text[i:i + 4], n_out)
+            if guard.halt:
+                break
+        _, kept, note = guard.finish(capped=(ch.get("finish_reason") == "length" and n_out >= TAIL_WINDOW))
+        self.last_note = note
+        return kept

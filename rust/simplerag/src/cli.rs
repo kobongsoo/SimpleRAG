@@ -286,7 +286,14 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                 if stream {
                     writer.finish(n_ev);
                 } else {
-                    outln(pyutil::strip(&d.answer));
+                    out(pyutil::strip(&d.answer));
+                }
+                // 반복·상한으로 잘라 냈으면 본문 뒤에 표시(인용 번호 정리가 끝난 뒤라 따로 붙인다)
+                if let Some(note) = d.note {
+                    out(&format!(" {}", note));
+                }
+                if !stream {
+                    outln("");
                 }
                 let t = &d.timing;
                 outln("\n\n── 소요 ─────────────────────────────────");

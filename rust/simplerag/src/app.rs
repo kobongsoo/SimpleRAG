@@ -182,7 +182,7 @@ impl App {
         };
         on_event(Event::Evidence(chunks.clone(), timing.clone()));
         let done_simple = |answer: &str| Done {
-            answer: answer.to_string(), cited: vec![], ttft_s: 0.0, llm_ttft_s: None,
+            answer: answer.to_string(), cited: vec![], note: None, ttft_s: 0.0, llm_ttft_s: None,
             total_s: pyutil::round_to(t0.elapsed().as_secs_f64(), 2), timing: timing.clone(),
         };
         if chunks.is_empty() {
@@ -199,18 +199,19 @@ impl App {
         let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         let t_gen0 = Instant::now();
         let mut t_first: Option<Instant> = None;
-        let raw = self.generator.stream(query, &texts, max_tokens, None, &mut |piece| {
+        let out = self.generator.stream(query, &texts, max_tokens, None, &mut |piece| {
             if t_first.is_none() {
                 t_first = Some(Instant::now());
             }
             on_event(Event::Token(piece.to_string()));
         })?;
         let t_end = Instant::now();
-        let (body, cited) = parse_answer(&raw, Some(texts.len()));
+        let (body, cited) = parse_answer(&out.text, Some(texts.len()));
         let first = t_first.unwrap_or(t_end);
         on_event(Event::Done(Done {
             answer: body,
             cited,
+            note: out.note,
             ttft_s: pyutil::round_to((first - t0).as_secs_f64(), 2),
             llm_ttft_s: Some(pyutil::round_to((first - t_gen0).as_secs_f64(), 2)),
             total_s: pyutil::round_to((t_end - t0).as_secs_f64(), 2),
@@ -254,6 +255,8 @@ pub enum Event {
 pub struct Done {
     pub answer: String,
     pub cited: Vec<usize>,
+    // 답을 잘라 냈다는 표시(반복 루프 · 상한) — 본문 뒤에 따로 보여 준다
+    pub note: Option<&'static str>,
     pub ttft_s: f64,
     pub llm_ttft_s: Option<f64>,
     pub total_s: f64,

@@ -96,6 +96,8 @@ class RagPipeline:
         yield ("done", {
             "answer": body,
             "cited": cited,
+            # 반복 루프·상한으로 답을 잘라 냈다는 표시(없으면 None) — 화면은 본문 뒤에 따로 붙인다
+            "note": getattr(self.generator, "last_note", None),
             # 사용자가 체감하는 TTFT — 검색까지 포함한 '첫 글자까지'
             "ttft_s": round((t_first or t_end) - t0, 2),
             "llm_ttft_s": round((t_first or t_end) - t_gen0, 2),
