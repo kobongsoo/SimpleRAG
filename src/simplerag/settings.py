@@ -201,6 +201,10 @@ SCHEMA = {
         "bm25_k1": _num(0, 100, lo_open=True),
         "bm25_b": _num(0, 1),
         "dedup": _bool,
+        # 동의어로 BM25 질의 넓히기(synonyms.default.yaml + synonyms.yaml)
+        "synonyms": _bool,
+        # 넓힘이 일어난 질문이면 RRF 1위를 근거로 한 건 더(top_k+1)
+        "synonym_extra": _bool,
     },
     "rerank": {
         "mode": _rerank_mode,

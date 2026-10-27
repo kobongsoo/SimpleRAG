@@ -63,6 +63,10 @@ foreach ($m in "e5-small-ko", "bge-reranker-base-int8") {
     Get-ChildItem "$py\models\$m\*" -ErrorAction SilentlyContinue | ForEach-Object { Link-IfMissing $_.FullName "$dist\models\$m\$($_.Name)" }
 }
 
+# 기본 동의어 사전 — 배포 때마다 새것으로(사용자 사전 synonyms.yaml 은 건드리지 않는다)
+Copy-Item (Join-Path $root "synonyms.default.yaml") $dist -Force
+"복사: synonyms.default.yaml"
+
 # 설정
 Copy-IfMissing "$py\config.yaml" "$dist\config.yaml"
 if (-not (Test-Path "$dist\RAGSearchBox.ini") -and (Test-Path "$py\RAGSearchBox.ini")) {

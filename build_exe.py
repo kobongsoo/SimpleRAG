@@ -386,6 +386,11 @@ def main():
     # 검색·청킹 계수 파일(REPORT §35) — exe 옆에 두면 코드 수정 없이 바꿀 수 있다.
     #   배포본에서 바꾼 설정을 지키려고 없을 때만 복사한다
     place_config()
+    # 기본 동의어 사전은 배포 때마다 새것으로 — 사용자 사전(synonyms.yaml)은 건드리지 않는다
+    src_syn = os.path.join(ROOT, "synonyms.default.yaml")
+    if os.path.isfile(src_syn):
+        shutil.copy2(src_syn, os.path.join(DIST, APP, "synonyms.default.yaml"))
+        print("  synonyms.default.yaml 복사")
 
     if not args.no_models:
         print("\n[models] exe 옆으로 모델 복사")

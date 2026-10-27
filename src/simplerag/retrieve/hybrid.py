@@ -17,6 +17,7 @@ import os
 import re
 
 from .. import config
+from . import synonyms
 
 # 공백만 지운 문자열로 같은지 본다. 추출기가 같은 문서를 조금 다르게 띄어쓰는
 # 경우가 있어 공백을 무시해야 사본이 잡힌다.
@@ -84,6 +85,34 @@ def pick_unique(chunks, top_k):
         if len(picked) >= top_k:
             return picked
     return (picked + dropped)[:top_k]
+
+
+#------------------------------------------------------------------
+# 동의어 넓힘 때 덧붙일 근거 (RRF 1위)
+#=> 동의어 사전이 질문을 넓혀 RRF 1위로 끌어올린 청크를, 리랭커가 원래 일상어 질문만 보고
+#   상위 top_k 밖으로 밀어낼 때가 많다. 그때 그 청크를 top_k+1 번째 근거로 되살린다.
+#    1) 설정(retrieval.synonym_extra)이 꺼졌거나 이 질문에서 넓힘이 없었으면 붙이지 않는다
+#    2) 근거가 top_k 를 못 채웠으면(작은 폴더) 붙이지 않는다 — 이미 후보를 다 쓴 것이다
+#    3) RRF 1위가 이미 근거에 있거나 근거와 내용이 같은 사본이면 붙이지 않는다
+#   대가: 근거 한 건(평균 약 100토큰)만큼 TTFT 가 늘어난다(실측 중앙값 2.96 → 4.17초, 넓힘이 일어난 질문만).
+#
+# -in: picked = 리랭킹으로 고른 근거 목록
+# -in: first  = RRF 1위 청크(리랭킹 전 후보의 맨 앞)
+# -in: timing = 1단계 검색 timing(넓힘 내역 "synonyms" 가 있으면 넓힘이 일어난 것)
+# -in: top_k  = 원래 근거 개수
+#
+# -out: 덧붙일 청크 dict, 붙일 것이 없으면 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def synonym_extra(picked, first, timing, top_k):
+    if not config.SYNONYM_EXTRA or not timing.get("synonyms") or len(picked) < top_k:
+        return None
+    # 같은 청크이거나 내용이 같은 사본이면 한 건 더 넣어도 새 정보가 없다
+    key = dedup_key(first.get("text", ""), first.get("doc_name"))
+    for c in picked:
+        if c.get("id") == first.get("id") or (key and dedup_key(c.get("text", ""), c.get("doc_name")) == key):
+            return None
+    return first
 
 
 #------------------------------------------------------------------
@@ -284,6 +313,12 @@ class HybridRetriever:
         ranked = [chunks[i] for i in order]
         # 사본은 점수가 원본과 같아 나란히 올라온다 — 설정이 켜져 있으면 고유한 것부터 채운다
         picked = pick_unique(ranked, top_k) if config.DEDUP_EVIDENCE else ranked[:top_k]
+        # 동의어로 넓힌 질문이면 RRF 1위를 잃지 않게 한 건 더 붙인다 — 리랭커는 일상어 질문 그대로 보므로
+        #   사전이 끌어올린 규정 조항을 다시 밀어낸다(바꿔 말한 질문 42문항: 29 → 37, 골든 100문항 85 그대로)
+        extra = synonym_extra(picked, chunks[0], timing, top_k)
+        if extra is not None:
+            picked = picked + [extra]
+            timing["synonym_extra"] = True
         return picked, timing
 
     #------------------------------------------------------------------
@@ -331,7 +366,9 @@ class HybridRetriever:
 
         # bm25_top_k 가 0 이면 BM25 를 건너뛰고 dense 단독으로 융합한다
         bm_extra = {"allow_ids": scope["allow_ids"]} if scope else {}
-        bm_ids = (self.bm25.search(query, self.embedder.tokenizer, bm25_k, **bm_extra)
+        # 동의어 사전으로 BM25 질의만 넓힌다 — 일상어("할아버지")에 문서 용어("조부모")를 덧붙인다
+        bm_query, syn_pairs = synonyms.expand(query)
+        bm_ids = (self.bm25.search(bm_query, self.embedder.tokenizer, bm25_k, **bm_extra)
                   if bm25_k > 0 else [])
         t3 = time.perf_counter()
 
@@ -372,6 +409,9 @@ class HybridRetriever:
             "fuse_ms": round((t4 - t3) * 1000, 1),
             "total_ms": round((t4 - t0) * 1000, 1),
         }
+        if syn_pairs:
+            # 동의어로 넓힌 내역 — 소요 블록에 "검색어 넓힘: 할아버지→조부모" 로 보여 준다
+            timing["synonyms"] = ["{}→{}".format(w, t) for w, t in syn_pairs]
         if scope is not None:
             timing["scope_docs"] = scope["n_docs"]
             timing["scope_via"] = scope["via"]

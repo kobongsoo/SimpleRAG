@@ -57,6 +57,25 @@ pub fn dedup_key(text: &str, doc_name: &str) -> Option<String> {
 }
 
 //------------------------------------------------------------------
+// 동의어 넓힘 때 덧붙일 근거 (Python hybrid.synonym_extra 와 같다)
+//=> 동의어 사전이 질문을 넓혀 RRF 1위로 끌어올린 청크를, 리랭커가 원래 일상어 질문만 보고
+//   상위 top_k 밖으로 밀어낼 때가 많다. 그때 그 청크를 top_k+1 번째 근거로 되살린다.
+//    1) 설정이 꺼졌거나 이 질문에서 넓힘이 없었으면(timing 에 "synonyms" 없음) 붙이지 않는다
+//    2) 근거가 top_k 를 못 채웠으면 붙이지 않는다 · 3) 이미 근거에 있거나 사본이면 붙이지 않는다
+//   대가: 근거 한 건(평균 약 100토큰)만큼 TTFT 가 늘어난다(넓힘이 일어난 질문만).
+//   돌려줌: 덧붙일 청크, 없으면 None
+//------------------------------------------------------------------
+pub fn synonym_extra(picked: &[Chunk], first: &Chunk, timing: &Timing, top_k: usize) -> Option<Chunk> {
+    if !cfg().synonym_extra || !timing.contains_key("synonyms") || picked.len() < top_k {
+        return None;
+    }
+    // 같은 청크이거나 내용이 같은 사본이면 한 건 더 넣어도 새 정보가 없다
+    let key = dedup_key(&first.text, &first.doc_name);
+    let dup = picked.iter().any(|c| c.id == first.id || (key.is_some() && dedup_key(&c.text, &c.doc_name) == key));
+    if dup { None } else { Some(first.clone()) }
+}
+
+//------------------------------------------------------------------
 // 순서대로 고유한 것 top_k 개(모자라면 사본으로 채움)
 //------------------------------------------------------------------
 pub fn pick_unique(chunks: Vec<Chunk>, top_k: usize) -> Vec<Chunk> {
@@ -222,7 +241,13 @@ impl Retriever {
             }
         }
         let ranked: Vec<Chunk> = order.into_iter().map(|i| chunks[i].clone()).collect();
-        let picked = if cfg().dedup_evidence { pick_unique(ranked, top_k) } else { ranked.into_iter().take(top_k).collect() };
+        let mut picked = if cfg().dedup_evidence { pick_unique(ranked, top_k) } else { ranked.into_iter().take(top_k).collect() };
+        // 동의어로 넓힌 질문이면 RRF 1위를 잃지 않게 한 건 더 붙인다 — 리랭커는 일상어 질문 그대로 보므로
+        //   사전이 끌어올린 조항을 다시 밀어낸다(바꿔 말한 질문 42문항: 29 → 37, 골든 100문항 85 그대로)
+        if let Some(extra) = synonym_extra(&picked, &chunks[0], &timing, top_k) {
+            picked.push(extra);
+            timing.insert("synonym_extra".into(), json!(true));
+        }
         Ok((picked, timing))
     }
 
@@ -257,7 +282,9 @@ impl Retriever {
         let mut payloads: HashMap<i64, Payload> = dense.into_iter().map(|(i, _, p)| (i, p)).collect();
         let t2 = Instant::now();
         let tok = self.embedder.tokenizer()?;
-        let bm_ids = if bm25_k > 0 { self.bm25.search(query, &tok, bm25_k, allow) } else { vec![] };
+        // 동의어 사전으로 BM25 질의만 넓힌다 — 일상어("할아버지")에 문서 용어("조부모")를 덧붙인다
+        let (bm_query, syn_pairs) = crate::synonyms::expand(query);
+        let bm_ids = if bm25_k > 0 { self.bm25.search(&bm_query, &tok, bm25_k, allow) } else { vec![] };
         let t3 = Instant::now();
         let mut lists = vec![dense_ids];
         if !bm_ids.is_empty() {
@@ -291,6 +318,10 @@ impl Retriever {
         timing.insert("bm25_ms".into(), pyutil::jf(ms(t3 - t2)));
         timing.insert("fuse_ms".into(), pyutil::jf(ms(t4 - t3)));
         timing.insert("total_ms".into(), pyutil::jf(ms(t4 - t0)));
+        if !syn_pairs.is_empty() {
+            // 동의어로 넓힌 내역 — 소요 블록에 "검색어 넓힘: 할아버지→조부모" 로 보여 준다
+            timing.insert("synonyms".into(), json!(syn_pairs.iter().map(|(w, t)| format!("{}→{}", w, t)).collect::<Vec<_>>()));
+        }
         if let Some((n, _)) = scope {
             timing.insert("scope_docs".into(), json!(n));
             timing.insert("scope_via".into(), json!("matrix"));

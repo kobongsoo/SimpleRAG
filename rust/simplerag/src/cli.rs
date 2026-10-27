@@ -435,6 +435,10 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                     outln(&format!("  ⚠️ 리랭킹 실패 — RRF 순서로 답했습니다: {}", e));
                 }
                 outln(&format!("  첫 글자 {:.2}s / 완료 {:.2}s", d.ttft_s, d.total_s));
+                if let Some(s) = t.get("synonyms").and_then(|v| v.as_array()).filter(|a| !a.is_empty()) {
+                    // 동의어 사전으로 키워드 검색을 넓혔으면 무엇을 넓혔는지(동의어 설계서 §5)
+                    outln(&format!("  검색어 넓힘: {}", s.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")));
+                }
                 outln(&format!("  {}", answer_setup_line(app)));
                 if !d.cited.is_empty() {
                     // 바로잡은 번호가 있으면 무엇을 바꿨는지 함께 — 본문에 이미 나간 문장 앞 번호는 못 고쳤을 수 있다

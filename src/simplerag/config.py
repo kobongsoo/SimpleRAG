@@ -265,6 +265,16 @@ BM25_K1 = _setting("retrieval.bm25_k1", 1.5)
 BM25_B = _setting("retrieval.bm25_b", 0.75)
 # BM25 토크나이징. 공백 분리는 한국어 조사 때문에 Recall@1 이 67% 로 떨어진다.
 # 서브워드로 바꾸면 92~100% 로 회복된다(REPORT §13.4).
+# 동의어로 BM25 질의 넓히기(plan/동의어사전_설계서_20261027.html) — 사전에 있는 일상어가 질문에 있으면
+#   문서 용어를 키워드 검색에만 덧붙인다("할아버지" → +"조부모"). 의미 검색·리랭커는 원래 질문 그대로.
+#   사전: <프로그램 폴더>/synonyms.default.yaml + <데이터 폴더>/synonyms.yaml(사용자). 끄려면 SIMPLERAG_SYNONYMS=0.
+SYNONYMS = ((os.environ["SIMPLERAG_SYNONYMS"] != "0") if os.environ.get("SIMPLERAG_SYNONYMS")
+            else bool(_YAML.get("retrieval.synonyms", True)))
+# 동의어로 넓힌 질문이면 RRF 1위를 근거 한 건으로 더 붙인다(top_k+1) — 리랭커가 일상어 질문만 보고 밀어낸
+#   규정 조항을 되살린다. 바꿔 말한 질문 42문항 근거 적중 29 → 37, 골든 100문항 85 그대로(넓힘 0회라 영향 없음).
+#   ⚠️ 붙는 질문만 TTFT 가 약 1초 늘어난다(근거 약 100토큰). 끄려면 SIMPLERAG_SYNONYM_EXTRA=0.
+SYNONYM_EXTRA = ((os.environ["SIMPLERAG_SYNONYM_EXTRA"] != "0") if os.environ.get("SIMPLERAG_SYNONYM_EXTRA")
+                 else bool(_YAML.get("retrieval.synonym_extra", True)))
 BM25_MODE = "subword"
 
 # 리랭킹 — RRF 후보 RERANK_POOL 건을 크로스인코더로 재정렬해 상위 TOP_K 를 쓴다.

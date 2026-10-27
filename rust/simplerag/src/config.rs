@@ -105,6 +105,10 @@ pub struct Config {
     pub dense_top_k: i64,
     pub bm25_top_k: i64,
     pub dedup_evidence: bool,
+    // 동의어로 BM25 질의 넓히기(retrieval.synonyms, 기본 켬) — synonyms.rs
+    pub synonyms: bool,
+    // 넓힘이 일어난 질문이면 RRF 1위를 근거로 한 건 더(retrieval.synonym_extra, 기본 켬) — retrieve::synonym_extra
+    pub synonym_extra: bool,
     pub rrf_k: f64,
     pub bm25_k1: f64,
     pub bm25_b: f64,
@@ -268,6 +272,16 @@ fn build() -> Result<Config, ConfigError> {
         Some(v) => v != "0",
         None => pick_bool(&y, "retrieval.dedup", true),
     };
+    // 동의어로 BM25 질의 넓히기 — 끄려면 SIMPLERAG_SYNONYMS=0 (Python config.SYNONYMS 와 같다)
+    let synonyms = match env("SIMPLERAG_SYNONYMS") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "retrieval.synonyms", true),
+    };
+    // 넓힌 질문의 RRF 1위를 근거로 한 건 더 — 끄려면 SIMPLERAG_SYNONYM_EXTRA=0 (Python config.SYNONYM_EXTRA 와 같다)
+    let synonym_extra = match env("SIMPLERAG_SYNONYM_EXTRA") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "retrieval.synonym_extra", true),
+    };
     let rrf_k = pick_num(&y, "retrieval.rrf_k", 60.0, None)?;
     let bm25_k1 = pick_num(&y, "retrieval.bm25_k1", 1.5, None)?;
     let bm25_b = pick_num(&y, "retrieval.bm25_b", 0.75, None)?;
@@ -350,6 +364,8 @@ fn build() -> Result<Config, ConfigError> {
         dense_top_k,
         bm25_top_k,
         dedup_evidence,
+        synonyms,
+        synonym_extra,
         rrf_k,
         bm25_k1,
         bm25_b,
@@ -459,6 +475,8 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("bm25_k1", Check::Num(0.0, 100.0, true)),
             ("bm25_b", Check::Num(0.0, 1.0, false)),
             ("dedup", Check::Bool),
+            ("synonyms", Check::Bool),
+            ("synonym_extra", Check::Bool),
         ]),
         ("rerank", vec![
             ("mode", Check::RerankMode),

@@ -543,6 +543,9 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                             t["rerank_error"]))
                     print("  첫 글자 {:.2f}s / 완료 {:.2f}s".format(
                         d["ttft_s"], d["total_s"]))
+                    if t.get("synonyms"):
+                        # 동의어 사전으로 키워드 검색을 넓혔으면 무엇을 넓혔는지(동의어 설계서 §5)
+                        print("  검색어 넓힘: {}".format(", ".join(t["synonyms"])))
                     # 어떤 모델·근거 방식으로 만든 답인지 함께 남긴다(RAGSearchBox chat_parser 가 읽는다)
                     print("  " + _answer_setup_line(app))
                     if d["cited"]:
