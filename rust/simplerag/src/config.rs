@@ -117,6 +117,8 @@ pub struct Config {
     pub prompt: String,
     pub system_prompt_text: String,
     pub flatten_tables: bool,
+    // 지시문 되뱉기 거르기(generation.echo_filter, 기본 끔) — 켜면 화면 첫 글자가 약 2초 늦어진다
+    pub echo_filter: bool,
     pub parent_mode: String,
     pub parent_max_tokens: i64,
     pub gen_backend: String,
@@ -302,6 +304,12 @@ fn build() -> Result<Config, ConfigError> {
         Some(v) => v != "0",
         None => pick_bool(&y, "generation.flatten_tables", false),
     };
+    // 지시문 되뱉기 거르기 — 기본 끔. 켜면 스트리밍 출력기가 되뱉기인지 판정하려고 첫 문장(최대 56자)을
+    //   붙들어 화면 첫 글자가 TTFT 보다 약 2초 늦어진다(골든셋 100문항 실측 2026-10-26). Python 판과 같은 규칙
+    let echo_filter = match env("SIMPLERAG_ECHO_FILTER") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "generation.echo_filter", false),
+    };
     let parent_mode = pick_str(&y, "generation.parent", "off", Some("SIMPLERAG_PARENT")).trim().to_lowercase();
     if parent_mode != "off" && parent_mode != "section" {
         return Err(ConfigError(format!(
@@ -354,6 +362,7 @@ fn build() -> Result<Config, ConfigError> {
         prompt,
         system_prompt_text,
         flatten_tables,
+        echo_filter,
         parent_mode,
         parent_max_tokens,
         gen_backend,
@@ -462,6 +471,7 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("system_prompt", Check::Text(1000)),
             ("model", Check::Choice(&["qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"])),
             ("flatten_tables", Check::Bool),
+            ("echo_filter", Check::Bool),
             ("parent", Check::ParentMode),
             ("parent_max_tokens", Check::Int(64, 1500)),
         ]),

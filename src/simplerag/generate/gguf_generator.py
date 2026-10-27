@@ -196,7 +196,7 @@ class GgufGenerator(Generator):
     #
     #   반복 루프·상한 처리(outguard): 같은 문장이 되풀이되면 거기서 멈추고 반복분을 잘라 내며,
     #   상한에서 멈추면 마지막 완결 문장까지만 내보낸다. 잘라 냈으면 self.last_note 에 표시를 남긴다
-    #   (본문과 따로 — 인용 번호 정리에 끼지 않게 호출자가 뒤에 붙인다).
+    #   (본문과 따로 — 인용 번호 정리에 끼지 않게 호출자가 뒤에 붙인다). 남길 답 전체는 self.last_text.
     #
     # -out: Iterator[str] = 답변 조각
     # -out: error = 로딩 실패 시 GenerateError
@@ -210,9 +210,16 @@ class GgufGenerator(Generator):
         prompt = self._fit_prompt(system or active_system_prompt(), query, chunks, n_out)
 
         self.last_note = None
+        # 남길 답 — 반복·상한으로 잘라 낸 뒤의 글. 이미 흘려보낸 조각보다 짧을 수 있다(파이프라인이 이것을 쓴다)
+        self.last_text = None
         guard = OutGuard()
         finish = None
         n_piece = 0
+        # 생성한 토큰 수는 llama 의 n_tokens(평가한 토큰 수)로 센다 — 한글은 토큰 여러 개가 한 조각으로
+        #   합쳐져 오므로 조각 수로 세면 실제보다 18% 쯤 적다(120토큰에 조각 98개, 2026-10-26 실측).
+        #   그러면 상한 직전 붙들기(TAIL_WINDOW)가 늦게 켜져 Rust 판(토큰마다 셈)과 출력이 갈렸다(골든셋 q044).
+        tokenize = getattr(self._llm, "tokenize", None)
+        n_prompt = len(tokenize(prompt.encode("utf-8"), special=True)) if tokenize else None
         with self._infer_lock:
             it = self._llm.create_completion(
                 prompt,
@@ -228,9 +235,12 @@ class GgufGenerator(Generator):
                     text = ch["text"]
                     if not text:
                         continue
-                    # 조각 하나 ≈ 토큰 하나 — 상한까지 남은 수를 어림한다
                     n_piece += 1
-                    emit = guard.push(text, n_out - n_piece)
+                    # 평가를 마친 토큰 + 지금 막 뽑은 토큰 1개 = 지금까지 생성한 토큰 수(Rust 판 n_gen 과 같다).
+                    #   n_tokens 를 모르는 경우(시험용 가짜 모델)만 조각 수로 어림한다
+                    n_tok = getattr(self._llm, "n_tokens", None)
+                    n_gen = max(n_piece, n_tok - n_prompt + 1) if (n_prompt is not None and n_tok is not None) else n_piece
+                    emit = guard.push(text, n_out - n_gen)
                     if emit:
                         yield emit
                     if guard.halt:
@@ -242,8 +252,9 @@ class GgufGenerator(Generator):
                 if close:
                     close()
         # 아주 짧은 상한(예열 1토큰)은 일부러 그렇게 부른 것이라 자르지 않는다
-        emit, _, note = guard.finish(capped=(finish == "length" and n_out >= TAIL_WINDOW))
+        emit, kept, note = guard.finish(capped=(finish == "length" and n_out >= TAIL_WINDOW))
         self.last_note = note
+        self.last_text = kept
         if emit:
             yield emit
 

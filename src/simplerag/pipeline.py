@@ -89,9 +89,13 @@ class RagPipeline:
             yield ("token", piece)
 
         t_end = time.perf_counter()
-        raw = "".join(parts)
+        # 생성기가 정한 남길 답 — 반복·상한으로 잘라 낸 꼬리는 흘려보낸 조각에는 있어도 여기에는 없다
+        raw = getattr(self.generator, "last_text", None)
+        if raw is None:
+            raw = "".join(parts)
         # 근거 개수를 함께 넘긴다 — 없는 번호를 인용으로 읽지 않게 한다.
-        body, cited = parse_answer(raw, len(texts))
+        # 되뱉기 거르기는 설정을 따른다(generation.echo_filter, 기본 끔)
+        body, cited = parse_answer(raw, len(texts), echo=config.ECHO_FILTER)
 
         yield ("done", {
             "answer": body,
@@ -149,6 +153,6 @@ class RagPipeline:
 
         raw = self.generator.generate(query, [c["text"] for c in chunks],
                                       max_tokens=max_tokens)
-        body, cited = parse_answer(raw, len(chunks))
+        body, cited = parse_answer(raw, len(chunks), echo=config.ECHO_FILTER)
         return {"answer": body, "cited": cited, "chunks": chunks,
                 "timing": timing, "total_s": round(time.perf_counter() - t0, 2)}

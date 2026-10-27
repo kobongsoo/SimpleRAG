@@ -172,6 +172,29 @@ _LEADING_MARKER = re.compile(r"^\s*\[(?:질문|근거)\]\s*")
 # 끝에 달라붙는 중복 인용 — "[3]번 [3]", "[1] [1]" 처럼 같은 번호를 반복한다.
 _TRAILING_CITES = re.compile(r"(?:\s*\[\d+\]\s*번?)+\s*$")
 
+# ── 짧은 되뱉기 (거르기 켬·끔과 상관없이 지운다 — 설계서 ②③) ──────────────
+#   모양이 고정된 짧은 잡음이라 몇 글자만 붙들면 판정된다(긴 _ECHO_PATTERNS 는 앞 40자까지
+#   지워야 해서 첫 문장을 통째로 붙들어야 했다). 골든셋 100문항(1.7B, 거르기 끔)에서 남은 9건:
+#     "근거 [1]에 따르면" 5건 · "근거 번호: [2]" · "[1] 형식으로 표기:" · "[1]의 근거 번호는 [1]입니다" ·
+#     끝 인용 두 번 찍기 "[1][3][1][3]"
+#   _SHORT_LIVE 는 스트리밍 중(끝맺음이 와야 지움), _SHORT_FINAL 은 답이 끝난 뒤(글 끝도 끝맺음).
+_SHORT_COMMON = (
+    re.compile(r"\[\d+\]\s*의\s*근거\s*번호는\s*\[\d+\]\s*입니다\.?"),
+    re.compile(r"근거\s*번호\s*:?\s*\[\d+\]"),
+    # 낱말 '근거' 뒤에 바로 인용 번호가 올 때만 — "근거 규정은 …" 같은 본문은 건드리지 않는다
+    re.compile(r"(?<![가-힣])근거\s*(?=\[\d+\])"),
+)
+_SHORT_FORMAT_LIVE = re.compile(r"(?:근거\s*번호\s*)?\[\d+\]\s*형식으로\s*(?:근거\s*번호를?\s*)?표기[^.\n:]*[.:]")
+_SHORT_FORMAT_FINAL = re.compile(r"(?:근거\s*번호\s*)?\[\d+\]\s*형식으로\s*(?:근거\s*번호를?\s*)?표기[^.\n:]*(?:[.:]|$)")
+# 인용 덩어리가 곧바로 한 번 더 — "[1][3][1][3]" → "[1][3]"
+_DUP_CITE_RUN = re.compile(r"(\[\d+\](?:\s*\[\d+\])*)\s*\1(?!\d)")
+# 붙들기 판정용 정규형(숫자→1, 공백·쌍점 제거)으로 적은 짧은 되뱉기 — 꼬리가 이것들의 앞부분이면 붙든다
+_SHORT_CANON = ("[1]의근거번호는[1]입니다", "[1]형식으로표기", "[1]형식으로근거번호표기", "[1]형식으로근거번호를표기",
+                "근거번호[1]형식으로표기", "근거번호[1]", "근거[1]")
+_FORMAT_CANON = ("[1]형식으로표기", "[1]형식으로근거번호표기", "[1]형식으로근거번호를표기", "근거번호[1]형식으로표기")
+_CANON_LEAD_RUN = re.compile(r"(?:\[1\])*")
+_CANON_RUN = re.compile(r"(?:\[1\])*(?:\[1?)?")
+
 
 #------------------------------------------------------------------
 # 실재하지 않는 인용 번호 제거 (핵심 — 구조 인식 청킹의 부작용)
@@ -232,6 +255,110 @@ def drop_invalid_cites(body, n_evidence=None):
 
 
 #------------------------------------------------------------------
+# 가벼운 정리 — 스트리밍으로 내보내는 조각에 바로 적용한다
+#=> strip_instruction_echo 가운데 앞뒤 글과 상관없이 조각 안에서 끝나는 것만 한다.
+#   공백은 건드리지 않는다(줄바꿈이 화면에 그대로 남게).
+#    1) 굵게 "**글**" → "글" (짝이 맞는 것만)
+#    2) 근거 n개 밖의 [k] 는 괄호만 벗긴다
+#
+# -in: text       = 조각
+# -in: n_evidence = 근거 개수(None 이면 인용 번호는 그대로)
+#
+# -out: 정리된 조각
+# -out: error = 없음
+#------------------------------------------------------------------
+def soft_clean(text, n_evidence=None):
+    return drop_invalid_cites(_MD_BOLD.sub(r"\1", text), n_evidence)
+
+
+#------------------------------------------------------------------
+# 짧은 되뱉기 지우기
+#=> 위 _SHORT_* 패턴을 지우고, 곧바로 되풀이된 인용 덩어리를 하나로 접는다. 공백은 건드리지 않는다.
+#
+# -in: text  = 본문(또는 스트리밍으로 받아 둔 글)
+# -in: final = True 면 답이 끝난 뒤 — "[1] 형식으로 표기" 를 글 끝에서도 지운다.
+#              False(스트리밍 중)면 마침표·쌍점·줄바꿈이 온 뒤에만 지운다(뒤가 더 올 수 있다)
+#
+# -out: 정리된 글
+# -out: error = 없음
+#------------------------------------------------------------------
+def short_clean(text, final=True):
+    # "근거 번호 [1] 형식으로 표기…" 를 통째로 지우려고 '형식으로 표기' 를 먼저 — 뒤에 하면 앞의
+    #   "근거 번호 [1]" 만 지워져 "형식으로 표기하세요." 가 남는다
+    text = (_SHORT_FORMAT_FINAL if final else _SHORT_FORMAT_LIVE).sub("", text)
+    for pat in _SHORT_COMMON:
+        text = pat.sub("", text)
+    # "[1][3][1][3][1][3]" 처럼 여러 번이어도 다 접히게 바뀌지 않을 때까지
+    while True:
+        folded = _DUP_CITE_RUN.sub(r"\1", text)
+        if folded == text:
+            return text
+        text = folded
+
+
+#------------------------------------------------------------------
+# 짧은 되뱉기 판정용 정규형
+#=> 숫자 덩어리는 1 로, 공백·쌍점은 지운다 — "[12] 형식으로" 와 "[1]형식으로" 를 같게 본다.
+#
+# -in: s = 글
+#
+# -out: 정규형 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def _canon(s):
+    return re.sub(r"\d+", "1", re.sub(r"[\s:]", "", s))
+
+
+#------------------------------------------------------------------
+# 이 꼬리가 짧은 되뱉기(또는 인용 덩어리)의 앞부분일 수 있는가
+#=> 중단 문자열과 같은 방식 — 끝까지 보기 전에는 모르는 꼬리만 붙든다.
+#    1) 인용 번호 덩어리 또는 그 앞부분("[", "[1", "[1][3") — 뒤에 같은 덩어리가 또 올 수 있다(③)
+#    2) 짧은 되뱉기 정규형의 앞부분("근", "근거", "근거 번호: [", "[1] 형식으")
+#    3) "[1] 형식으로 표기…" 는 끝맺음(. : 줄바꿈)이 올 때까지
+#
+# -in: tail = 받아 둔 글의 끝부분('[' 또는 '근' 으로 시작)
+#
+# -out: True = 붙들어야 한다
+# -out: error = 없음
+#------------------------------------------------------------------
+def _may_be_short_echo(tail):
+    c = _canon(tail)
+    if not c:
+        return False
+    if _CANON_RUN.fullmatch(c):
+        return True
+    # 인용 번호 덩어리 뒤에 짧은 되뱉기가 이어질 수도 있다 — "[1] 근거 [1]에 따르면"(골든셋 q011)은
+    #   앞의 "[1]" 이 먼저 나가면 '근거' 를 지운 뒤 "[1] [1]" 중복을 접을 수 없다
+    rest = c[_CANON_LEAD_RUN.match(c).end():]
+    for x in {c, rest}:
+        if not x:
+            continue
+        if any(lit.startswith(x) for lit in _SHORT_CANON):
+            return True
+        if any(x.startswith(lit) for lit in _FORMAT_CANON) and not re.search(r"[.:\n]", tail):
+            return True
+    return False
+
+
+#------------------------------------------------------------------
+# 스트리밍에서 끝에서 붙들 글자 수 (짧은 되뱉기 · 인용 덩어리)
+#=> 끝 window 글자 안에서 '[' 나 '근' 으로 시작하는 꼬리 가운데 짧은 되뱉기의 앞부분일 수 있는
+#   가장 앞 것부터 붙든다. 그런 꼬리가 없으면 0 — 바로 내보낸다(대부분의 경우).
+#
+# -in: text   = 받아 둔 글(아직 화면에 안 나간 부분)
+# -in: window = 살펴볼 끝 글자 수(기본 40 — 가장 긴 짧은 되뱉기보다 넉넉히)
+#
+# -out: 붙들 글자 수
+# -out: error = 없음
+#------------------------------------------------------------------
+def short_echo_hold(text, window=40):
+    for i in range(max(0, len(text) - window), len(text)):
+        if text[i] in "[근" and _may_be_short_echo(text[i:]):
+            return len(text) - i
+    return 0
+
+
+#------------------------------------------------------------------
 # 되뱉기·중복인용 정리
 #=> 지시문 되뱉기를 지우고, 끝에 반복된 인용 번호를 하나로 접는다.
 #   인용 번호 자체는 보존한다(순서 유지, 중복만 제거).
@@ -242,9 +369,32 @@ def drop_invalid_cites(body, n_evidence=None):
 # -out: 정리된 본문
 #------------------------------------------------------------------
 def strip_instruction_echo(body, n_evidence=None):
-    cleaned = _LEADING_MARKER.sub("", body)
-    for pat in _ECHO_PATTERNS:
-        cleaned = pat.sub(" ", cleaned)
+    return clean_answer(body, n_evidence, echo=True)
+
+
+#------------------------------------------------------------------
+# 답변 정리 — 되뱉기 거르기를 켜고 끌 수 있는 본체
+#=> strip_instruction_echo 와 같은 정리를 하되, echo=False 면 지시문 되뱉기
+#   (_ECHO_PATTERNS · 첫머리 [질문]/[근거] 표식)만 건너뛴다. 짧은 되뱉기(short_clean) · 굵게 별표 ·
+#   없는 인용 번호 · 끝 중복 인용 · 공백 정리는 켜고 끄는 것과 상관없이 한다.
+#   (config.yaml generation.echo_filter — 기본 끔. 켜면 화면 출력기가 첫 문장을 붙들어
+#    화면 첫 글자가 약 2초 늦어진다)
+#
+# -in: body       = 본문
+# -in: n_evidence = 근거 개수(주면 없는 인용 번호도 정리)
+# -in: echo       = True 면 지시문 되뱉기도 지운다
+#
+# -out: 정리된 본문 (정리 뒤 내용이 사라지면 원문)
+# -out: error = 없음
+#------------------------------------------------------------------
+def clean_answer(body, n_evidence=None, echo=True):
+    cleaned = body
+    if echo:
+        cleaned = _LEADING_MARKER.sub("", cleaned)
+        for pat in _ECHO_PATTERNS:
+            cleaned = pat.sub(" ", cleaned)
+    # 짧은 되뱉기·인용 덩어리 중복은 켬·끔과 상관없이 — 붙들 글이 몇 자뿐이라 지연이 없다
+    cleaned = short_clean(cleaned, final=True)
 
     # 굵게 표시는 내용이 아니라 꾸밈이다 — 별표만 벗기고 글자는 그대로 둔다
     cleaned = _MD_BOLD.sub(r"\1", cleaned)
@@ -285,10 +435,12 @@ def strip_instruction_echo(body, n_evidence=None):
 # -in: text       = 모델 원문 출력
 # -in: n_evidence = 실제 근거 개수. 주면 그 범위를 벗어난 인용을 버린다
 #                   (근거 3건에 `[12]` 가 달리는 결함 — drop_invalid_cites 참조)
+# -in: echo       = True(기본) 면 지시문 되뱉기도 지운다. 파이프라인은 설정
+#                   (generation.echo_filter)을 넘긴다
 #
 # -out: (body, cited) = 본문, 인용된 근거 번호 목록(예: [1, 3])
 #------------------------------------------------------------------
-def parse_answer(text, n_evidence=None):
+def parse_answer(text, n_evidence=None, echo=True):
     body = (text or "").strip()
 
     for marker in ("답변:", "인용:"):
@@ -296,7 +448,7 @@ def parse_answer(text, n_evidence=None):
             body = body.split(marker, 1)[1].strip()
             break
 
-    body = strip_instruction_echo(body, n_evidence)
+    body = clean_answer(body, n_evidence, echo=echo)
 
     cited = sorted({int(n) for n in re.findall(r"\[(\d+)\]", body)})
     # 본문 정리가 실패해도 목록에는 없는 번호가 새지 않도록 한 번 더 거른다.

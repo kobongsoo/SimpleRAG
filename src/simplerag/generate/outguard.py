@@ -19,11 +19,43 @@ LOOP_MIN_CHARS = 40
 HOLD_MIN_CHARS = 8
 # 상한까지 이만큼(토큰) 남으면 덜 끝난 문장을 붙든다
 TAIL_WINDOW = 48
+# 쓰는 중인 문장의 머리 OPEN_HEAD_MAX 자(인용 번호 "[3] " 등)만 빼고 나머지 OPEN_REP_MIN 자 이상이
+#   앞에 나온 글과 같으면 반복의 첫머리로 보고 문장째 붙든다
+OPEN_HEAD_MAX = 6
+OPEN_REP_MIN = 3
+# 한 번 반복의 첫머리로 보고 붙든 문장은, 같은 문장 안에서 앞 글과 같은 꼬리가 이만큼(글자) 이상
+#   이어지는 동안 계속 붙든다. 반복은 앞의 다른 곳으로 갈아타며 이어지기도 한다 — 골든셋 q096:
+#   "근거 [1]에 따르면, 2021년 " (둘째 문장 머리) → " 대비 2026년 …" (첫 문장 중간)으로 갈아타는 순간
+#   같은 꼬리가 "2021년 대" 7자로 짧아져 위 조건이 풀리고 문장 머리가 화면에 나갔다
+STICKY_REP_MIN = 5
 NOTE_CAPPED = "(답변이 길어 일부 생략)"
 NOTE_LOOP = "(같은 내용이 반복되어 이하 생략)"
 
-# 문장 끝 바로 뒤에 붙은 인용 번호 " [1][2]"
-_CITES_AFTER = re.compile(r"(?:[ \t]*\[\d+\])+")
+# 문장 끝 바로 뒤에 붙은 인용 번호 하나 " [1]"
+_CITE_AFTER = re.compile(r"[ \t]*\[\d+\]")
+
+
+#------------------------------------------------------------------
+# 문장 끝 뒤의 인용 번호를 그 문장으로 넣기
+#=> " [1][2]" 처럼 이어진 번호를 하나씩 보며, 뒤에 공백·글 끝이 오는 번호까지만 넣는다.
+#   "[3]에 따르면" 처럼 낱말이 바로 붙은 번호는 다음 문장의 머리라 넣지 않는다.
+#
+# -in: s = 글 / p = 문장부호 바로 뒤 위치
+#
+# -out: p = 인용 번호를 넣은 뒤의 위치(넣을 것이 없으면 그대로)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _absorb_cites(s, p):
+    best = p
+    q = p
+    while True:
+        m = _CITE_AFTER.match(s, q)
+        if not m:
+            return best
+        q = m.end()
+        # 번호 뒤가 공백·글 끝이면 여기까지는 앞 문장의 인용이다
+        if q >= len(s) or s[q].isspace():
+            best = q
 
 
 #------------------------------------------------------------------
@@ -83,9 +115,7 @@ def sentence_ends(s):
             continue
         p = k + 1
         if c != "\n":
-            m = _CITES_AFTER.match(s, p)
-            if m:
-                p = m.end()
+            p = _absorb_cites(s, p)
         if not out or p > out[-1]:
             out.append(p)
     return out
@@ -98,6 +128,7 @@ def sentence_ends(s):
 #
 # -필드: text = 지금까지 생성된 글 / sent = 내보낸 글자 수
 # -필드: halt = None | ("loop", 자를 위치) | ("capped", None)
+# -필드: held_open = 반복 의심으로 붙든 문장의 시작 위치(None = 없음) — STICKY_REP_MIN 참고
 #------------------------------------------------------------------
 class OutGuard:
     #------------------------------------------------------------------
@@ -109,6 +140,7 @@ class OutGuard:
         self.text = ""
         self.sent = 0
         self.halt = None
+        self.held_open = None
 
     #------------------------------------------------------------------
     # 조각 하나 받기
@@ -128,13 +160,30 @@ class OutGuard:
             # 겹친 꼬리가 앞 문장 끝("니다. ")부터 걸칠 수 있다 — 그 안의 첫 문장 경계에서 자른다
             start = n - rep
             cut = next((b for b in sentence_ends(self.text) if start <= b < n), start)
-            self.halt = ("loop", max(cut, self.sent))
+            # 이미 내보낸 곳보다 앞일 수도 있다 — 남길 답은 거기까지, 나간 꼬리는 출력기가 붙들고 있으면 버린다
+            self.halt = ("loop", cut)
             return ""
         hold = rep if rep >= HOLD_MIN_CHARS else 0
+        ends = sentence_ends(self.text)
+        last = ends[-1] if ends else 0
+        # 쓰는 중인 문장이 (머리 몇 글자만 빼고) 앞에 나온 글과 같다 — 반복의 첫머리일 수 있으니 문장째 붙든다
+        #   (8자 문턱만으로는 반복 문장의 첫 몇 글자 "[1] 기내" 가 먼저 화면에 나가 조각으로 남았다.
+        #    반복 문장은 머리의 인용 번호만 바뀌어 오기도 한다 — "[1] 청탁금지법…" → "[3] 청탁금지법")
+        #   둘째 문장부터는 머리 OPEN_HEAD_MAX 자를 늘 붙든다 — 머리("[2" 등)만으로는 반복인지 알 수 없다
+        open_len = len(self.text[last:].lstrip())
+        if open_len > 0 and ((last > 0 and open_len <= OPEN_HEAD_MAX) or open_len <= rep
+                             or (rep >= OPEN_REP_MIN and open_len - rep <= OPEN_HEAD_MAX)):
+            hold = max(hold, n - max(last, self.sent))
+            if last > 0 and open_len > OPEN_HEAD_MAX:
+                # 머리 몇 글자가 아니라 문장 자체가 앞 글과 겹쳐 붙든 것 — 이 문장을 기억해 둔다
+                self.held_open = last
+        elif self.held_open == last and rep >= STICKY_REP_MIN:
+            # 반복 의심 문장이 앞의 다른 곳으로 갈아타며 계속 겹친다 — 문장째 계속 붙든다(q096)
+            hold = max(hold, n - max(last, self.sent))
+        else:
+            self.held_open = None
         if left <= TAIL_WINDOW:
             # 상한이 가깝다 — 마지막 완결 문장 뒤는 잘릴 수 있으니 붙든다
-            ends = sentence_ends(self.text)
-            last = ends[-1] if ends else 0
             hold = max(hold, n - max(last, self.sent))
         safe = n - hold
         if safe > self.sent:
@@ -148,7 +197,8 @@ class OutGuard:
     #=> · 자연스럽게 끝남 / 중단 문자열: 그대로
     #    · 반복 루프: 반복이 시작된 곳 앞까지. 그곳이 문장 중간이면 마지막 완결 문장까지 + 표시
     #    · 상한: 마지막 완결 문장까지 + 표시
-    #    이미 내보낸 글자 앞으로는 자르지 못한다(그 경우 내보낸 데까지).
+    #    이미 내보낸 글자보다 앞에서 끝날 수도 있다 — 남길 답(text)은 거기까지로 돌려주고,
+    #    이미 나간 꼬리는 화면 출력기(StreamWriter.finish(final=…))가 아직 붙들고 있으면 버린다.
     #    완결 문장이 하나도 없으면 있는 그대로 둔다(빈 답보다 낫다).
     #
     # -in: capped = 상한에 닿아 멈췄나(호출자가 finish_reason 으로 안다)
@@ -172,7 +222,7 @@ class OutGuard:
             elif open_:
                 note = NOTE_LOOP
             if open_ and last > 0:
-                end = max(last, self.sent)
+                end = last
         emit = self.text[self.sent:end] if end > self.sent else ""
         self.sent = max(self.sent, end)
         return emit, self.text[:end], note

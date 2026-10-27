@@ -360,6 +360,16 @@ GEN_TEMPERATURE = 0.0
 FLATTEN_TABLES = ((os.environ["SIMPLERAG_FLATTEN_TABLES"] != "0")
                   if os.environ.get("SIMPLERAG_FLATTEN_TABLES")
                   else bool(_YAML.get("generation.flatten_tables", False)))
+# 지시문 되뱉기 거르기 — 답 끝에 지시문을 옮겨 적은 잡음("[1] 형식으로 표기합니다" 등)을 지운다.
+#   기본 끔: 켜면 스트리밍 화면 출력기가 되뱉기인지 판정하려고 첫 문장(최대 56자)을 붙들어
+#   화면 첫 글자가 TTFT 보다 약 2초 늦어진다(골든셋 100문항 실측 2026-10-26, 중앙값 2.07초).
+#   끄면 화면 첫 글자가 TTFT 와 거의 같아진다(차이 0.08초). 짧은 되뱉기("근거 [1]" · "[1] 형식으로 표기" 등)는
+#   끈 상태에서도 몇 글자만 붙들어 지운다(prompts.short_clean — 1.7B 골든셋 100문항 잡음 9건 → 0건).
+#   켜야만 지워지는 것은 "…(최대 40자) 간결하게 답변합니다" 같은 긴 되뱉기뿐이다.
+#   환경변수 SIMPLERAG_ECHO_FILTER=1/0 이 config.yaml 보다 앞선다.
+ECHO_FILTER = ((os.environ["SIMPLERAG_ECHO_FILTER"] != "0")
+               if os.environ.get("SIMPLERAG_ECHO_FILTER")
+               else bool(_YAML.get("generation.echo_filter", False)))
 # Parent-Child 실험 A(재설계서 §12) — 검색은 청크로 하고 sLLM 에는 그 청크가 속한 절(부모)을 넣는다.
 #   "off"(기본) | "section". blocks 엔진 인덱스(section_id 있음)에서만 효과가 있고 재색인은 필요 없다.
 #   근거 토큰이 늘어 TTFT 가 늘어난다 — 부모 상한은 parent_max_tokens(기본 400).

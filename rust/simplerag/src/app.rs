@@ -15,7 +15,7 @@ use crate::config::cfg;
 use crate::embed::{Embedder, Reranker};
 use crate::generate::backend;
 use crate::generate::generator::Generator;
-use crate::generate::prompts::parse_answer;
+use crate::generate::prompts::parse_answer_opt;
 use crate::pyutil;
 use crate::retrieve::{self, Chunk, Retriever, Timing};
 use crate::store::VectorStore;
@@ -206,7 +206,8 @@ impl App {
             on_event(Event::Token(piece.to_string()));
         })?;
         let t_end = Instant::now();
-        let (body, cited) = parse_answer(&out.text, Some(texts.len()));
+        // 되뱉기 거르기는 설정을 따른다(generation.echo_filter, 기본 끔)
+        let (body, cited) = parse_answer_opt(&out.text, Some(texts.len()), cfg().echo_filter);
         let first = t_first.unwrap_or(t_end);
         on_event(Event::Done(Done {
             answer: body,

@@ -54,7 +54,7 @@ def _force_utf8_output():
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass          # 재설정 불가한 스트림이면 그대로 둔다
-from simplerag.generate.prompts import strip_instruction_echo  # noqa: E402
+from simplerag.generate.prompts import clean_answer, short_clean, short_echo_hold, soft_clean  # noqa: E402
 from simplerag.index.indexer import index_folder      # noqa: E402
 from simplerag.warmup import App                      # noqa: E402
 from simplerag.generate import backend as gen_backend   # noqa: E402
@@ -184,6 +184,9 @@ def cmd_ask(args):
 #
 # -in: min_chars = 이만큼 모이면 내보낸다
 # -in: interval  = 이 시간이 지나면 길이와 무관하게 내보낸다(초)
+# -in: hold      = 끝에서 붙들어 두는 글자 수(아래 설명)
+# -in: cleaner   = 본문 정리 함수(되뱉기 제거) — 주면 내보내기 전에 걸리는 곳이 없는지 본다
+# -in: soft      = 내보낼 조각에 바로 적용할 정리(굵게 별표·없는 인용 번호) — 공백은 건드리지 않는 것
 #------------------------------------------------------------------
 class StreamWriter:
     #--------------------------------------------------------------
@@ -192,12 +195,31 @@ class StreamWriter:
     #   ("… 지급합니다. [1] 근거 번호 [1] 형식으로 표기합니다.").
     #   스트리밍은 토큰을 받는 즉시 찍기 때문에, 다 만든 뒤 지워 봐야
     #   화면에는 이미 나간 뒤다. 그래서 **끝에서 hold 글자만큼을 붙들어 둔다.**
-    #   관측된 되뱉기는 가장 긴 것이 약 30자라 90자면 충분하다.
+    #
+    #   예전에는 90자를 붙들어, 답의 첫 90자가 모일 때까지 화면이 비어 있었다
+    #   (1.7B 에서 워커 TTFT 보다 화면 첫 글자가 약 3.5초 늦었다 — 골든셋 100문항 실측).
+    #   지금은 아래 셋으로 같은 걸러 내기를 지키면서 덜 붙든다.
+    #    1) 붙드는 길이 56자 — 되뱉기 패턴 가운데 가장 긴 "…(40자) 바탕으로 답변하겠습니"
+    #       (아직 안 끝난 꼴)가 52자다. 이보다 앞의 글자는 앞으로 올 되뱉기에 걸릴 수 없다.
+    #    2) 문장 끝(. ! ? 뒤 공백, 줄바꿈)까지는 바로 내보낸다 — 되뱉기 패턴은 문장부호·줄바꿈을
+    #       넘지 않으므로 끝난 문장은 뒤에 무엇이 와도 걸리지 않는다. 뒤따르는 인용 번호는
+    #       "[1] 형식으로 표기" 되뱉기의 머리일 수 있어 붙든다.
+    #    3) 내보낼 조각까지 정리해 봐서 글자가 바뀌면(되뱉기·머리 표식 등) 내보내지 않고
+    #       마무리(finish)에 맡긴다. 굵게 별표·없는 인용 번호는 soft 로 걷어 내고 내보낸다.
     #--------------------------------------------------------------
-    def __init__(self, min_chars=40, interval=0.06, hold=90):
+    #--------------------------------------------------------------
+    # short — 짧은 되뱉기 거르기 (설계서 ②③, 되뱉기 거르기 끔일 때 render_answer 가 켠다)
+    #=> 긴 되뱉기 대신 "근거 [1]" · "[1] 형식으로 표기" 같은 짧은 잡음과 인용 덩어리 중복만 거른다.
+    #   받아 둔 글에서 다 온 것은 지우고(short_clean), 끝이 그 앞부분일 수 있을 때만 그 꼬리
+    #   (보통 2~6자, 최대 40자)를 붙든다 — 그렇지 않으면 바로 내보내 첫 글자가 늦지 않는다.
+    #--------------------------------------------------------------
+    def __init__(self, min_chars=40, interval=0.06, hold=56, cleaner=None, soft=None, short=False):
         self.min_chars = min_chars
         self.interval = interval
         self.hold = hold
+        self.cleaner = cleaner
+        self.soft = soft
+        self.short = short
         self._final = False      # finish() 이후로는 꼬리를 붙들지 않는다
         self._pending = ""       # 아직 화면에 안 나간 부분
         self._emitted = ""       # 이미 화면에 나간 부분
@@ -215,14 +237,31 @@ class StreamWriter:
 
     #--------------------------------------------------------------
     # 꼬리를 남기고 내보내기
-    #=> 보류 구간(hold)은 남겨 둔다. 마지막 정리는 finish() 가 한다.
+    #=> 보류 구간(hold)과 아직 안 끝난 문장의 끝부분은 남겨 둔다. 마지막 정리는 finish() 가 한다.
+    #    1) 내보낼 길이 = max(끝에서 hold 를 뺀 곳, 마지막 문장 끝)
+    #    2) 짝이 안 맞는 굵게 별표 "**" · 닫히지 않은 "[" 앞에서 끊는다(나중에 짝이 올 수 있다)
+    #    3) cleaner 로 정리해 봐서 글자가 바뀌면 이번에는 내보내지 않는다
+    #
+    # -in: 없음
+    # -out: 없음 (화면에 쓴다)
+    # -out: error = 없음
     #--------------------------------------------------------------
     def flush(self):
-        keep = self.hold if not self._final else 0
-        out = self._pending[:-keep] if keep else self._pending
+        if self._final:
+            out = self._pending
+            self._pending = ""
+        else:
+            if self.short:
+                # 아직 화면에 안 나간 글에서 다 온 짧은 되뱉기는 미리 지운다(끝맺음이 와야 지우는 판)
+                self._pending = short_clean(self._pending, final=False)
+            out = self._ready_part()
+            if not out:
+                return
+            self._pending = self._pending[len(out):]
+            if self.soft:
+                out = self.soft(out)
         if not out:
             return
-        self._pending = self._pending[len(out):]
         self._emitted += out
         sys.stdout.write(out)
         sys.stdout.flush()
@@ -247,19 +286,61 @@ class StreamWriter:
     #   되돌릴 방법이 없다. 이때는 손댈 수 있는 꼬리만 정리한다 — 보류 구간이
     #   90자이고 관측된 되뱉기가 30자 이내라 되뱉기는 꼬리 안에 들어온다.
     #
+    #   final(생성기가 정한 '남길 답')을 주면 받은 글 대신 그것을 기준으로 삼는다.
+    #   생성기가 반복·상한으로 잘라 낸 꼬리(반복 문장의 첫머리 등)가 아직 여기 붙들려
+    #   있으면 화면에 내보내지 않고 버린다. 이미 나간 뒤라면 더 붙이지 않는다.
+    #
     # -in: cleaner = 본문 정리 함수(없으면 그대로)
+    # -in: final   = 남길 답(없으면 받은 글 전체)
     #--------------------------------------------------------------
-    def finish(self, cleaner=None):
+    def finish(self, cleaner=None, final=None):
         self._final = True
-        full = self._emitted + self._pending
+        full = final if final is not None else self._emitted + self._pending
         cleaned = cleaner(full) if cleaner else full
 
         tail = self._tail_after(cleaned)
+        if tail is None and final is not None and _chars(self._emitted).startswith(_chars(cleaned)):
+            # 남길 답보다 이미 더 나갔다(잘라 낸 꼬리가 나간 뒤) — 되돌릴 수 없으니 더 붙이지 않는다
+            tail = ""
         if tail is None and cleaner:
             tail = cleaner(self._pending)
         if tail is not None:
             self._pending = tail
         self.flush()
+
+    #--------------------------------------------------------------
+    # 지금 내보내도 되는 앞부분 (flush 의 1~3)
+    #
+    # -in: 없음
+    # -out: 내보낼 원문 조각("" 이면 아직 없음)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _ready_part(self):
+        p = self._pending
+        if self.short:
+            # 짧은 되뱉기의 앞부분일 수 있는 꼬리만 붙든다(없으면 전부 내보낸다)
+            cut = len(p) - short_echo_hold(p)
+        else:
+            cut = max(len(p) - self.hold, _last_sentence_end(p))
+        out = p[:max(cut, 0)]
+        # 끝의 "*" 는 붙든다 — 모델이 "**" 를 "*" 두 토큰으로 내면 짝 세기가 어긋난다(골든셋 q025)
+        out = out.rstrip("*")
+        # 짝이 안 맞는 "**" 가 있으면 그 앞까지 — 닫는 별표가 오면 함께 걷어 낸다
+        if out.count("**") % 2:
+            out = out[:out.rfind("**")]
+        # 닫히지 않은 "[" 는 인용 번호의 앞부분일 수 있다
+        b = out.rfind("[")
+        if b >= 0 and "]" not in out[b:]:
+            out = out[:b]
+        if not out or not self.cleaner:
+            return out
+        soft = self.soft or (lambda t: t)
+        need = _chars(self._emitted + soft(out))
+        # 받아 둔 글 전체를 정리해 보고 내보낼 앞부분이 그대로인지 본다 — 뒤를 봐야 판정되는
+        #   되뱉기("근거 [1]" 의 '근거' 는 뒤에 [1] 이 와야 지운다, 골든셋 q096)도 놓치지 않게
+        if not _chars(self.cleaner(self._emitted + soft(p))).startswith(need):
+            return ""
+        return out
 
     #--------------------------------------------------------------
     # 이미 나간 부분을 건너뛴 나머지 구하기
@@ -280,6 +361,31 @@ class StreamWriter:
                 k += 1
             i += 1
         return None if k < len(need) else cleaned[i:]
+
+
+#------------------------------------------------------------------
+# 마지막 문장 끝 — 그 앞의 글은 되뱉기 패턴에 걸릴 수 없다
+#=> '.' '!' '?' 바로 뒤에 공백이 온 자리, 또는 줄바꿈 바로 뒤.
+#   소수점("3.5")·글 끝의 마침표는 문장 끝으로 보지 않는다(다음 글자를 봐야 안다).
+#
+# -in: s = 글
+#
+# -out: 위치(없으면 0)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _last_sentence_end(s):
+    for i in range(len(s) - 1, -1, -1):
+        c = s[i]
+        if c == "\n":
+            return i + 1
+        if c in ".!?" and i + 1 < len(s) and s[i + 1].isspace():
+            return i + 1
+    return 0
+
+
+# 공백을 뺀 글자들 — 정리 함수가 공백을 접어도 같은 글로 보려고
+def _chars(s):
+    return "".join(c for c in s if not c.isspace())
 
 
 #------------------------------------------------------------------
@@ -318,15 +424,28 @@ def _answer_setup_line(app):
 def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                   stream=True, folder=None):
     from simplerag.pipeline import NO_DOCS_IN_FOLDER, NO_RELEVANT
-    writer = StreamWriter()
     parts = []
     # 근거 개수. evidence 이벤트에서 정해지고, 마무리 정리 때 쓰인다 —
     # 없는 번호를 인용으로 찍는 결함을 막는다(prompts.drop_invalid_cites).
     n_ev = [None]
 
     # 붙들어 둔 꼬리를 마무리할 때 쓰는 정리기. 호출 시점의 n_ev 를 본다.
+    #   되뱉기 거르기를 끄면(기본) 되뱉기 패턴만 건너뛰고 별표·인용 번호·공백 정리는 그대로 한다.
     def clean(text):
-        return strip_instruction_echo(text, n_ev[0])
+        return clean_answer(text, n_ev[0], echo=config.ECHO_FILTER)
+
+    # 내보내는 조각에 바로 적용하는 정리 — 굵게 별표·없는 인용 번호(공백은 그대로)
+    def soft(text):
+        return soft_clean(text, n_ev[0])
+
+    if config.ECHO_FILTER:
+        # 켬: 정리기를 함께 넘겨 내보내기 전에 되뱉기에 걸리는지 본다 — 첫 문장(최대 56자)을
+        #   붙들어 화면 첫 글자가 약 2초 늦어진다
+        writer = StreamWriter(cleaner=clean, soft=soft)
+    else:
+        # 끔(기본): 꼬리를 붙들지 않고 바로 내보낸다. 짧은 되뱉기·인용 덩어리의 앞부분일 수 있는
+        #   꼬리(보통 2~6자)와 짝 없는 "**" · 닫히지 않은 "[" 만 잠깐 붙든다
+        writer = StreamWriter(hold=0, soft=soft, short=True)
 
     try:
         for event in app.pipeline.answer(query, top_k=top_k, max_tokens=max_tokens,
@@ -374,7 +493,8 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                 d = event[1]
                 if stream:
                     # 붙들어 둔 꼬리에서 지시문 되뱉기를 걷어내고 마무리한다.
-                    writer.finish(clean)
+                    #   생성기가 정한 남길 답(d["answer"])을 기준으로 — 잘라 낸 반복 첫머리가 나가지 않게
+                    writer.finish(clean, final=d.get("answer"))
                 else:
                     # 비스트리밍은 파이프라인이 이미 정리한 본문을 그대로 쓴다.
                     print(d["answer"].strip(), end="")

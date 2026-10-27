@@ -216,6 +216,8 @@ SCHEMA = {
         "model": _choice("qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"),
         # 근거 표를 "머리글: 값" 평문으로 펴서 넣는다(계획서 3-3, tableflat.py)
         "flatten_tables": _bool,
+        # 지시문 되뱉기 거르기 — 켜면 화면 첫 글자가 약 2초 늦어진다(기본 끔)
+        "echo_filter": _bool,
         # Parent-Child 실험 A — sLLM 에 청크 대신 그 청크의 절(부모)을 넣는다(재설계서 §12)
         "parent": _parent_mode,                     # off | section — YAML 의 off(=false)도 받는다
         "parent_max_tokens": _int(64, 1500),

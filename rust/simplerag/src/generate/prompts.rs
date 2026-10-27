@@ -140,6 +140,101 @@ fn fsub(re: &FRegex, s: &str, rep: &str) -> String {
     re.replace_all(s, rep).into_owned()
 }
 
+// ── 짧은 되뱉기 (거르기 켬·끔과 상관없이 지운다 — 설계서 ②③, Python _SHORT_* 와 같다) ──
+//   모양이 고정된 짧은 잡음이라 몇 글자만 붙들면 판정된다. 골든셋 100문항(1.7B, 거르기 끔)에서 남은 9건:
+//   "근거 [1]에 따르면" 5건 · "근거 번호: [2]" · "[1] 형식으로 표기:" · "[1]의 근거 번호는 [1]입니다" ·
+//   끝 인용 두 번 찍기 "[1][3][1][3]". LIVE 는 스트리밍 중(끝맺음이 와야 지움), FINAL 은 답이 끝난 뒤.
+static SHORT_COMMON: Lazy<Vec<FRegex>> = Lazy::new(|| {
+    vec![
+        FRegex::new(r"\[\d+\]\s*의\s*근거\s*번호는\s*\[\d+\]\s*입니다\.?").unwrap(),
+        FRegex::new(r"근거\s*번호\s*:?\s*\[\d+\]").unwrap(),
+        // 낱말 '근거' 뒤에 바로 인용 번호가 올 때만 — "근거 규정은 …" 같은 본문은 건드리지 않는다
+        FRegex::new(r"(?<![가-힣])근거\s*(?=\[\d+\])").unwrap(),
+    ]
+});
+static SHORT_FORMAT_LIVE: Lazy<FRegex> =
+    Lazy::new(|| FRegex::new(r"(?:근거\s*번호\s*)?\[\d+\]\s*형식으로\s*(?:근거\s*번호를?\s*)?표기[^.\n:]*[.:]").unwrap());
+static SHORT_FORMAT_FINAL: Lazy<FRegex> =
+    Lazy::new(|| FRegex::new(r"(?:근거\s*번호\s*)?\[\d+\]\s*형식으로\s*(?:근거\s*번호를?\s*)?표기[^.\n:]*(?:[.:]|$)").unwrap());
+// 인용 덩어리가 곧바로 한 번 더 — "[1][3][1][3]" → "[1][3]"
+static DUP_CITE_RUN: Lazy<FRegex> = Lazy::new(|| FRegex::new(r"(\[\d+\](?:\s*\[\d+\])*)\s*\1(?!\d)").unwrap());
+// 붙들기 판정용 정규형(숫자→1, 공백·쌍점 제거)으로 적은 짧은 되뱉기
+const SHORT_CANON: [&str; 7] = ["[1]의근거번호는[1]입니다", "[1]형식으로표기", "[1]형식으로근거번호표기", "[1]형식으로근거번호를표기", "근거번호[1]형식으로표기", "근거번호[1]", "근거[1]"];
+const FORMAT_CANON: [&str; 4] = ["[1]형식으로표기", "[1]형식으로근거번호표기", "[1]형식으로근거번호를표기", "근거번호[1]형식으로표기"];
+static CANON_LEAD_RUN: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?:\[1\])*").unwrap());
+static CANON_RUN: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?:\[1\])*(?:\[1?)?$").unwrap());
+static CANON_DIGITS: Lazy<Regex> = Lazy::new(|| Regex::new(r"\d+").unwrap());
+static CANON_DROP: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\s:]").unwrap());
+static TERMINATOR: Lazy<Regex> = Lazy::new(|| Regex::new(r"[.:\n]").unwrap());
+
+//------------------------------------------------------------------
+// 짧은 되뱉기 지우기 (Python short_clean 과 같다)
+//=> SHORT_* 를 지우고 곧바로 되풀이된 인용 덩어리를 하나로 접는다. 공백은 건드리지 않는다.
+//   final=false(스트리밍 중)면 "[1] 형식으로 표기" 는 끝맺음(. : 줄바꿈)이 온 뒤에만 지운다.
+//------------------------------------------------------------------
+pub fn short_clean(text: &str, final_: bool) -> String {
+    // "근거 번호 [1] 형식으로 표기…" 를 통째로 지우려고 '형식으로 표기' 를 먼저(Python 과 같은 순서)
+    let mut t = fsub(if final_ { &SHORT_FORMAT_FINAL } else { &SHORT_FORMAT_LIVE }, text, "");
+    for pat in SHORT_COMMON.iter() {
+        t = fsub(pat, &t, "");
+    }
+    // 여러 번 되풀이돼도 다 접히게 바뀌지 않을 때까지
+    loop {
+        let folded = fsub(&DUP_CITE_RUN, &t, "$1");
+        if folded == t {
+            return t;
+        }
+        t = folded;
+    }
+}
+
+// 판정용 정규형 — 숫자 덩어리는 1, 공백·쌍점은 지움
+fn canon(s: &str) -> String {
+    CANON_DIGITS.replace_all(&CANON_DROP.replace_all(s, ""), "1").into_owned()
+}
+
+// 이 꼬리가 짧은 되뱉기(또는 인용 덩어리)의 앞부분일 수 있는가 (Python _may_be_short_echo 와 같다)
+fn may_be_short_echo(tail: &str) -> bool {
+    let c = canon(tail);
+    if c.is_empty() {
+        return false;
+    }
+    if CANON_RUN.is_match(&c) {
+        return true;
+    }
+    // 인용 번호 덩어리 뒤에 짧은 되뱉기가 이어질 수도 있다 — "[1] 근거 [1]에 따르면"(골든셋 q011)
+    let rest = &c[CANON_LEAD_RUN.find(&c).map_or(0, |m| m.end())..];
+    for x in [c.as_str(), rest] {
+        if x.is_empty() {
+            continue;
+        }
+        if SHORT_CANON.iter().any(|lit| lit.starts_with(x)) {
+            return true;
+        }
+        if FORMAT_CANON.iter().any(|lit| x.starts_with(lit)) && !TERMINATOR.is_match(tail) {
+            return true;
+        }
+    }
+    false
+}
+
+//------------------------------------------------------------------
+// 스트리밍에서 끝에서 붙들 글자 수 (Python short_echo_hold 와 같다)
+//=> 끝 window 글자 안에서 '[' 나 '근' 으로 시작하는 꼬리 가운데 짧은 되뱉기의 앞부분일 수 있는
+//   가장 앞 것부터 붙든다. 없으면 0 — 바로 내보낸다.
+//------------------------------------------------------------------
+pub fn short_echo_hold(text: &str, window: usize) -> usize {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let n = chars.len();
+    for k in n.saturating_sub(window)..n {
+        let (b, ch) = chars[k];
+        if (ch == '[' || ch == '근') && may_be_short_echo(&text[b..]) {
+            return n - k;
+        }
+    }
+    0
+}
+
 //------------------------------------------------------------------
 // 없는 인용 번호의 괄호 벗기기 — 근거 n개 밖의 [k] 는 숫자만 남긴다(값일 수 있으니 지우지 않는다)
 //------------------------------------------------------------------
@@ -158,15 +253,39 @@ pub fn drop_invalid_cites(body: &str, n_evidence: Option<usize>) -> String {
 }
 
 //------------------------------------------------------------------
+// 가벼운 정리 — 스트리밍으로 내보내는 조각에 바로 적용한다(Python soft_clean 과 같다)
+//=> strip_instruction_echo 가운데 조각 안에서 끝나는 것만: 굵게 "**글**" → "글", 근거 밖 [k] 괄호 벗기기.
+//   공백은 건드리지 않는다(줄바꿈이 화면에 그대로 남게).
+//------------------------------------------------------------------
+pub fn soft_clean(text: &str, n_evidence: Option<usize>) -> String {
+    drop_invalid_cites(&MD_BOLD.replace_all(text, "$1"), n_evidence)
+}
+
+//------------------------------------------------------------------
 // 되뱉기·중복 인용 정리
 //=> 지시문을 옮겨 적은 부분을 지우고, 끝에 반복된 인용을 하나로 접고, 공백을 정리한다.
 //   정리 뒤 본문이 사라지면(숫자·괄호·마침표만 남으면) 원문을 돌려준다.
 //------------------------------------------------------------------
 pub fn strip_instruction_echo(body: &str, n_evidence: Option<usize>) -> String {
-    let mut cleaned = LEADING_MARKER.replace(body, "").into_owned();
-    for pat in ECHO_PATTERNS.iter() {
-        cleaned = fsub(pat, &cleaned, " ");
+    clean_answer(body, n_evidence, true)
+}
+
+//------------------------------------------------------------------
+// 답변 정리 — 되뱉기 거르기를 켜고 끌 수 있는 본체 (Python clean_answer 와 같다)
+//=> echo=false 면 지시문 되뱉기(ECHO_PATTERNS · 첫머리 [질문]/[근거] 표식)만 건너뛴다.
+//   굵게 별표 · 없는 인용 번호 · 끝 중복 인용 · 공백 정리는 켜고 끄는 것과 상관없이 한다.
+//   (config.yaml generation.echo_filter — 기본 끔. 켜면 화면 첫 글자가 약 2초 늦어진다)
+//------------------------------------------------------------------
+pub fn clean_answer(body: &str, n_evidence: Option<usize>, echo: bool) -> String {
+    let mut cleaned = body.to_string();
+    if echo {
+        cleaned = LEADING_MARKER.replace(&cleaned, "").into_owned();
+        for pat in ECHO_PATTERNS.iter() {
+            cleaned = fsub(pat, &cleaned, " ");
+        }
     }
+    // 짧은 되뱉기·인용 덩어리 중복은 켬·끔과 상관없이 — 붙들 글이 몇 자뿐이라 지연이 없다
+    cleaned = short_clean(&cleaned, true);
     cleaned = MD_BOLD.replace_all(&cleaned, "$1").into_owned();
     cleaned = MD_STRAY.replace_all(&cleaned, "").into_owned();
     cleaned = drop_invalid_cites(&cleaned, n_evidence);
@@ -197,6 +316,11 @@ pub fn strip_instruction_echo(body: &str, n_evidence: Option<usize>) -> String {
 //=> "답변:" / "인용:" 머리말이 있으면 그 뒤를 본문으로 본다.
 //------------------------------------------------------------------
 pub fn parse_answer(text: &str, n_evidence: Option<usize>) -> (String, Vec<usize>) {
+    parse_answer_opt(text, n_evidence, true)
+}
+
+// 출력 파싱 — 되뱉기 거르기를 고를 수 있는 본체. 파이프라인은 설정(generation.echo_filter)을 넘긴다
+pub fn parse_answer_opt(text: &str, n_evidence: Option<usize>, echo: bool) -> (String, Vec<usize>) {
     let mut body = pyutil::strip(text).to_string();
     for marker in ["답변:", "인용:"] {
         if let Some(i) = body.find(marker) {
@@ -204,7 +328,7 @@ pub fn parse_answer(text: &str, n_evidence: Option<usize>) -> (String, Vec<usize
             break;
         }
     }
-    body = strip_instruction_echo(&body, n_evidence);
+    body = clean_answer(&body, n_evidence, echo);
     let mut cited: Vec<usize> = CITE.captures_iter(&body).filter_map(|c| c[1].parse().ok()).collect();
     cited.sort();
     cited.dedup();
