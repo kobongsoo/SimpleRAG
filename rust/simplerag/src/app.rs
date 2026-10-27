@@ -15,10 +15,14 @@ use crate::config::cfg;
 use crate::embed::{Embedder, Reranker};
 use crate::generate::backend;
 use crate::generate::generator::Generator;
-use crate::generate::prompts::parse_answer_opt;
+use crate::generate::prompts::{parse_answer_opt, recite};
 use crate::pyutil;
 use crate::retrieve::{self, Chunk, Retriever, Timing};
 use crate::store::VectorStore;
+
+// 본문의 인용 번호 — 바로잡은 뒤 인용 목록을 다시 센다
+static CITE_NUM: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"\[(\d+)\]").unwrap());
 
 pub const NO_DOCS_IN_FOLDER: &str = "이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다. 범위를 '지정 폴더 전체' 로 넓히거나, 문서가 인덱싱될 때까지 기다려 주세요.";
 pub const NO_RELEVANT: &str = "질문에 대한 내용이 문서에 없습니다. 답변할 수 없습니다.";
@@ -182,7 +186,8 @@ impl App {
         };
         on_event(Event::Evidence(chunks.clone(), timing.clone()));
         let done_simple = |answer: &str| Done {
-            answer: answer.to_string(), cited: vec![], note: None, ttft_s: 0.0, llm_ttft_s: None,
+            answer: answer.to_string(), answer_stream: answer.to_string(), cited: vec![], cite_fixes: vec![],
+            note: None, ttft_s: 0.0, llm_ttft_s: None,
             total_s: pyutil::round_to(t0.elapsed().as_secs_f64(), 2), timing: timing.clone(),
         };
         if chunks.is_empty() {
@@ -207,11 +212,21 @@ impl App {
         })?;
         let t_end = Instant::now();
         // 되뱉기 거르기는 설정을 따른다(generation.echo_filter, 기본 끔)
-        let (body, cited) = parse_answer_opt(&out.text, Some(texts.len()), cfg().echo_filter);
+        let (body, _) = parse_answer_opt(&out.text, Some(texts.len()), cfg().echo_filter);
+        // 인용 번호 바로잡기(설계서 ⑤) — answer 는 다 고친 답, answer_stream 은 문장 끝 뒤 번호만 고친 답
+        //   (스트리밍 화면은 문장 앞 번호를 이미 내보냈으니 화면 출력기는 이것으로 마무리한다)
+        let (fixed, cite_fixes) = recite(&body, &texts, false, 0);
+        let (answer_stream, _) = recite(&body, &texts, true, 0);
+        let mut cited: Vec<usize> = CITE_NUM.captures_iter(&fixed).filter_map(|c| c[1].parse().ok())
+            .filter(|n| (1..=texts.len()).contains(n)).collect();
+        cited.sort();
+        cited.dedup();
         let first = t_first.unwrap_or(t_end);
         on_event(Event::Done(Done {
-            answer: body,
+            answer: fixed,
+            answer_stream,
             cited,
+            cite_fixes,
             note: out.note,
             ttft_s: pyutil::round_to((first - t0).as_secs_f64(), 2),
             llm_ttft_s: Some(pyutil::round_to((first - t_gen0).as_secs_f64(), 2)),
@@ -255,7 +270,11 @@ pub enum Event {
 
 pub struct Done {
     pub answer: String,
+    // 문장 끝 뒤 인용 번호만 바로잡은 답 — 스트리밍 화면 출력기가 마무리 기준으로 쓴다(설계서 ⑤)
+    pub answer_stream: String,
     pub cited: Vec<usize>,
+    // 바로잡은 인용 번호 (원래, 바꾼) — 소요 블록 "인용 근거" 줄에 함께 적는다
+    pub cite_fixes: Vec<(usize, usize)>,
     // 답을 잘라 냈다는 표시(반복 루프 · 상한) — 본문 뒤에 따로 보여 준다
     pub note: Option<&'static str>,
     pub ttft_s: f64,

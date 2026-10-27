@@ -54,7 +54,7 @@ def _force_utf8_output():
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass          # 재설정 불가한 스트림이면 그대로 둔다
-from simplerag.generate.prompts import clean_answer, short_clean, short_echo_hold, soft_clean  # noqa: E402
+from simplerag.generate.prompts import clean_answer, recite, short_clean, short_echo_hold, soft_clean  # noqa: E402
 from simplerag.index.indexer import index_folder      # noqa: E402
 from simplerag.warmup import App                      # noqa: E402
 from simplerag.generate import backend as gen_backend   # noqa: E402
@@ -213,6 +213,10 @@ class StreamWriter:
     #   받아 둔 글에서 다 온 것은 지우고(short_clean), 끝이 그 앞부분일 수 있을 때만 그 꼬리
     #   (보통 2~6자, 최대 40자)를 붙든다 — 그렇지 않으면 바로 내보내 첫 글자가 늦지 않는다.
     #--------------------------------------------------------------
+    #--------------------------------------------------------------
+    # evidence — 인용 번호 바로잡기(설계서 ⑤)용 근거 본문 목록. render_answer 가 근거 사건에서 채운다.
+    #   문장 끝 뒤의 번호("…다. [1]")는 문장이 다 쓰인 뒤에 오므로 내보내기 직전에 바로잡을 수 있다.
+    #--------------------------------------------------------------
     def __init__(self, min_chars=40, interval=0.06, hold=56, cleaner=None, soft=None, short=False):
         self.min_chars = min_chars
         self.interval = interval
@@ -220,6 +224,7 @@ class StreamWriter:
         self.cleaner = cleaner
         self.soft = soft
         self.short = short
+        self.evidence = None
         self._final = False      # finish() 이후로는 꼬리를 붙들지 않는다
         self._pending = ""       # 아직 화면에 안 나간 부분
         self._emitted = ""       # 이미 화면에 나간 부분
@@ -260,6 +265,8 @@ class StreamWriter:
             self._pending = self._pending[len(out):]
             if self.soft:
                 out = self.soft(out)
+            if self.evidence:
+                out = self._recite_out(out)
         if not out:
             return
         self._emitted += out
@@ -268,6 +275,24 @@ class StreamWriter:
         self._n = 0
         self._last = time.perf_counter()
         self.writes += 1
+
+    #--------------------------------------------------------------
+    # 내보낼 조각의 문장 끝 뒤 인용 번호 바로잡기
+    #=> 이미 나간 글 + 이 조각 + 아직 붙든 글을 함께 보고(뒤에 낱말이 오는지 알아야 문장 앞 번호와
+    #   가릴 수 있다) 이 조각 안의 번호만 고친다. 글자 수가 바뀌면(두 자리 번호 등) 고치지 않는다.
+    #
+    # -in: out = 내보낼 조각(정리 뒤)
+    #
+    # -out: 바로잡은 조각
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _recite_out(self, out):
+        head = self._emitted
+        full = head + out + self._pending
+        fixed, fixes = recite(full, self.evidence, trailing_only=True, start=len(head))
+        if not fixes or len(fixed) != len(full):
+            return out
+        return fixed[len(head):len(head) + len(out)]
 
     #--------------------------------------------------------------
     # 마무리 — 되뱉기를 지운 뒤 남은 꼬리를 내보낸다
@@ -455,6 +480,8 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
             if kind == "evidence":
                 chunks, timing = event[1], event[2]
                 n_ev[0] = len(chunks)
+                # 문장 끝 뒤 인용 번호를 내보내기 전에 바로잡으려고 근거 본문을 넘긴다(설계서 ⑤)
+                writer.evidence = [c["text"] for c in chunks]
                 if folder and timing.get("scope_docs") == 0:
                     # 폴더에 인덱싱된 문서가 없다 — 근거 머리 없이 안내만 낸다.
                     # (RAGSearchBox 는 근거 머리가 없는 출력을 그대로 패널에 보여 준다)
@@ -494,7 +521,8 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                 if stream:
                     # 붙들어 둔 꼬리에서 지시문 되뱉기를 걷어내고 마무리한다.
                     #   생성기가 정한 남길 답(d["answer"])을 기준으로 — 잘라 낸 반복 첫머리가 나가지 않게
-                    writer.finish(clean, final=d.get("answer"))
+                    #   문장 앞 번호는 이미 나갔으니 문장 끝 뒤 번호만 고친 답(answer_stream)으로 맞춘다
+                    writer.finish(clean, final=d.get("answer_stream", d.get("answer")))
                 else:
                     # 비스트리밍은 파이프라인이 이미 정리한 본문을 그대로 쓴다.
                     print(d["answer"].strip(), end="")
@@ -518,8 +546,12 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                     # 어떤 모델·근거 방식으로 만든 답인지 함께 남긴다(RAGSearchBox chat_parser 가 읽는다)
                     print("  " + _answer_setup_line(app))
                     if d["cited"]:
-                        print("  인용 근거: {}".format(
-                            ", ".join("[{}]".format(n) for n in d["cited"])))
+                        # 바로잡은 번호가 있으면 무엇을 바꿨는지 함께 — 본문에 이미 나간 문장 앞 번호는
+                        #   못 고쳤을 수 있어 이 줄이 기준이다(설계서 ⑤)
+                        fx = ", ".join("[{}]→[{}]".format(a, b) for a, b in d.get("cite_fixes") or [])
+                        print("  인용 근거: {}{}".format(
+                            ", ".join("[{}]".format(n) for n in d["cited"]),
+                            " (인용 번호 바로잡음: {})".format(fx) if fx else ""))
                 else:
                     print()
     except KeyboardInterrupt:

@@ -269,11 +269,14 @@ def parse_block(seg, t_send, t_first, t_done):
     m_ans = re.search(r"── 답변[^\n]*\n(.*?)\n\s*\n── 소요", seg, re.S)
     m_t = re.search(r"첫 글자 ([\d.]+)s / 완료 ([\d.]+)s", seg)
     m_r = re.search(r"검색 (\d+)ms", seg)
+    # 소요 블록의 인용 근거 줄(바로잡은 번호 내역 포함) — 설계서 ⑤ 확인용
+    m_c = re.search(r"인용 근거: ([^\r\n]+)", seg)
     return {"evidence": [{"path": e.get("path"), "text": e.get("text")} for e in ev],
             "answer": m_ans.group(1).strip() if m_ans else None,
             "ttft_s": float(m_t.group(1)) if m_t else None,
             "total_s": float(m_t.group(2)) if m_t else None,
             "retrieval_ms": int(m_r.group(1)) if m_r else None,
+            "cited_line": m_c.group(1).strip() if m_c else None,
             "ext_first_s": None if t_first is None else round(t_first - t_send, 3),
             "ext_total_s": round(t_done - t_send, 3),
             "raw": None if m_ans else seg.strip()[-500:]}

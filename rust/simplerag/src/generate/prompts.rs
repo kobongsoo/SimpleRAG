@@ -188,6 +188,107 @@ pub fn short_clean(text: &str, final_: bool) -> String {
     }
 }
 
+// ── 인용 번호 바로잡기 (설계서 ⑤, Python recite 와 같다) ──────────────────
+//   답의 내용은 맞는데 번호가 엉뚱한 근거를 가리키는 일이 있다(지시문 예시 "[1] 형식으로" 탓인지 [1] 로 쏠린다).
+//   문장의 수치가 인용한 근거에는 하나도 없고 다른 근거 하나에만 모두 있으면 그 번호로 바꾼다.
+static FACT_NUM: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d(?:[\d,.]*\d)?)\s*([가-힣%]?)").unwrap());
+static SENT_END: Lazy<FRegex> = Lazy::new(|| FRegex::new(r"[.!?](?=\s|$)|\n").unwrap());
+static CITE_RUN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\d+\](?:[\s,]*\[\d+\])*").unwrap());
+static TRAILING_POS: Lazy<Regex> = Lazy::new(|| Regex::new(r"[.!?]\s*$").unwrap());
+static NORM_EV: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\s,]").unwrap());
+
+// 문장의 수치 — 인용 번호를 뺀 문장의 (숫자, 단위). 단위 없는 한 자리 숫자(목록 번호 등)는 뺀다
+fn facts(sentence: &str) -> Vec<(String, String)> {
+    let s = CITE.replace_all(sentence, " ");
+    FACT_NUM
+        .captures_iter(&s)
+        .map(|c| (c[1].replace(',', ""), c.get(2).map_or("", |m| m.as_str()).to_string()))
+        .filter(|(num, unit)| num.chars().count() >= 2 || !unit.is_empty())
+        .collect()
+}
+
+// 수치가 근거에 있는가 — "숫자+단위" 가 있거나, 세 자리 이상 숫자는 숫자만 있어도(표처럼 단위가 떨어진 근거)
+fn fact_in(fact: &(String, String), ev: &str) -> bool {
+    let (num, unit) = fact;
+    ev.contains(&format!("{}{}", num, unit)) || (num.replace('.', "").chars().count() >= 3 && ev.contains(num.as_str()))
+}
+
+// 인용 하나가 가리킬 근거 — 문장 수치가 근거 k 에 하나라도 있으면 그대로, 다른 근거 하나에만 모두 있으면 그 번호
+fn recite_one(sentence: &str, k: usize, evs: &[String]) -> usize {
+    let f = facts(sentence);
+    if f.is_empty() || k < 1 || k > evs.len() {
+        return k;
+    }
+    if f.iter().any(|x| fact_in(x, &evs[k - 1])) {
+        return k;
+    }
+    let cands: Vec<usize> = (1..=evs.len()).filter(|&j| j != k && f.iter().all(|x| fact_in(x, &evs[j - 1]))).collect();
+    if cands.len() == 1 { cands[0] } else { k }
+}
+
+// 문장 경계 끝 위치들(바이트) — SENT_END 의 끝
+fn sent_end_positions(s: &str) -> Vec<usize> {
+    SENT_END.find_iter(s).filter_map(|m| m.ok()).map(|m| m.end()).collect()
+}
+
+//------------------------------------------------------------------
+// 인용 번호 바로잡기 (Python recite 와 같다)
+//=> 인용 덩어리마다 딸린 문장을 정해 recite_one 으로 고른다.
+//    · 문장부호 바로 뒤이고 뒤에 낱말이 이어지지 않는 덩어리("…다. [1]") → 앞 문장의 출처
+//    · 그 밖("[1]에 따르면 …", "…다. [3] 근거에 따르면 …") → 덩어리가 들어 있는 문장
+//    · 번호가 여럿인 덩어리("[1], [2], [3]")는 건드리지 않는다
+//   trailing_only = 앞 문장의 출처인 덩어리만(스트리밍), start = 이 위치(바이트) 앞의 덩어리는 건너뜀
+//   돌려줌: (고친 본문, [(원래 번호, 바꾼 번호)])
+//------------------------------------------------------------------
+pub fn recite(body: &str, evidence: &[String], trailing_only: bool, start: usize) -> (String, Vec<(usize, usize)>) {
+    if body.is_empty() || evidence.is_empty() {
+        return (body.to_string(), vec![]);
+    }
+    let evs: Vec<String> = evidence.iter().map(|e| NORM_EV.replace_all(e, "").into_owned()).collect();
+    let mut out = String::new();
+    let mut fixes = vec![];
+    let mut last = 0usize;
+    for run in CITE_RUN.find_iter(body) {
+        let nums: std::collections::BTreeSet<usize> =
+            CITE.captures_iter(run.as_str()).filter_map(|c| c[1].parse().ok()).collect();
+        if run.start() < start || nums.len() != 1 {
+            continue;
+        }
+        let k = *nums.iter().next().unwrap();
+        let before = &body[..run.start()];
+        let after = &body[run.end()..];
+        let nxt = after.trim_start_matches([' ', '\t']).chars().next();
+        let word_follows = nxt.map_or(false, |c| c.is_alphanumeric());
+        let trailing = TRAILING_POS.is_match(before) && !word_follows;
+        let sentence: &str = if trailing {
+            let head = before.trim_end();
+            // 끝의 문장부호 하나를 뺀 곳에서 앞 문장 경계를 찾는다
+            let cut = head.char_indices().last().map_or(0, |(i, _)| i);
+            let from = sent_end_positions(&head[..cut]).last().copied().unwrap_or(0);
+            &head[from..]
+        } else if trailing_only {
+            continue;
+        } else {
+            let from = sent_end_positions(before).last().copied().unwrap_or(0);
+            let to = SENT_END
+                .find_from_pos(body, run.end())
+                .ok()
+                .flatten()
+                .map_or(body.len(), |m| m.end());
+            &body[from..to]
+        };
+        let j = recite_one(sentence, k, &evs);
+        if j != k {
+            out.push_str(&body[last..run.start()]);
+            out.push_str(&CITE.replace_all(run.as_str(), format!("[{}]", j).as_str()));
+            last = run.end();
+            fixes.push((k, j));
+        }
+    }
+    out.push_str(&body[last..]);
+    (out, fixes)
+}
+
 // 판정용 정규형 — 숫자 덩어리는 1, 공백·쌍점은 지움
 fn canon(s: &str) -> String {
     CANON_DIGITS.replace_all(&CANON_DROP.replace_all(s, ""), "1").into_owned()

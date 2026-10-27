@@ -15,7 +15,7 @@ use crate::app::{App, Event, NO_DOCS_IN_FOLDER, NO_RELEVANT};
 use crate::commands;
 use crate::config::{self, cfg};
 use crate::generate::backend;
-use crate::generate::prompts::{clean_answer, short_clean, short_echo_hold, soft_clean, strip_instruction_echo};
+use crate::generate::prompts::{clean_answer, recite, short_clean, short_echo_hold, soft_clean, strip_instruction_echo};
 use crate::indexer;
 use crate::pyutil;
 use crate::retrieve::tget;
@@ -178,13 +178,16 @@ struct StreamWriter {
     // 짧은 되뱉기 거르기(설계서 ②③, 끔일 때 켠다) — 다 온 짧은 잡음은 지우고, 그 앞부분일 수 있는
     //   꼬리(보통 2~6자, 최대 40자)만 붙든다
     short: bool,
+    // 인용 번호 바로잡기(설계서 ⑤)용 근거 본문 — 근거 사건에서 채운다. 문장 끝 뒤 번호("…다. [1]")는
+    //   문장이 다 쓰인 뒤에 오므로 내보내기 직전에 바로잡을 수 있다
+    evidence: Option<Vec<String>>,
     // 시험용 — Some 이면 화면 대신 여기에 모은다
     capture: Option<String>,
 }
 
 impl StreamWriter {
     fn new() -> Self {
-        StreamWriter { min_chars: 40, interval: 0.06, hold: 56, fin: false, pending: String::new(), emitted: String::new(), n: 0, last: Instant::now(), n_ev: None, echo: true, short: false, capture: None }
+        StreamWriter { min_chars: 40, interval: 0.06, hold: 56, fin: false, pending: String::new(), emitted: String::new(), n: 0, last: Instant::now(), n_ev: None, echo: true, short: false, evidence: None, capture: None }
     }
     // 설정에 맞춘 출력기 — echo=false(기본)면 꼬리를 붙들지 않고 되뱉기 검사도 하지 않는다
     fn with_echo(echo: bool) -> Self {
@@ -238,6 +241,21 @@ impl StreamWriter {
             self.flush();
         }
     }
+    // 내보낼 조각의 문장 끝 뒤 인용 번호 바로잡기 — 이미 나간 글 + 조각 + 붙든 글을 함께 보고(뒤에 낱말이
+    //   오는지 알아야 문장 앞 번호와 가릴 수 있다) 조각 안의 번호만 고친다. 길이가 바뀌면 고치지 않는다
+    fn recite_out(&self, out_s: String) -> String {
+        let ev = match &self.evidence {
+            Some(e) if !e.is_empty() => e,
+            _ => return out_s,
+        };
+        let head = self.emitted.len();
+        let full = format!("{}{}{}", self.emitted, out_s, self.pending);
+        let (fixed, fixes) = recite(&full, ev, true, head);
+        if fixes.is_empty() || fixed.len() != full.len() {
+            return out_s;
+        }
+        fixed[head..head + out_s.len()].to_string()
+    }
     fn flush(&mut self) {
         let out_s = if self.fin {
             std::mem::take(&mut self.pending)
@@ -251,7 +269,8 @@ impl StreamWriter {
                 return;
             }
             self.pending = self.pending[raw.len()..].to_string();
-            soft_clean(&raw, self.n_ev)
+            let soft = soft_clean(&raw, self.n_ev);
+            self.recite_out(soft)
         };
         if out_s.is_empty() {
             return;
@@ -349,6 +368,8 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
             Event::Evidence(chunks, timing) => {
                 n_ev = Some(chunks.len());
                 writer.n_ev = n_ev;
+                // 문장 끝 뒤 인용 번호를 내보내기 전에 바로잡으려고 근거 본문을 넘긴다(설계서 ⑤)
+                writer.evidence = Some(chunks.iter().map(|c| c.text.clone()).collect());
                 if folder.is_some() && timing.get("scope_docs").and_then(|v| v.as_i64()) == Some(0) {
                     outln(&format!("\n{}\n", NO_DOCS_IN_FOLDER));
                     early = true;
@@ -393,7 +414,8 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
             }
             Event::Done(d) => {
                 if stream {
-                    writer.finish(n_ev, Some(&d.answer));
+                    // 문장 앞 번호는 이미 나갔으니 문장 끝 뒤 번호만 고친 답(answer_stream)으로 맞춘다
+                    writer.finish(n_ev, Some(&d.answer_stream));
                 } else {
                     out(pyutil::strip(&d.answer));
                 }
@@ -415,7 +437,11 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                 outln(&format!("  첫 글자 {:.2}s / 완료 {:.2}s", d.ttft_s, d.total_s));
                 outln(&format!("  {}", answer_setup_line(app)));
                 if !d.cited.is_empty() {
-                    outln(&format!("  인용 근거: {}", d.cited.iter().map(|n| format!("[{}]", n)).collect::<Vec<_>>().join(", ")));
+                    // 바로잡은 번호가 있으면 무엇을 바꿨는지 함께 — 본문에 이미 나간 문장 앞 번호는 못 고쳤을 수 있다
+                    let fx = d.cite_fixes.iter().map(|(a, b)| format!("[{}]→[{}]", a, b)).collect::<Vec<_>>().join(", ");
+                    outln(&format!("  인용 근거: {}{}",
+                        d.cited.iter().map(|n| format!("[{}]", n)).collect::<Vec<_>>().join(", "),
+                        if fx.is_empty() { String::new() } else { format!(" (인용 번호 바로잡음: {})", fx) }));
                 }
             }
         }
@@ -1183,6 +1209,45 @@ mod tests {
         }
         w.finish(Some(n), None);
         (w.capture.unwrap(), first)
+    }
+
+    #[test]
+    fn citations_are_reattached() {
+        // 인용 번호 바로잡기(설계서 ⑤) — Python bench/test_output_cleanup.py 의 같은 사례
+        use crate::generate::prompts::recite;
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let q013 = s(&["이사회는 대표이사가 소집한다.", "정기이사회는 매 분기 종료 후 20일 내에 개최한다.", "임시이사회는 필요시 개최한다."]);
+        let q076 = s(&["유니콘 기업 목록 Byju's 인도", "VIPKid 중국 외국어 교육 45억 달러", "에듀테크 시장 동향"]);
+        let cases: Vec<(&str, Vec<String>, &str)> = vec![
+            ("정기이사회는 매 분기 종료 후 20일 내에 개최합니다.  [1]", q013.clone(), "정기이사회는 매 분기 종료 후 20일 내에 개최합니다.  [2]"),
+            ("[3] 근거에 따르면, VIPKid의 기업가치 평가액은 45억 달러입니다. [1]", q076.clone(),
+             "[2] 근거에 따르면, VIPKid의 기업가치 평가액은 45억 달러입니다. [2]"),
+            ("최종 6개이다. [1], [2], [3] 근거에 따르면 6개이다.", s(&["가", "6개 선정", "다"]), "최종 6개이다. [1], [2], [3] 근거에 따르면 6개이다."),
+            ("평가액은 99억 달러입니다. [1]", q076.clone(), "평가액은 99억 달러입니다. [1]"),
+            ("이사회는 대표이사가 소집한다. [2]", q013.clone(), "이사회는 대표이사가 소집한다. [2]"),
+            ("휴가는 1일이다. [2]", s(&["1일 휴가", "1일 휴가비"]), "휴가는 1일이다. [2]"),
+        ];
+        for (body, ev, want) in cases {
+            assert_eq!(recite(body, &ev, false, 0).0, want);
+        }
+        let (g, _) = recite("[3] 근거에 따르면, VIPKid 평가액은 45억 달러입니다.", &q076, true, 0);
+        assert!(g.starts_with("[3]"), "{}", g);
+        // 스트리밍 — 문장 끝 뒤 번호는 내보내기 전에 바로잡는다
+        for step in [1, 3, 7] {
+            let mut w = StreamWriter::with_echo(false);
+            w.capture = Some(String::new());
+            w.interval = 0.0;
+            w.n_ev = Some(3);
+            w.evidence = Some(q013.clone());
+            let raw = "정기이사회는 매 분기 종료 후 20일 내에 개최합니다.  [1]\n다음 문장입니다.";
+            let cs: Vec<char> = raw.chars().collect();
+            for ch in cs.chunks(step) {
+                w.write(&ch.iter().collect::<String>());
+            }
+            w.finish(Some(3), None);
+            let out = w.capture.unwrap();
+            assert!(out.contains("[2]") && !out.contains("[1]"), "({}자씩) {}", step, out);
+        }
     }
 
     #[test]

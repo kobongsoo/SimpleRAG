@@ -14,10 +14,11 @@
 #     ("done", {answer, cited, ...})
 #------------------------------------------------------------------
 
+import re
 import time
 
 from . import config
-from .generate.prompts import parse_answer
+from .generate.prompts import parse_answer, recite
 
 # 폴더 한정 검색에서 그 폴더에 인덱싱된 문서가 없을 때 알리는 글
 NO_DOCS_IN_FOLDER = ("이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다. "
@@ -25,6 +26,18 @@ NO_DOCS_IN_FOLDER = ("이 폴더(하위 포함)에는 인덱싱된 문서가 없
 # 문서에서 질문과 관련된 내용을 찾지 못했을 때(리랭커 관련도 문턱 아래) 알리는 글
 NO_RELEVANT = "질문에 대한 내용이 문서에 없습니다. 답변할 수 없습니다."
 
+
+#------------------------------------------------------------------
+# 본문의 인용 번호 목록
+#=> 바로잡은 본문에서 다시 센다 — 근거 개수 밖의 번호는 넣지 않는다(parse_answer 와 같은 규칙).
+#
+# -in: body = 본문 / n = 근거 개수
+#
+# -out: 정렬된 번호 목록
+# -out: error = 없음
+#------------------------------------------------------------------
+def _cited(body, n):
+    return sorted({int(k) for k in re.findall(r"\[(\d+)\]", body) if 1 <= int(k) <= n})
 
 class RagPipeline:
     #------------------------------------------------------------------
@@ -95,11 +108,19 @@ class RagPipeline:
             raw = "".join(parts)
         # 근거 개수를 함께 넘긴다 — 없는 번호를 인용으로 읽지 않게 한다.
         # 되뱉기 거르기는 설정을 따른다(generation.echo_filter, 기본 끔)
-        body, cited = parse_answer(raw, len(texts), echo=config.ECHO_FILTER)
+        body, _ = parse_answer(raw, len(texts), echo=config.ECHO_FILTER)
+        # 인용 번호 바로잡기(설계서 ⑤) — 문장 수치가 다른 근거 하나에만 있으면 그 번호로.
+        #   answer 는 다 고친 답(비스트리밍·평가), answer_stream 은 문장 끝 뒤 번호만 고친 답 —
+        #   스트리밍 화면은 문장 앞 번호를 이미 내보냈으니 화면 출력기는 이것으로 마무리한다
+        fixed, fixes = recite(body, texts)
+        stream_body, _ = recite(body, texts, trailing_only=True)
+        cited = _cited(fixed, len(texts))
 
         yield ("done", {
-            "answer": body,
+            "answer": fixed,
+            "answer_stream": stream_body,
             "cited": cited,
+            "cite_fixes": fixes,
             # 반복 루프·상한으로 답을 잘라 냈다는 표시(없으면 None) — 화면은 본문 뒤에 따로 붙인다
             "note": getattr(self.generator, "last_note", None),
             # 사용자가 체감하는 TTFT — 검색까지 포함한 '첫 글자까지'
@@ -153,6 +174,8 @@ class RagPipeline:
 
         raw = self.generator.generate(query, [c["text"] for c in chunks],
                                       max_tokens=max_tokens)
-        body, cited = parse_answer(raw, len(chunks), echo=config.ECHO_FILTER)
-        return {"answer": body, "cited": cited, "chunks": chunks,
+        body, _ = parse_answer(raw, len(chunks), echo=config.ECHO_FILTER)
+        texts = [c["text"] for c in chunks]
+        body, fixes = recite(body, texts)
+        return {"answer": body, "cited": _cited(body, len(chunks)), "cite_fixes": fixes, "chunks": chunks,
                 "timing": timing, "total_s": round(time.perf_counter() - t0, 2)}

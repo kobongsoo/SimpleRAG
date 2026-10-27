@@ -254,6 +254,122 @@ def drop_invalid_cites(body, n_evidence=None):
     return re.sub(r"\[(\d+)\]", keep, body)
 
 
+# ── 인용 번호 바로잡기 (설계서 ⑤) ─────────────────────────────────────
+#   답의 내용은 맞는데 번호가 엉뚱한 근거를 가리키는 일이 있다 — 지시문 예시 "[1] 형식으로" 때문인지
+#   [1] 로 쏠린다(예: 경조금 500,000원 → [1] 김영란법, 실제 값은 [2]·[3]). 문장의 수치가 인용한 근거에는
+#   하나도 없고 다른 근거 하나에만 모두 있으면 그 번호로 바꾼다. 애매하면 그대로 둔다.
+_CITE_NUM = re.compile(r"\[(\d+)\]")
+# 수치 하나 — 숫자(쉼표·소수점 포함)와 바로 뒤 단위 한 글자(원·일·억·% 등)
+_FACT_NUM = re.compile(r"(\d(?:[\d,.]*\d)?)\s*([가-힣%]?)")
+# 문장 끝 — 마침표·물음표·느낌표 뒤 공백/글 끝(소수점 "9.8" 은 아니다), 또는 줄바꿈
+_SENT_END = re.compile(r"[.!?](?=\s|$)|\n")
+# 인용 덩어리 — "[1]" · "[1][3]" · "[1], [2], [3]"
+_CITE_RUN = re.compile(r"\[\d+\](?:[\s,]*\[\d+\])*")
+# 문장 끝 바로 뒤에 붙은 인용(앞 문장의 출처) — "…다. [1]" / "…다.  [1][3]"
+_TRAILING_POS = re.compile(r"[.!?]\s*$")
+
+
+#------------------------------------------------------------------
+# 문장의 수치 뽑기
+#=> 인용 번호를 뺀 문장에서 숫자+단위를 꺼낸다. 목록 번호("1.")처럼 한 자리 숫자에 단위가 없으면
+#   어느 근거에나 있어 판별에 쓸모가 없으니 뺀다.
+#
+# -in: sentence = 문장
+#
+# -out: [(숫자, 단위)] — 숫자는 쉼표를 뺀 것
+# -out: error = 없음
+#------------------------------------------------------------------
+def _facts(sentence):
+    out = []
+    for m in _FACT_NUM.finditer(_CITE_NUM.sub(" ", sentence)):
+        num, unit = m.group(1).replace(",", ""), m.group(2)
+        if len(num) >= 2 or unit:
+            out.append((num, unit))
+    return out
+
+
+#------------------------------------------------------------------
+# 수치가 근거에 있는가
+#=> 공백·쉼표를 뺀 근거에 "숫자+단위" 가 있으면 있다. 표처럼 단위가 따로 떨어진 근거를 위해
+#   세 자리 이상 숫자는 숫자만 있어도 있다고 본다("500,000 원" ↔ "| 500,000 |").
+#
+# -in: fact = (숫자, 단위) / ev = 공백·쉼표를 뺀 근거 본문
+#
+# -out: True / False
+# -out: error = 없음
+#------------------------------------------------------------------
+def _fact_in(fact, ev):
+    num, unit = fact
+    return (num + unit) in ev or (len(num.replace(".", "")) >= 3 and num in ev)
+
+
+#------------------------------------------------------------------
+# 인용 하나가 가리킬 근거 고르기
+#=> 문장 수치가 인용 근거 k 에 하나라도 있으면 그대로. 하나도 없고 다른 근거 하나에만 모두 있으면 그 번호.
+#
+# -in: sentence = 인용이 딸린 문장 / k = 인용 번호 / evs = 정규화한 근거 목록(1번이 evs[0])
+#
+# -out: 바꿀 번호(그대로면 k)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _recite_one(sentence, k, evs):
+    facts = _facts(sentence)
+    if not facts or not 1 <= k <= len(evs):
+        return k
+    if any(_fact_in(f, evs[k - 1]) for f in facts):
+        return k
+    cands = [j for j, ev in enumerate(evs, 1) if j != k and all(_fact_in(f, ev) for f in facts)]
+    return cands[0] if len(cands) == 1 else k
+
+
+#------------------------------------------------------------------
+# 인용 번호 바로잡기 (Rust recite 와 같다)
+#=> 인용 덩어리마다 딸린 문장을 정해 _recite_one 으로 고른다.
+#    · 문장부호 바로 뒤이고 뒤에 낱말이 이어지지 않는 덩어리("…다. [1]") → 앞 문장의 출처
+#    · 그 밖("[1]에 따르면 …", "…다. [3] 근거에 따르면 …", 문장 중간) → 덩어리가 들어 있는 문장
+#      (반복 감지기 outguard 의 문장 경계 규칙과 같다 — 낱말이 붙은 번호는 다음 문장의 머리)
+#    · 번호가 여럿인 덩어리("[1], [2], [3]")는 모델이 여러 근거를 함께 단 것이라 건드리지 않는다
+#
+# -in: body          = 답 본문
+# -in: evidence      = 근거 본문 목록(sLLM 에 넣은 순서)
+# -in: trailing_only = True 면 앞 문장의 출처인 덩어리만 고친다(스트리밍 — 문장 앞 인용은 이미 나갔다)
+# -in: start         = 이 위치 앞의 덩어리는 고치지 않는다(스트리밍에서 이미 나간 부분)
+#
+# -out: (고친 본문, [(원래 번호, 바꾼 번호)])
+# -out: error = 없음
+#------------------------------------------------------------------
+def recite(body, evidence, trailing_only=False, start=0):
+    if not body or not evidence:
+        return body, []
+    evs = [re.sub(r"[\s,]", "", e or "") for e in evidence]
+    out, fixes, last = [], [], 0
+    for run in _CITE_RUN.finditer(body):
+        nums = {int(n) for n in _CITE_NUM.findall(run.group(0))}
+        if run.start() < start or len(nums) != 1:
+            continue
+        k = nums.pop()
+        before, after = body[:run.start()], body[run.end():]
+        nxt_ch = after.lstrip(" \t")[:1]
+        trailing = bool(_TRAILING_POS.search(before)) and not (nxt_ch.isalnum() or "가" <= nxt_ch <= "힣")
+        if trailing:
+            head = before.rstrip()
+            ends = [e.end() for e in _SENT_END.finditer(head[:-1])]
+            sentence = head[ends[-1] if ends else 0:]
+        elif trailing_only:
+            continue
+        else:
+            ends = [e.end() for e in _SENT_END.finditer(before)]
+            nxt = _SENT_END.search(body, run.end())
+            sentence = body[ends[-1] if ends else 0:nxt.end() if nxt else len(body)]
+        j = _recite_one(sentence, k, evs)
+        if j != k:
+            out.append(body[last:run.start()] + _CITE_NUM.sub("[{}]".format(j), run.group(0)))
+            last = run.end()
+            fixes.append((k, j))
+    out.append(body[last:])
+    return "".join(out), fixes
+
+
 #------------------------------------------------------------------
 # 가벼운 정리 — 스트리밍으로 내보내는 조각에 바로 적용한다
 #=> strip_instruction_echo 가운데 앞뒤 글과 상관없이 조각 안에서 끝나는 것만 한다.

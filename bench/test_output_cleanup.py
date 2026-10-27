@@ -357,6 +357,49 @@ for raw, kept, name in [
         out, _ = stream_off(raw, 3, step)
         check(kept in out, "남겨야 함 — %s (%d자씩)" % (name, step), out)
 
+# ── 인용 번호 바로잡기 (설계서 ⑤) ──
+#   문장 수치가 인용 근거에는 없고 다른 근거 하나에만 있으면 그 번호로. 골든셋 실제 답에서 가져온 모양.
+print()
+print("── 인용 번호 바로잡기 ──")
+from simplerag.generate.prompts import recite  # noqa: E402
+
+EV_Q013 = ["이사회는 대표이사가 소집한다.", "정기이사회는 매 분기 종료 후 20일 내에 개최한다.", "임시이사회는 필요시 개최한다."]
+EV_Q076 = ["유니콘 기업 목록 Byju's 인도", "VIPKid 중국 외국어 교육 45억 달러", "에듀테크 시장 동향"]
+CITE_CASES = [
+    # (본문, 근거, 기대 본문, 이름)
+    ("정기이사회는 매 분기 종료 후 20일 내에 개최합니다.  [1]", EV_Q013,
+     "정기이사회는 매 분기 종료 후 20일 내에 개최합니다.  [2]", "q013 문장 끝 번호"),
+    ("[3] 근거에 따르면, VIPKid의 기업가치 평가액은 45억 달러입니다. [1]", EV_Q076,
+     "[2] 근거에 따르면, VIPKid의 기업가치 평가액은 45억 달러입니다. [2]", "q076 문장 앞·끝 번호"),
+    ("최종 6개이다. [1], [2], [3] 근거에 따르면 6개이다.", ["가", "6개 선정", "다"],
+     "최종 6개이다. [1], [2], [3] 근거에 따르면 6개이다.", "q095 여러 번호 묶음은 그대로"),
+    ("평가액은 99억 달러입니다. [1]", EV_Q076, "평가액은 99억 달러입니다. [1]", "수치가 어디에도 없으면 그대로"),
+    ("이사회는 대표이사가 소집한다. [2]", EV_Q013, "이사회는 대표이사가 소집한다. [2]", "수치 없는 문장은 그대로"),
+    ("휴가는 1일이다. [2]", ["1일 휴가", "1일 휴가비"], "휴가는 1일이다. [2]", "인용 근거에 수치가 있으면 그대로"),
+]
+for body, ev, want, name in CITE_CASES:
+    got, _ = recite(body, ev)
+    check(got == want, "바로잡기 — " + name, got)
+got, _ = recite("[3] 근거에 따르면, VIPKid 평가액은 45억 달러입니다.", EV_Q076, trailing_only=True)
+check(got.startswith("[3]"), "스트리밍(문장 끝 뒤만) — 문장 앞 번호는 건드리지 않는다", got)
+
+# 스트리밍: 문장 끝 뒤 번호는 내보내기 전에 바로잡는다(끔 경로 그대로)
+for step in (1, 3, 7):
+    buf = io.StringIO()
+    real, sys.stdout = sys.stdout, buf
+    try:
+        w = cli.StreamWriter(hold=0, soft=lambda t: soft_clean(t, 3), short=True)
+        w.interval = 0.0
+        w.evidence = EV_Q013
+        raw = "정기이사회는 매 분기 종료 후 20일 내에 개최합니다.  [1]\n다음 문장입니다."
+        for i in range(0, len(raw), step):
+            w.write(raw[i:i + step])
+        w.finish(lambda t: cli.clean_answer(t, 3, echo=False))
+    finally:
+        sys.stdout = real
+    out = buf.getvalue()
+    check("[2]" in out and "[1]" not in out, "스트리밍 — 문장 끝 뒤 번호 바로잡음 (%d자씩)" % step, out)
+
 print()
 print("=" * 60)
 print("실패 %d건" % len(fail))
