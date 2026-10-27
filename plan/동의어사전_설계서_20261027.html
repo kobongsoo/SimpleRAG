@@ -114,12 +114,13 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 
 <nav class="toc"><ol>
   <li><a href="#s1">결론</a></li>
+  <li><a href="#r">실측 — 1·2단계 결과</a></li>
   <li><a href="#s2">문제 — 실제로 놓치는 모습</a></li>
   <li><a href="#s3">대안 비교 — 사전 vs 멀티쿼리 vs 임베딩 자동</a></li>
   <li><a href="#s4">설계 개요 — 구성 요소</a></li>
   <li><a href="#s5">질문할 때 — 검색어 넓히기</a></li>
   <li><a href="#s6">사전 파일과 문서 용어 목록</a></li>
-  <li><a href="#s7">후보 자동 제안</a></li>
+  <li><a href="#s7">후보 자동 제안 (3단계 결과 포함)</a></li>
   <li><a href="#s8">승인 화면 (UI)</a></li>
   <li><a href="#s9">선택 — 조건부 멀티쿼리</a></li>
   <li><a href="#s10">검증 방법</a></li>
@@ -141,8 +142,52 @@ td.num, th.num { text-align: right; white-space: nowrap; }
       <tr><td>문서 용어 목록</td><td>인덱싱할 때 문서에 실제로 나오는 용어를 모아, 그 용어로만 넓힌다(엉뚱한 확장 차단)</td><td class="num">0</td></tr>
       <tr><td>후보 제안 + 승인</td><td>못 찾은 질문의 낱말 → 임베딩으로 문서 용어 후보 → 사용자가 버튼으로 승인</td><td class="num">0 (뒤에서)</td></tr>
       <tr><td>조건부 멀티쿼리 (선택)</td><td>검색 점수가 낮을 때만 LLM 이 검색어를 한 번 다시 씀 — 기본 끔</td><td class="num">그때만 +3~5초</td></tr>
+      <tr><td>넓힘 때 근거 한 건 더 <span class="tag t-good">2단계에 추가</span></td><td>넓힘이 일어난 질문만, 리랭커가 밀어낸 RRF 1위를 4번째 근거로(<code>retrieval.synonym_extra</code>)</td><td class="num">그때만 TTFT 약 +1초</td></tr>
     </tbody>
   </table></div>
+</section>
+
+<section id="r">
+  <h2><span class="no">R</span>실측 — 1·2단계 결과 (2026-10-27)</h2>
+  <div class="verdict">
+    <p style="margin:0"><strong>일상어 질문의 정답 근거 적중 24 → 29(사전) → 37/42(넓힘 때 근거 한 건 더). 골든셋 100문항은 85 그대로, Rust 판 = Python 판.</strong>
+    사전은 정답을 RRF 1위까지 끌어올렸지만, 리랭커가 원래 일상어 질문만 보고 다시 밀어내는 것이 남은 놓침의 대부분이었다.</p>
+  </div>
+  <h3>바꿔 말한 질문 세트</h3>
+  <p><code>bench/paraphrase/make_set.py</code> → <code>dataset/paraphrase_pdf30.jsonl</code>(42문항): 골든셋 38문항을 일상어로 바꾼 것(예: "경조사 휴가 기간에 공휴일이 겹치면" →
+  "중간에 빨간날 끼면") + 가족관계 새 질문 4개(할아버지·와이프 출산·장인 등). 같은 문항을 문서 용어 질문과 일상어 질문으로 각각 검색해
+  정답 발췌가 근거 상위 3건에 드는지 잰다(<code>measure.py</code>, LLM 생성 없음).</p>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th class="num">일상어 근거 적중 (/42)</th><th class="num">정답 문서 적중</th><th class="num">골든 100문항</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>문서 용어로 물었을 때 (참고)</td><td class="num">35</td><td class="num">42</td><td class="num">85</td><td>같은 문항의 원래 질문</td></tr>
+      <tr><td>1단계 — 넓힘 없음</td><td class="num">24</td><td class="num">38</td><td class="num">85</td><td>일상어로 바꾸면 11문항을 더 놓친다</td></tr>
+      <tr><td>2단계 — 기본 사전 + BM25 넓히기</td><td class="num">29</td><td class="num">40</td><td class="num">85</td><td>+6 · −1(ppn02), 골든셋에서 넓힘이 일어난 문항 3개뿐</td></tr>
+      <tr><td>(비교) 질문 전체를 넓혀 의미 검색·리랭커까지</td><td class="num">30</td><td class="num">—</td><td class="num">—</td><td>차이가 작아 BM25 에만 넓힌다</td></tr>
+      <tr><td>사전 보강(기내박·입학·본인의 결혼 등 7묶음)</td><td class="num">29</td><td class="num">40</td><td class="num">85</td><td>BM25·RRF 순위는 올랐으나 리랭커가 밀어냄</td></tr>
+      <tr><td>(비교) RRF 1위를 3번째 자리에 넣기</td><td class="num">35</td><td class="num">—</td><td class="num ng">83</td><td>골든셋 2문항을 잃어 버림</td></tr>
+      <tr><td><b>넓힘 때 RRF 1위를 4번째 근거로</b></td><td class="num ok">37</td><td class="num">42</td><td class="num">85</td><td>+8 · 잃은 문항 0 · 골든셋에서는 한 번도 붙지 않음</td></tr>
+      <tr><td>Rust 판 chat 워커 (같은 설정)</td><td class="num">37</td><td class="num">—</td><td class="num">—</td><td>Python 과 다른 문항 0, 4건이 된 문항 19 같음</td></tr>
+    </tbody>
+  </table></div>
+  <h3>왜 사전만으로는 모자랐나 — 단계별 정답 순위</h3>
+  <p>못 살린 8문항에서 정답 청크가 각 단계 몇 위에 있는지 보았다. 사전 보강 뒤 7문항은 정답이 <b>RRF 1위</b>인데, 리랭커(bge, 원래 일상어 질문으로 채점)가 4~8위로 내려
+  근거 3건에서 빠졌다. 리랭커에도 넓힌 질문을 주면 3위 안에 드는 것은 1문항(pp035)뿐이었다. 남은 1문항(pp066 김영란법 공소시효)은 정답이 RRF 18위라 리랭커 후보 10건에도 들지 못한다.</p>
+  <h3>근거 4건의 비용과 답변 품질</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>4건이 되는 19문항</th><th class="num">근거 3건</th><th class="num">근거 4건</th></tr></thead>
+    <tbody>
+      <tr><td>정답 발췌가 근거에 듦</td><td class="num">9</td><td class="num ok">17</td></tr>
+      <tr><td>정답 수치를 모두 맞춘 답 (수치 있는 18문항)</td><td class="num">6</td><td class="num ok">11</td></tr>
+      <tr><td>정답 수치를 하나라도 맞춘 답</td><td class="num">13</td><td class="num ok">16</td></tr>
+      <tr><td>맞춘 수치가 줄어든 문항 · 없는 번호 인용</td><td class="num">—</td><td class="num">0 · 0</td></tr>
+      <tr><td>TTFT 중앙값 (같은 GPU 를 혼자 쓴 측정)</td><td class="num">2.96초</td><td class="num">4.17초</td></tr>
+    </tbody>
+  </table></div>
+  <p>예: "와이프가 애기 낳으면 휴가 며칠?" — 3건이면 "보호휴가 90일", 4건이면 "배우자 출산 3일". "내가 결혼하면 휴가 며칠?" — 3건 "보호휴가 90일", 4건 "경조사휴가 7일".
+  근거 계산은 맞혀도 1.7B 가 틀리는 문항(도쿄 출장 식비 계산, 장인 사망 5일을 3일로)은 그대로 남는다 — 검색이 아니라 모델 쪽 과제다.</p>
+  <p class="note">규칙 지표(정답 발췌·수치 문자열)로 쟀다. 문서 용어로 묻는 질문은 넓힘이 일어나지 않아 근거·속도가 이전과 같다(골든셋 100문항 4건 0회).
+  결과 파일: <code>results/paraphrase/</code> measure_off·on·on2·extra, rust_on·on2·extra, quality_extra (저장소 밖).</p>
 </section>
 
 <section id="s2">
@@ -233,6 +278,10 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 
 <section id="s5">
   <h2><span class="no">5</span>질문할 때 — 검색어 넓히기</h2>
+  <p class="note"><b>2단계 구현과 다른 점</b> — ① 조사를 떼지 않고, 사전의 일상어가 낱말 <b>앞자리</b>(글 처음·공백·괄호·문장부호 뒤)에서 시작하면 맞는 것으로 본다
+  (<code>할아버지가</code>·<code>돌아가시면</code>에 맞고, <code>할아버지</code> 속 <code>아버지</code>에는 맞지 않음). 그래서 한 글자 일상어("애", "형")는 넣지 않는다.
+  ② 긴 일상어부터 맞추고, 문서 용어가 이미 질문에 있으면 덧붙이지 않는다. ③ 문서 용어 필터는 미뤘다 — 3단계에서 문서 용어 목록을 만들 때 함께 붙인다.
+  ④ 넓힘이 일어난 질문은 RRF 1위를 4번째 근거로 더한다(<code>retrieval.synonym_extra</code>, 아래 6번).</p>
   <ol>
     <li><b>낱말 나누기</b> — 공백으로 나눈 뒤 조사·어미를 떼어 낸다("할아버지가" → "할아버지", "와이프한테" → "와이프"). 사전의 키는 기본형으로 적고,
       낱말이 키로 <b>시작</b>하면 맞는 것으로 본다(조사 목록 없이도 대부분 맞는다). 두 낱말 키("유급 휴가")는 공백을 뺀 글자로도 비교한다.</li>
@@ -243,6 +292,8 @@ td.num, th.num { text-align: right; white-space: nowrap; }
       인덱스는 그대로 — <b>재인덱싱이 필요 없다</b>.</li>
     <li><b>기록</b> — 넓힌 내역을 소요 블록에 한 줄로 남긴다: <code>검색어 넓힘: 할아버지→조부모</code> (RAGSearchBox 가 읽어 보여 줄 수 있다).</li>
     <li><b>설정</b> — <code>config.yaml retrieval.synonyms: true</code>(기본 켬), 끄면 이전과 글자까지 같은 동작.</li>
+    <li><b>근거 한 건 더</b> — 넓힘이 일어났고, RRF 1위가 리랭커 상위 3건에서 빠졌고, 근거 3건이 다 찼고, 그 청크가 사본이 아니면 4번째 근거로 붙인다.
+      <code>retrieval.synonym_extra: true</code>(기본 켬, 환경변수 <code>SIMPLERAG_SYNONYM_EXTRA=0</code> 으로 끔). 붙은 질문만 TTFT 약 +1초.</li>
   </ol>
 </section>
 
@@ -283,6 +334,35 @@ rejected:            # [아님] 을 누른 짝 — 다시 제안하지 않는다
   </ol>
   <p class="note">점수가 아주 높고 다음 후보와 차이가 큰 경우(예: 병원비→의료비 0.744 대 0.596)만 승인 없이 자동 적용하는 옵션은 가능하다.
   다만 그 문턱이 안전한지는 §10 의 질문 세트로 재고 정한다 — 처음에는 끈다.</p>
+
+  <h3>3단계 구현 (2026-10-27) — 위 설계와 달라진 점</h3>
+  <ul>
+    <li><b>문서 용어 목록을 따로 만들지 않았다</b> — 놓친 질문을 다시 검색한 <b>리랭커 후보 10건</b>의 글에서 그때그때 용어를 뽑는다.
+      놓친 질문도 정답 조항은 대개 이 10건 안에 있어(바꿔 말한 질문의 정답 짝 34개 중 32개), 전체 용어(수천 개)에 대는 것보다 엉뚱한 짝이 적고
+      인덱싱을 건드리지 않는다. "문서에 없는 낱말" 판정도 이 10건 기준이다. (넓힐 때 문서 용어 필터는 아직 없다 — 기본 사전은 사내 규정 어휘로 좁게 유지)</li>
+    <li><b>기록 기준</b>: 관련 근거 없음 또는 리랭커 최고 점수 <b>0 미만</b>. 넓힘을 끈 상태로 재 보니 일상어로 놓친 18문항 중 14개가 걸리고, 문서 용어로 묻는 골든 100문항은 5개만 걸렸다
+      (문턱 1 이면 놓침 15/18 이지만 골든 13 · 맞힌 질문까지 13개 기록).</li>
+    <li><b>낱말 거르기</b>: 질문 말("며칠", "얼마야", "나와"), 구어 조사("한테", "께서"), 세 글자 이하 동사꼴("되고", "걸로"), 문법 말("따른", "으로")을 뺀다.</li>
+    <li><b>순서 정하기</b>: e5 유사도 상위 10개를 1.7B 에게 번호로 고르게 하고 고른 것을 맨 앞에. 고르지 않으면 그 낱말은 뺀다.
+      고른 짝을 예/아니오로 다시 묻는 확인도 해 봤지만 1.7B 가 맞는 짝까지 거의 다 "아니오"라 버렸다.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>바꿔 말한 질문 42문항 · 정답 짝(한 낱말) 33~34개</th><th class="num">1위 적중</th><th class="num">상위 3 적중</th></tr></thead>
+    <tbody>
+      <tr><td>e5 단독 — 후보 10건의 모든 낱말</td><td class="num">—</td><td class="num">13/34</td></tr>
+      <tr><td>e5 단독 — 명사꼴 용어만</td><td class="num">9/34</td><td class="num">15/34</td></tr>
+      <tr><td>리랭커(크로스인코더)로 낱말 짝 채점</td><td class="num">—</td><td class="num">12/34</td></tr>
+      <tr><td>e5 상위 10 + 1.7B 고르기 (시제품)</td><td class="num ok">14/34</td><td class="num ok">19/34</td></tr>
+      <tr><td><b>구현 — 질문 말·문법 말 거르기 + 1.7B 고르기</b> (낱말 83개로 정리)</td><td class="num">9/33</td><td class="num">13/33</td></tr>
+      <tr><td>Rust 판 (같은 입력)</td><td class="num">9/33</td><td class="num">13/33</td></tr>
+    </tbody>
+  </table></div>
+  <p>구현 수치가 시제품보다 낮은 것은 채점 범위가 넓어졌기 때문이다 — 시제품은 정답 짝마다 그 질문에서만 보았고, 구현은 42문항 전체에서 낱말별로 모은 파일(같은 낱말이 다른 질문에서 다른 짝을 얻기도 함)을 채점한다.
+  목록 앞쪽은 쓸 만하다: <code>돌아가시면→사망</code> · <code>병원비→의료비</code> · <code>동아리→동호회</code> · <code>호텔비→숙박비</code> · <code>부조금→경조금</code> · <code>할아버지→조부모</code> · <code>와이프→배우자</code> · <code>야근→연장근로</code>.
+  뒤쪽에는 잡음(<code>중간→중인</code>, <code>기름값→단위</code>)이 섞여 <b>사람 승인이 꼭 필요하다</b> — 4단계 화면은 앞의 5개만 보여 주고 [아님]을 rejected 에 쌓아 다시 묻지 않는다.</p>
+  <p>두 판 결과 파일은 낱말 83개 · 후보 · 점수까지 같다(임베딩 묶음을 같게 불러야 같았다 — 묶음 구성이 다르면 채움 길이 때문에 점수가 0.01 쯤 흔들려 1.7B 가 다른 것을 골랐다).
+  명령: <code>simplerag suggest-synonyms [--from 질문.jsonl] [--out 결과.json] [--no-llm]</code> (Rust: <code>simplerag-rs suggest-synonyms</code>), 42문항에 약 2분(1.7B 포함).
+  평가: <code>SIMPLERAG_SYNONYMS=0</code> 으로 바꿔 말한 질문 세트를 넣고 <code>bench/paraphrase/suggest_check.py</code> 로 채점.</p>
 </section>
 
 <section id="s8">
@@ -349,13 +429,13 @@ rejected:            # [아님] 을 누른 짝 — 다시 제안하지 않는다
 <section id="s11">
   <h2><span class="no">11</span>진행 순서와 위험</h2>
   <div class="tbl"><table>
-    <thead><tr><th>단계</th><th>할 일</th><th>결과물</th></tr></thead>
+    <thead><tr><th>단계</th><th>할 일</th><th>결과물</th><th>상태</th></tr></thead>
     <tbody>
-      <tr><td>1</td><td>바꿔 말한 질문 세트 만들고 지금 놓침 재기</td><td>dataset/paraphrase_*.jsonl · 측정표</td></tr>
-      <tr><td>2</td><td>기본 사전 + 질문 확장(BM25) + 문서 용어 목록 — 두 판</td><td>synonyms.default.yaml · hybrid.py / retrieve.rs · doc_terms.json</td></tr>
-      <tr><td>3</td><td>놓친 질문 기록 + 후보 제안</td><td>synonym_candidates.json</td></tr>
-      <tr><td>4</td><td>승인 화면 — 정보·설정 창 "동의어" 칸 (Python·Rust RAGSearchBox)</td><td>info_window.py · ui/info.html · synonyms.yaml 저장·다시 읽기</td></tr>
-      <tr><td>5</td><td>(선택) 조건부 멀티쿼리 · 자동 적용 문턱</td><td>config 옵션 · 측정</td></tr>
+      <tr><td>1</td><td>바꿔 말한 질문 세트 만들고 지금 놓침 재기</td><td>dataset/paraphrase_pdf30.jsonl · bench/paraphrase/measure.py</td><td><span class="tag t-good">완료</span> 24/42</td></tr>
+      <tr><td>2</td><td>기본 사전 + 질문 확장(BM25) + 넓힘 때 근거 한 건 더 — 두 판</td><td>synonyms.default.yaml · synonyms.py / synonyms.rs · hybrid.py / retrieve.rs</td><td><span class="tag t-good">완료</span> 37/42</td></tr>
+      <tr><td>3</td><td>놓친 질문 기록 + 후보 제안 — 두 판 (문서 용어는 검색 후보 10건에서 그때그때 뽑는다, §7)</td><td>synonym_misses.jsonl · suggest-synonyms · synonym_candidates.json</td><td><span class="tag t-good">완료</span> 정답 짝 1위 9 · 상위 3 13 /33</td></tr>
+      <tr><td>4</td><td>승인 화면 — 정보·설정 창 "동의어" 칸 (Python·Rust RAGSearchBox)</td><td>info_window.py · ui/info.html · synonyms.yaml 저장·다시 읽기</td><td>—</td></tr>
+      <tr><td>5</td><td>(선택) 조건부 멀티쿼리 · 자동 적용 문턱</td><td>config 옵션 · 측정</td><td>—</td></tr>
     </tbody>
   </table></div>
   <h3>위험과 대응</h3>
@@ -367,7 +447,7 @@ rejected:            # [아님] 을 누른 짝 — 다시 제안하지 않는다
   </ul>
 </section>
 
-<footer>작성 2026-10-27 · 측정: 1.7B iGPU 검색어 재작성 5문항, e5-small 일상어→문서 용어 11쌍, simplerag.exe search 비교 · 관련: plan/코드수정_설계서_20261026.html ⑥</footer>
+<footer>작성 2026-10-27 · 1·2·3단계 실측 반영 2026-10-27 · 측정: 1.7B iGPU 검색어 재작성 5문항, e5-small 일상어→문서 용어 11쌍, simplerag.exe search 비교 · 관련: plan/코드수정_설계서_20261026.html ⑥</footer>
 </div>
 </body>
 </html>
