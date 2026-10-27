@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>코드 수정 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+.gap { color: var(--bad); font-weight: 600; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.prio { font-family: var(--mono); font-weight: 600; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+
+
+.item { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 22px; margin: 18px 0; }
+.item h3 { margin-top: 0; font-size: 18px; }
+.item h4 { font-size: 14.5px; margin: 16px 0 4px; color: var(--ink-2); }
+.item ul, .item ol { margin: 4px 0; padding-left: 22px; font-size: 14.5px; }
+.item li { margin: 3px 0; }
+.meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · 설계서 · 2026-10-26</div>
+  <h1>코드 수정 설계서 — 측정에서 드러난 7가지</h1>
+  <p class="lede">Newploy 비교(골든셋 100문항 · RAGAS), Rust 판 실측, 되뱉기 거르기 옵션화 작업에서 드러난 수정 사항을
+  <b>권장 순서</b>대로 정리했다. 앞의 4개는 작고 확실한 수정, 뒤의 3개는 실험으로 효과를 확인해야 하는 품질 개선이다.
+  Rust 판과 Python 판이 같은 출력을 내야 하므로 출력 쪽 수정은 <b>두 판을 함께</b> 고친다.</p>
+  <div class="meta">근거 자료: report/RAGAS비교_Newploy_vs_SimpleRAG.html · report/Rust판_실측_반복수정효과.html ·
+  results/rust_vs_py/ (echo_on/ = 거르기 켬, 최상위 = 끔)</div>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#sum">요약표</a></li>
+  <li><a href="#i1">① 빌드가 배포 데이터를 지움</a></li>
+  <li><a href="#i2">② 짧은 되뱉기 잡음 — 지연 없이 거르기</a></li>
+  <li><a href="#i3">③ 스트리밍 인용 번호 두 번 찍힘</a></li>
+  <li><a href="#i4">④ 가끔 실패하는 감시 시험</a></li>
+  <li><a href="#i5">⑤ 인용 번호가 틀린 근거를 가리킴</a></li>
+  <li><a href="#i6">⑥ 표현이 다르면 검색이 놓침</a></li>
+  <li><a href="#i7">⑦ 멀티홉·추론 문항이 약함</a></li>
+  <li><a href="#order">진행 순서와 검증</a></li>
+</ol></nav>
+
+<section id="sum">
+  <h2><span class="no">0</span>요약표</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>수정 사항</th><th>구분</th><th>대상</th><th>규모</th><th>완료 기준</th></tr></thead>
+    <tbody>
+      <tr><td>①</td><td>빌드가 배포 폴더의 인덱스·설정·트레이 앱을 지움</td><td><span class="tag t-bad">버그 · 최우선</span></td><td>build_exe.py</td><td>작음</td><td>빌드 전후 데이터 파일 해시가 같다</td></tr>
+      <tr><td>②</td><td>거르기를 꺼도 "근거 [1]" 같은 짧은 잡음은 지연 없이 지움</td><td><span class="tag t-good">권장</span></td><td>Python·Rust 출력기·정리</td><td>중간</td><td>화면 첫 글자 차이 ≤ 0.3초 · 잡음 9 → 2건 이하</td></tr>
+      <tr><td>③</td><td>스트리밍에서 인용 번호 "[1][3][1][3]" 두 번 찍힘</td><td><span class="tag t-good">권장</span></td><td>②와 같은 곳</td><td>작음</td><td>끝 인용 번호 중복 0건</td></tr>
+      <tr><td>④</td><td>test_watcher 실시간 시험이 부하 중 가끔 실패</td><td><span class="tag t-good">권장</span></td><td>RAGSearchBox 시험</td><td>작음</td><td>부하 중 10회 연속 통과</td></tr>
+      <tr><td>⑤</td><td>답은 맞는데 인용 번호가 엉뚱한 근거를 가리킴</td><td><span class="tag t-warn">실험</span></td><td>후처리(두 판)</td><td>중간</td><td>인용 정확도 측정 → 개선 확인</td></tr>
+      <tr><td>⑥</td><td>"할아버지" ↔ "조부모" 처럼 표현이 다르면 검색이 놓침</td><td><span class="tag t-warn">실험</span></td><td>검색(두 판) · config.yaml</td><td>중간</td><td>바꿔 말한 질문 세트에서 문서 적중 개선 · 골든셋 퇴보 없음</td></tr>
+      <tr><td>⑦</td><td>멀티홉·추론 문항의 Faithfulness 0.47~0.65</td><td><span class="tag t-warn">실험</span></td><td>모델·지시문·근거 수</td><td>큼</td><td>57문항(멀티홉+추론) RAGAS·핵심어 개선</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="i1">
+  <h2><span class="no">1</span>빌드가 배포 데이터를 지움 <span class="tag t-bad">버그 · 최우선</span></h2>
+  <div class="item">
+    <h4>무엇이 일어났나 (2026-10-26)</h4>
+    <ul>
+      <li><code>build_exe.py</code> 는 PyInstaller 를 <code>--noconfirm --distpath dist</code> 로 돌린다. PyInstaller 는 출력 폴더 <code>dist\simplerag</code> 를 <b>통째로 지우고</b> 다시 만든다.</li>
+      <li>그 폴더에는 빌드 산출물이 아닌 것도 있다 — 운영 인덱스(<code>qdrant_data</code> · <code>bm25_index.npz</code> · <code>index_state.json</code>), <code>gen_backend.json</code>, <code>RAGSearchBox.exe</code> · <code>RAGSearchBox.ini</code>, 배포본에서만 바꾼 <code>config.yaml</code>.</li>
+      <li>이번에는 미리 백업해 복원했지만, 그냥 빌드하면 <b>운영 인덱스와 설정을 잃는다</b>(재인덱싱 필요, 트레이 앱 다시 빌드 필요).</li>
+      <li>또 <code>build_exe.py</code> 248~252행이 빌드할 때마다 프로젝트 <code>config.yaml</code> 로 <b>덮어쓴다</b> — 배포본의 <code>parent: section</code> 이 <code>off</code> 로 바뀐다.</li>
+    </ul>
+    <h4>수정 설계</h4>
+    <ol>
+      <li><b>보존 목록</b>을 코드에 둔다: <code>qdrant_data/ · bm25_index.npz · index_state.json · gen_backend.json · config.yaml · RAGSearchBox.exe · RAGSearchBox.ini*</code></li>
+      <li>PyInstaller 실행 전에 보존 목록을 <code>build\keep_&lt;시각&gt;\</code> 로 <b>옮기고</b>(복사가 아니라 이동 — 수십 MB), 빌드 성공·실패와 상관없이 <code>finally</code> 에서 되돌린다.</li>
+      <li><code>config.yaml</code> 은 <b>배포 폴더에 없을 때만</b> 복사한다. 새 키가 생겼으면 덮어쓰지 않고 "새 설정 키: echo_filter — 프로젝트 config.yaml 참고" 라고 알린다.</li>
+      <li>시작할 때 빌드 스크립트의 작업 폴더가 <code>dist\simplerag</code> 안이면 멈춘다(이번에 폴더가 잠겨 빌드가 반쯤 지우고 실패했다).</li>
+      <li>Rust 쪽 <code>rust/build_dist.ps1</code> 은 이미 "있으면 덮어쓰지 않음"이라 고칠 것 없음 — 다만 실행 중인 <code>RAGSearchBox-rs.exe</code> 가 있으면 exe 만 건너뛰고 알리도록 한다(지금은 Copy-Item 오류로 끝남).</li>
+    </ol>
+    <h4>검증</h4>
+    <ul><li>빌드 전후로 보존 목록 파일의 해시·개수가 같은지, <code>simplerag.exe status</code> 문서 수가 같은지. 빌드를 일부러 실패시켜도(잘못된 인자) 데이터가 돌아오는지.</li></ul>
+  </div>
+</section>
+
+<section id="i2">
+  <h2><span class="no">2</span>짧은 되뱉기 잡음 — 지연 없이 거르기 <span class="tag t-good">권장</span></h2>
+  <div class="item">
+    <h4>배경</h4>
+    <ul>
+      <li>되뱉기 거르기를 옵션(<code>generation.echo_filter</code>)으로 만들고 기본 끔으로 했다 — 화면 첫 글자가 TTFT 보다 늦은 시간 2.07~2.43초 → <b>0.08초</b>.</li>
+      <li>대신 골든셋 100문항(1.7B) 중 <b>9건</b>에 잡음이 남는다:
+        "<b>근거</b> [1]에 따르면" 5건(q011·q029·q035·q041·q096), "[1] 형식으로 표기:" (q056), "근거 번호: [2]" (q016), "[1]의 근거 번호는 [1]입니다" (q075), 끝 인용 두 번 찍기 1건(q020 — ③에서 다룸).</li>
+      <li>켜 둔 거르기가 오래 붙드는 이유는 "…(최대 40자) 간결하게 답변합니다" 처럼 <b>앞 40자까지 지우는 긴 패턴</b> 때문이다. 위 9건은 모두 <b>짧고 모양이 고정된</b> 패턴이다.</li>
+    </ul>
+    <h4>수정 설계 — "짧은 거르기" 를 끔 상태의 기본 동작으로</h4>
+    <ol>
+      <li><b>짧은 패턴 목록</b>(<code>SHORT_ECHO</code>)을 따로 둔다 — 길이가 정해진 것만:
+        <code>근거\s*(?=\[\d+\])</code>(뒤 인용 앞의 '근거' 낱말) · <code>근거\s*번호\s*:?\s*\[\d+\]</code> · <code>\[\d+\]\s*형식으로\s*표기[^.\n]*</code> ·
+        <code>\[\d+\]의\s*근거\s*번호는\s*\[\d+\]입니다\.?</code></li>
+      <li>출력기는 <b>중단 문자열과 같은 방식</b>으로 붙든다: 받아 둔 글의 끝이 짧은 패턴의 <b>앞부분과 겹칠 때만</b> 그 겹친 글자(최대 ~16자)를 붙든다.
+        예) 끝이 "근거" 이면 다음 글자가 "[" 인지 볼 때까지 2자만 붙든다. 겹치지 않으면 바로 내보낸다 → 지연은 대부분 0.</li>
+      <li>마무리 정리(<code>clean_answer(echo=False)</code>)에도 같은 짧은 패턴을 적용한다(비스트리밍·평가 경로).</li>
+      <li>긴 패턴(<code>_ECHO_PATTERNS</code> 의 40자형)은 지금처럼 <code>echo_filter: true</code> 일 때만.</li>
+      <li>두 판 같은 규칙: Python <code>generate/prompts.py</code>(SHORT_ECHO · clean_answer) · <code>cli.py</code>(StreamWriter._ready_part) /
+        Rust <code>generate/prompts.rs</code> · <code>cli.rs</code>(StreamWriter::ready_part). Rust 의 <code>suffix_prefix</code>(중단 문자열용) 를 그대로 쓸 수 있다.</li>
+    </ol>
+    <h4>주의</h4>
+    <ul>
+      <li>"근거" 가 본문 낱말인 경우("근거 규정은 제5조이다") — 뒤에 <code>[숫자]</code> 가 올 때만 지우므로 건드리지 않는다. 시험 사례로 넣는다.</li>
+      <li>"[1] 형식으로 표기" 는 지시문 문구 그대로라 정상 답에 나올 일이 드물다 — 그래도 지우면 안 되는 사례를 시험에 함께 넣는다.</li>
+    </ul>
+    <h4>검증</h4>
+    <ul>
+      <li><code>bench/rust_vs_py/perf.py chat</code> 100문항: 화면 첫 글자 − TTFT 중앙값 ≤ 0.3초, 잡음(위 정규식으로 셈) 9 → 2건 이하, 두 판 답 일치 유지.</li>
+      <li>시험: 위 9건 실제 답 + "근거 규정은" 같은 지우면 안 되는 사례 + 1·3·7자 흘려 넣기.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="i3">
+  <h2><span class="no">3</span>스트리밍에서 인용 번호가 두 번 찍힘 <span class="tag t-good">권장</span></h2>
+  <div class="item">
+    <h4>무엇이 일어났나</h4>
+    <ul>
+      <li>q020(끔): "…결을 맡는다. <b>[1][3][1][3]</b>". 모델이 끝 인용을 두 번 썼다.</li>
+      <li>마무리 정리의 <code>_TRAILING_CITES</code>(끝의 중복 인용을 하나로 접기)는 동작하지만, 앞의 "[1][3]" 이 <b>이미 화면에 나간 뒤</b>라 되돌릴 수 없다.</li>
+    </ul>
+    <h4>수정 설계</h4>
+    <ol>
+      <li>출력기가 <b>인용 번호 덩어리</b>(<code>(\s*\[\d+\])+\s*$</code>)로 끝나는 동안은 그 덩어리만 붙든다 — 뒤에 본문 글자가 오면 내보내고, 답이 끝나면 접어서 내보낸다.</li>
+      <li>덩어리가 문장 끝에 붙는 것이라 길이는 보통 3~12자 — 지연은 끝부분에만 생기고 첫 글자에는 영향이 없다.</li>
+      <li>②와 같은 함수(<code>_ready_part</code> / <code>ready_part</code>)에서 함께 처리한다.</li>
+    </ol>
+    <h4>검증</h4>
+    <ul><li>q020 원문 재현 시험, 본문 중간 인용("[1]에 따르면, …")은 붙들다가 바로 내보내는지. 100문항 측정에서 끝 인용 중복 0건.</li></ul>
+  </div>
+</section>
+
+<section id="i4">
+  <h2><span class="no">4</span>가끔 실패하는 감시 시험 <span class="tag t-good">권장</span></h2>
+  <div class="item">
+    <h4>무엇이 일어났나</h4>
+    <ul>
+      <li><code>RAGSearchBox/tests/test_watcher.py::TestLive::test_live</code> 가 이번 작업 중 2번 실패 — 둘 다 다른 무거운 작업(Rust 컴파일·인덱싱)과 동시에 돌 때. 따로 돌리면 3/3 통과.</li>
+      <li>실제 파일 시스템 감시를 하므로, 시험의 <code>wait(timeout=8.0)</code> 안에 이벤트가 안 올 수 있다.</li>
+    </ul>
+    <h4>수정 설계</h4>
+    <ol>
+      <li>대기 한도를 환경변수로 늘릴 수 있게 한다(<code>WATCH_TEST_TIMEOUT</code>, 기본 8 → 20초).</li>
+      <li>실패 시 마지막으로 받은 배치(reason·changed)를 메시지에 남겨 원인을 바로 알 수 있게 한다.</li>
+      <li>그래도 흔들리면 이 시험만 "실시간" 표식을 달아 기본 실행에서 빼고, 릴리스 전 점검 때만 돌린다.</li>
+    </ol>
+    <h4>검증</h4>
+    <ul><li>인덱싱을 돌리는 동안 10회 연속 실행해 모두 통과.</li></ul>
+  </div>
+</section>
+
+<section id="i5">
+  <h2><span class="no">5</span>인용 번호가 틀린 근거를 가리킴 <span class="tag t-warn">실험</span></h2>
+  <div class="item">
+    <h4>무엇이 일어났나</h4>
+    <ul>
+      <li><code>simplerag.exe ask "본인 결혼 시 경조금은 얼마인가요?"</code> → 답 "500,000 원입니다. <b>[1]</b>" — 맞는 값은 근거 [2]·[3](경조사지원규정)에 있고 [1] 은 김영란법 사례집이다.</li>
+      <li>얼마나 자주 생기는지는 아직 재지 않았다. 사용자는 인용 번호를 보고 근거를 확인하므로, 틀린 번호는 <b>검증을 방해</b>한다.</li>
+    </ul>
+    <h4>수정 설계</h4>
+    <ol>
+      <li><b>먼저 잰다</b>: 골든셋 100문항 답에서 문장별 인용 [k] 마다, 그 문장의 숫자·고유어(정규식으로 뽑은 금액·일수·조항 등)가 근거 k 에 있는지 / 다른 근거에 있는지 센다 → "인용 정확도".</li>
+      <li><b>후처리 재지정</b>: 문장의 핵심 토큰이 인용한 근거에 하나도 없고 다른 근거 하나에만 있으면 그 번호로 바꾼다. 애매하면(여러 근거에 있거나 아무 데도 없으면) 그대로 둔다.</li>
+      <li>스트리밍은 문장이 끝난 뒤에야 판정되므로, 바뀐 번호는 <b>소요 블록 아래 "인용 근거" 줄과 RAGSearchBox 근거 강조</b>에만 반영하는 방안부터 시작한다(본문은 이미 나감).</li>
+    </ol>
+    <h4>검증</h4>
+    <ul><li>인용 정확도 개선, 정답 핵심어 포함률 불변. 사람 확인용으로 바뀐 사례 20건을 표로 남긴다.</li></ul>
+  </div>
+</section>
+
+<section id="i6">
+  <h2><span class="no">6</span>표현이 다르면 검색이 놓침 <span class="tag t-warn">실험</span></h2>
+  <div class="item">
+    <h4>무엇이 일어났나</h4>
+    <ul>
+      <li>"할아버지 돌아가시면 유급휴가는 며칠…" → 근거에 '조부모' 항목이 들어오지 않아 엉뚱한 항목(배우자 부모)으로 답했고, 그 혼란이 반복 루프로 이어졌다.</li>
+      <li>골든셋 질문은 문서 용어를 그대로 써서(적중 100/100) 이런 문제를 잡지 못한다.</li>
+    </ul>
+    <h4>수정 설계</h4>
+    <ol>
+      <li><b>바꿔 말한 질문 세트</b>를 먼저 만든다(30~50문항): 구어·동의어 질문 → 정답 문서·쪽. 예) 할아버지→조부모, 와이프·아내→배우자, 연차→연차휴가, 출장비→여비.</li>
+      <li><b>동의어 사전</b>을 <code>config.yaml</code>(또는 옆 파일 <code>synonyms.yaml</code>)에 둔다 — 사용자가 사내 용어를 추가할 수 있게.</li>
+      <li>질의 확장은 <b>BM25 쪽만</b>: 질의 토큰에 동의어를 덧붙인다(dense 는 e5 가 이미 의미를 어느 정도 잡음). 재인덱싱 불필요.</li>
+      <li>두 판 같은 규칙(Python <code>retrieve/hybrid.py</code> · Rust <code>retrieve.rs</code>).</li>
+    </ol>
+    <h4>검증</h4>
+    <ul><li>바꿔 말한 질문 세트의 문서 적중·쪽 적중 개선, 골든셋 100문항 적중 100/100 유지, 검색 시간 증가 &lt; 10ms.</li></ul>
+  </div>
+</section>
+
+<section id="i7">
+  <h2><span class="no">7</span>멀티홉·추론 문항이 약함 <span class="tag t-warn">실험</span></h2>
+  <div class="item">
+    <h4>무엇이 일어났나 (RAGAS · Claude 판정)</h4>
+    <div class="tbl"><table>
+      <thead><tr><th>유형</th><th class="num">Faithfulness</th><th class="num">Context Recall</th><th class="num">핵심어 포함</th></tr></thead>
+      <tbody>
+        <tr><td>싱글홉 (43)</td><td class="num">0.893</td><td class="num">0.961</td><td class="num">32/43</td></tr>
+        <tr><td>멀티홉 (32)</td><td class="num">0.653</td><td class="num">0.664</td><td class="num">11/32</td></tr>
+        <tr><td>추론 (25)</td><td class="num">0.472</td><td class="num">0.643</td><td class="num">5/25</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>추론: 계산을 틀린다(월급 환산, 일수×금액, 몇 배 비교). 멀티홉: 근거 3건 안에 두 번째 조항이 없거나, 있어도 한쪽만 쓴다.</li>
+    </ul>
+    <h4>실험 후보 (하나씩, 같은 57문항으로)</h4>
+    <ol>
+      <li><b>근거 수</b>: top_k 3 → 5 (멀티홉 Recall 목표). TTFT 증가와 맞바꿈 — 수치로 비교.</li>
+      <li><b>모델</b>: 배포 폴더에 있는 Mi:dm 2.0 Mini · Kanana 1.5 2.1B 와 1.7B 비교(멀티홉+추론 57문항만, TTFT 함께).</li>
+      <li><b>지시문</b>: 계산이 필요한 질문이면 "근거의 숫자를 먼저 적고 식을 쓴 뒤 답" — 1단계에서 지시문 손잡이는 효과가 없었으므로(REPORT §40.5) 우선순위는 가장 낮다.</li>
+    </ol>
+    <h4>검증</h4>
+    <ul><li>57문항 핵심어 포함률과 RAGAS(Claude 판정, 같은 방식) 비교, 싱글홉 43문항 퇴보 없음, TTFT 중앙값 변화 기록.</li></ul>
+  </div>
+</section>
+
+<section id="order">
+  <h2><span class="no">8</span>진행 순서와 검증</h2>
+  <ol class="steps" style="padding-left:20px">
+    <li><b>①</b> 먼저 — 다음 배포 빌드 전에 반드시. 하루 안.</li>
+    <li><b>②+③</b> 한 번에 — 같은 함수(출력기)라 함께 고치고 100문항 한 번으로 둘 다 확인.</li>
+    <li><b>④</b> 짬날 때 — ②③ 시험 돌릴 때 함께.</li>
+    <li><b>⑤</b> 측정부터 — 인용 정확도가 생각보다 높으면 여기서 멈춘다.</li>
+    <li><b>⑥</b> 질문 세트를 만든 뒤 — 세트 없이 사전부터 만들지 않는다.</li>
+    <li><b>⑦</b> 마지막 — 가장 크고 결과가 불확실하다. Rust·Python 중 주력 판을 정한 뒤 한 판에서 먼저 실험해도 된다.</li>
+  </ol>
+  <div class="note">공통: 출력·검색 동작을 바꾸는 수정(②③⑤⑥)은 두 판이 같은 결과를 내는지 <code>bench/rust_vs_py/perf.py chat</code> + <code>analyze.py</code> 로 확인한다(지금 기준 두 판 답 일치 99/100).</div>
+</section>
+
+<footer>작성 2026-10-26 · 관련: plan/답변품질_개선_계획.html · report/(로컬, 저장소 밖)</footer>
+</div>
+</body>
+</html>
