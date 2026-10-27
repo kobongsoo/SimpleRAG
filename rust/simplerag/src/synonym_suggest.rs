@@ -32,9 +32,11 @@ const MISS_BELOW: f64 = 0.0;
 // 기록 파일이 이보다 커지면 .old 로 넘기고 새로 쓴다
 const MISSES_MAX_BYTES: u64 = 1_000_000;
 // 최근 질문 수 · 낱말마다 후보 수 · LLM 에게 보일 후보 수 · 파일에 담을 낱말 수(화면은 앞의 몇 개만)
-const RECENT: usize = 200;
+pub const RECENT: usize = 200;
 const SHOW: usize = 3;
 const LLM_CHOICES: usize = 10;
+// chat 워커(/suggest-synonyms)에서 볼 최근 질문 수 — 1.7B 고르기로 질문당 약 3초, RAGSearchBox 명령 시간 제한 300초 안에
+pub const WORKER_RECENT: usize = 60;
 const KEEP_WORDS: usize = 100;
 // 문서 용어로 치지 않는 끝 글자 — 동사·형용사·관형사꼴을 걸러 명사꼴만 남긴다
 const VERB_END: &str = "다고며여어아서면게지한할된될는은을던든록라려니요야냐도의";
@@ -47,6 +49,7 @@ const QUESTION_WORDS: &[&str] = &[
     "뭐야", "무슨", "받아", "받을", "받나", "받으면", "받는", "줘야", "주나", "주는", "주면", "그럼", "그냥", "근데", "이거", "그거",
     "내가", "제가", "우리", "회사", "회사에서", "어떻게", "어떡해", "알려줘", "궁금해", "쳐야", "치나", "쓰면", "쓰나", "가면",
     "갈때", "할때", "몇개", "몇번", "몇명", "최대", "아니면", "같은", "다른", "중간에", "끼면", "얼만데", "보통", "따로", "총",
+    "잇나", "잇어", "있나요", "할수", "될수", "쓸수", "사용할수", "있을까", "없을까", "얼마까지인지",
 ];
 // 문서 용어로 치지 않는 문법 말
 const GRAMMAR_TERMS: &[&str] = &["따른", "따라", "으로", "위와", "같이", "이에", "이내", "내에", "통해", "의해", "경우", "경우에", "해당",
@@ -310,6 +313,38 @@ pub fn suggest(retriever: &Retriever, embedder: &Embedder, questions: &[(String,
     out.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)));
     let cands: Vec<Value> = out.into_iter().take(KEEP_WORDS).map(|x| x.2).collect();
     Ok(json!({"updated": now_iso(), "n_questions": questions.len(), "llm": complete.is_some(), "candidates": cands}))
+}
+
+//------------------------------------------------------------------
+// 후보 만들기 한 번 (Python run 과 같다 — suggest-synonyms 명령 · chat 워커 /suggest-synonyms 가 함께 쓴다)
+//=> 기록을 읽어 후보를 만들고 파일로 쓴 뒤 결과 요약을 돌려준다(요약은 "@index {json}" 한 줄로 내보낸다).
+//   recent = 볼 최근 질문 수 — chat 워커 안에서는 명령 시간 제한(300초) 안에 끝나게 줄여 부른다.
+//   돌려줌: (요약 {op, ok, n_questions, n_words, llm, path | why}, 결과 또는 None) — 실패도 요약의 why 로
+//------------------------------------------------------------------
+pub fn run(retriever: &Retriever, embedder: &Embedder, complete: Option<&dyn Fn(&str, usize) -> Result<String, String>>,
+           src: Option<&str>, out: Option<&str>, recent: usize, log: &mut dyn FnMut(&str)) -> (serde_json::Map<String, Value>, Option<Value>) {
+    let fail = |why: String| -> (serde_json::Map<String, Value>, Option<Value>) {
+        let v = json!({"op": "suggest-synonyms", "ok": false, "why": why});
+        (v.as_object().unwrap().clone(), None)
+    };
+    let src = src.map(|s| s.to_string()).unwrap_or_else(|| pyutil::join(&cfg().root, MISSES_NAME));
+    let all = read_misses(&src);
+    let questions = &all[all.len().saturating_sub(recent)..];
+    if questions.is_empty() {
+        return fail(format!("기록된 질문이 없습니다: {}", src));
+    }
+    let result = match suggest(retriever, embedder, questions, complete, log) {
+        Ok(r) => r,
+        Err(e) => return fail(pyutil::head(&e, 200).to_string()),
+    };
+    let path = match save(&result, out) {
+        Ok(p) => p,
+        Err(e) => return fail(pyutil::head(&e, 200).to_string()),
+    };
+    let n_words = result["candidates"].as_array().map(|a| a.len()).unwrap_or(0);
+    let v = json!({"op": "suggest-synonyms", "ok": true, "n_questions": result["n_questions"], "n_words": n_words,
+                   "llm": result["llm"], "path": path});
+    (v.as_object().unwrap().clone(), Some(result))
 }
 
 //------------------------------------------------------------------

@@ -34,6 +34,8 @@ MISSES_MAX_BYTES = 1_000_000
 RECENT = 200
 SHOW = 3
 LLM_CHOICES = 10
+# chat 워커(/suggest-synonyms)에서 볼 최근 질문 수 — 1.7B 고르기로 질문당 약 3초, RAGSearchBox 명령 시간 제한 300초 안에
+WORKER_RECENT = 60
 KEEP_WORDS = 100
 # 문서 용어로 치지 않는 끝 글자 — 동사·형용사·관형사꼴("받아", "따른", "하여")을 걸러 명사꼴만 남긴다
 _VERB_END = set("다고며여어아서면게지한할된될는은을던든록라려니요야냐도의")
@@ -44,6 +46,7 @@ _QUESTION_WORDS = {
     "뭐야", "무슨", "받아", "받을", "받나", "받으면", "받는", "줘야", "주나", "주는", "주면", "그럼", "그냥", "근데", "이거", "그거",
     "내가", "제가", "우리", "회사", "회사에서", "어떻게", "어떡해", "알려줘", "궁금해", "쳐야", "치나", "쓰면", "쓰나", "가면",
     "갈때", "할때", "몇개", "몇번", "몇명", "최대", "아니면", "같은", "다른", "중간에", "끼면", "얼만데", "보통", "따로", "총",
+    "잇나", "잇어", "있나요", "할수", "될수", "쓸수", "사용할수", "있을까", "없을까", "얼마까지인지",
 }
 # 짧은 동사꼴 질문 말의 끝 글자 — 세 글자 이하로 이 글자로 끝나면("되고", "걸로", "오래", "쳐줘") 넓힐 대상이 아니다
 _SHORT_VERB_END = set("고로야서지게요줘래니면데까")
@@ -124,12 +127,28 @@ def read_misses(path):
     return [(q, counts[q]) for q in order[-RECENT:]]
 
 
-# 공백 지운 글 — 청크 줄바꿈·띄어쓰기와 상관없이 낱말이 들었는지 보려고
+#------------------------------------------------------------------
+# 공백 지운 글
+#=> 청크 줄바꿈·띄어쓰기와 상관없이 낱말이 들었는지 보려고 공백을 모두 지운다.
+#
+# -in: s = 글
+#
+# -out: 공백 없는 글
+# -out: error = 없음
+#------------------------------------------------------------------
 def _flat(s):
     return _WS.sub("", s or "")
 
 
-# 구어 조사 떼기 — 떼고도 두 글자 이상 남을 때만
+#------------------------------------------------------------------
+# 구어 조사 떼기
+#=> "공무원한테" → "공무원" 처럼 hybrid.keywords 가 떼지 않는 구어 조사를 뗀다. 떼고도 두 글자 이상 남을 때만.
+#
+# -in: w = 낱말
+#
+# -out: 조사를 뗀 낱말
+# -out: error = 없음
+#------------------------------------------------------------------
 def _strip_spoken(w):
     for j in _SPOKEN_JOSA:
         if w.endswith(j) and len(w) >= len(j) + 2:
@@ -262,6 +281,33 @@ def suggest(retriever, questions, llm_complete=None, log=None):
     out.sort(key=lambda e: (-e["count"], -(e["terms"][0]["score"] if e["terms"] else 0)))
     return {"updated": datetime.datetime.now().isoformat(timespec="seconds"), "n_questions": len(questions),
             "llm": bool(llm_complete), "candidates": out[:KEEP_WORDS]}
+
+
+#------------------------------------------------------------------
+# 후보 만들기 한 번 (suggest-synonyms 명령 · chat 워커 /suggest-synonyms 가 함께 쓴다)
+#=> 기록을 읽어 후보를 만들고 파일로 쓴 뒤, 결과 요약을 돌려준다(요약은 "@index {json}" 한 줄로 내보낸다).
+#    1) 기록된 질문이 없으면 실패 요약
+#    2) 최근 recent 개만 본다 — chat 워커 안에서는 명령 시간 제한(300초) 안에 끝나게 줄여 부른다
+#
+# -in: retriever    = 검색기 / llm_complete = (프롬프트, 최대 토큰) → 글, None 이면 e5 순서만
+# -in: src = 질문 jsonl(None 이면 데이터 폴더 기록) / out = 결과 경로(None 이면 데이터 폴더)
+# -in: recent = 볼 최근 질문 수 / log = 진행 출력 함수(선택)
+#
+# -out: (요약 dict {op, ok, n_questions, n_words, llm, path | why}, 결과 dict 또는 None)
+# -out: error = 없음 (검색·쓰기 실패도 요약의 why 로)
+#------------------------------------------------------------------
+def run(retriever, llm_complete=None, src=None, out=None, recent=RECENT, log=None):
+    src = src or os.path.join(config.ROOT, MISSES_NAME)
+    questions = read_misses(src)[-recent:]
+    if not questions:
+        return {"op": "suggest-synonyms", "ok": False, "why": "기록된 질문이 없습니다: {}".format(src)}, None
+    try:
+        result = suggest(retriever, questions, llm_complete=llm_complete, log=log)
+        path = save(result, out)
+    except Exception as e:
+        return {"op": "suggest-synonyms", "ok": False, "why": "{}: {}".format(type(e).__name__, str(e)[:200])}, None
+    return {"op": "suggest-synonyms", "ok": True, "n_questions": result["n_questions"],
+            "n_words": len(result["candidates"]), "llm": result["llm"], "path": path}, result
 
 
 #------------------------------------------------------------------

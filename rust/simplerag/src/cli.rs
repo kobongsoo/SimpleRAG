@@ -583,6 +583,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 outln("  /remove-doc <경로>   지운 문서를 인덱스에서 빼기");
                 outln("  /bm25                키워드 색인 다시 만들기");
                 outln("  /index-plan <폴더>   폴더와 인덱스 비교(바꾸지 않음)");
+                outln("  /suggest-synonyms    놓친 질문으로 동의어 사전 후보 뽑기");
                 outln("  exit        종료\n");
             } else if cmd == "/topk" && parts.len() > 1 && parts[1].chars().all(|c| c.is_ascii_digit()) && !parts[1].is_empty() {
                 top_k = parts[1].parse().ok();
@@ -594,6 +595,14 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 let arg = pyutil::strip_chars(&rest, "\"").to_string();
                 chat_folder = if arg.is_empty() { None } else { Some(arg) };
                 outln(&format!("  검색 범위: {}\n", chat_folder.as_deref().unwrap_or("인덱스 전체")));
+            } else if cmd == "/suggest-synonyms" {
+                // 동의어 후보 만들기(동의어 설계서 4단계) — 인덱스를 쥔 이 워커가 올려 둔 모델로 직접 한다.
+                //   명령 시간 제한(RAGSearchBox 300초) 안에 끝나게 최근 질문 WORKER_RECENT 개만 본다
+                let gen = app.generator.clone();
+                let complete = move |p: &str, n: usize| gen.complete(p, n);
+                let (summary, _) = crate::synonym_suggest::run(&app.retriever, &app.embedder, Some(&complete), None, None,
+                                                               crate::synonym_suggest::WORKER_RECENT, &mut |_| {});
+                outln(&commands::format_result(&summary, commands::PREFIX));
             } else if commands::COMMANDS.contains(&cmd.as_str()) {
                 let res = commands::run(&app, &cmd, &rest);
                 outln(&commands::format_result(&res, commands::PREFIX));
@@ -785,28 +794,20 @@ pub fn cmd_search(a: &Args) -> i32 {
 pub fn cmd_suggest(a: &Args) -> i32 {
     use crate::synonym_suggest as ss;
     let src = a.from.clone().unwrap_or_else(|| pyutil::join(&cfg().root, ss::MISSES_NAME));
-    let questions = ss::read_misses(&src);
-    if questions.is_empty() {
-        outln(&format!("기록된 질문이 없습니다: {}", src));
-        return 1;
-    }
     let app = App::new(None);
     app.warmup(a.no_llm, &mut |s| log(s), None);
     app.wait_rerank();
     let gen = app.generator.clone();
     let complete = move |p: &str, n: usize| gen.complete(p, n);
     let llm: Option<&dyn Fn(&str, usize) -> Result<String, String>> = if a.no_llm { None } else { Some(&complete) };
-    let r = ss::suggest(&app.retriever, &app.embedder, &questions, llm, &mut |s| log(s))
-        .and_then(|res| ss::save(&res, a.out.as_deref()).map(|p| (res, p)));
-    let code = match r {
-        Err(e) => {
-            log(&format!("후보 제안 실패: {}", e));
-            1
-        }
-        Ok((res, path)) => {
+    // 인덱스를 다른 프로세스(실행 중인 chat 워커)가 쥐고 있으면 검색에서 실패한다 — 이유는 요약 줄의 why 로
+    let (summary, result) = ss::run(&app.retriever, &app.embedder, llm, Some(&src), a.out.as_deref(), ss::RECENT, &mut |s| log(s));
+    match &result {
+        Some(res) => {
             let cands = res["candidates"].as_array().cloned().unwrap_or_default();
-            outln(&format!("\n질문 {}개 → 후보 낱말 {}개 ({}) — {}", res["n_questions"], cands.len(),
-                if res["llm"].as_bool().unwrap_or(false) { "1.7B 고르기" } else { "e5 순서" }, path));
+            outln(&format!("
+질문 {}개 → 후보 낱말 {}개 ({}) — {}", res["n_questions"], cands.len(),
+                if res["llm"].as_bool().unwrap_or(false) { "1.7B 고르기" } else { "e5 순서" }, summary["path"].as_str().unwrap_or("")));
             for c in cands.iter().take(10) {
                 let terms = c["terms"].as_array().cloned().unwrap_or_default().iter()
                     .map(|t| format!("{}{} {:.2}", t["term"].as_str().unwrap_or(""), if t["llm"].as_bool().unwrap_or(false) { "★" } else { "" },
@@ -814,11 +815,16 @@ pub fn cmd_suggest(a: &Args) -> i32 {
                     .collect::<Vec<_>>().join(" · ");
                 outln(&format!("  {} ({}회) → {}", c["word"].as_str().unwrap_or(""), c["count"], terms));
             }
-            0
         }
-    };
+        None => {
+            let why = summary.get("why").and_then(|v| v.as_str()).unwrap_or("");
+            if why.starts_with("기록된 질문이 없습니다") { outln(why) } else { outln(&format!("후보 제안 실패: {}", why)) }
+        }
+    }
+    // RAGSearchBox 가 읽는 결과 한 줄 — chat 워커의 /suggest-synonyms 와 같은 모양
+    outln(&crate::commands::format_result(&summary, crate::commands::PREFIX));
     app.close();
-    code
+    if summary["ok"].as_bool().unwrap_or(false) { 0 } else { 1 }
 }
 
 // ── status ────────────────────────────────────────────────

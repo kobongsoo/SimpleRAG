@@ -647,6 +647,7 @@ def cmd_chat(args):
                     print("  /remove-doc <경로>   지운 문서를 인덱스에서 빼기")
                     print("  /bm25                키워드 색인 다시 만들기")
                     print("  /index-plan <폴더>   폴더와 인덱스 비교(바꾸지 않음)")
+                    print("  /suggest-synonyms    놓친 질문으로 동의어 사전 후보 뽑기")
                     print("  exit        종료\n")
                 elif cmd == "/topk" and len(parts) > 1 and parts[1].isdigit():
                     top_k = int(parts[1])
@@ -658,6 +659,13 @@ def cmd_chat(args):
                     arg = query[len(parts[0]):].strip().strip('"')
                     chat_folder = arg or None
                     print("  검색 범위: {}\n".format(chat_folder or "인덱스 전체"))
+                elif cmd == "/suggest-synonyms":
+                    # 동의어 후보 만들기(동의어 설계서 4단계) — 인덱스를 쥔 이 워커가 올려 둔 모델로 직접 한다.
+                    #   명령 시간 제한(RAGSearchBox 300초) 안에 끝나게 최근 질문 WORKER_RECENT 개만 본다
+                    from simplerag.retrieve import synonym_suggest as ss
+                    summary, _ = ss.run(app.retriever, llm_complete=app.pipeline.generator.complete,
+                                        recent=ss.WORKER_RECENT)
+                    print(index_commands.format_result(summary), flush=True)
                 elif cmd in index_commands.COMMANDS:
                     # 자동 인덱싱(설계서 §9) — 결과는 "@index {json}" 한 줄.
                     # 인덱스를 쥔 이 워커가 직접 반영하므로 `index` 를 따로 돌릴 필요가 없다.
@@ -844,37 +852,51 @@ def cmd_search(args):
 #    1) 검색 구성요소를 올린다(1.7B 는 --no-llm 이 아니면 함께 — 후보 하나를 고르게 한다)
 #    2) 질문마다 후보를 뽑아 낱말별로 모은다(synonym_suggest.suggest)
 #    3) 결과 파일을 쓰고 상위 후보를 화면에 보여 준다
+#    4) 마지막 줄에 결과 요약 "@index {json}" — RAGSearchBox 가 읽는다(chat 워커 /suggest-synonyms 와 같은 모양)
+#   ⚠️ 인덱스는 한 프로세스만 열 수 있다 — chat 워커가 떠 있으면 이 명령은 실패하므로, RAGSearchBox 는
+#      그때 워커에게 /suggest-synonyms 를 보낸다.
 #
 # -in: args.from_ = 질문 목록 jsonl(기본 <데이터 폴더>/synonym_misses.jsonl, 바꿔 말한 질문 세트도 됨)
 # -in: args.out   = 결과 경로(기본 <데이터 폴더>/synonym_candidates.json)
 # -in: args.no_llm = True 면 e5 순서만 쓴다(모델을 올리지 않아 빠르다)
 #
-# -out: 종료 코드 (0 = 성공, 1 = 기록된 질문 없음)
-# -out: error = 검색·임베딩 실패는 예외 전파
+# -out: 종료 코드 (0 = 성공, 1 = 기록된 질문 없음·실패)
+# -out: error = 없음 (적재·검색 실패도 요약 줄의 why 로)
 #------------------------------------------------------------------
 def cmd_suggest(args):
+    from simplerag.index import commands as index_commands
     from simplerag.retrieve import synonym_suggest as ss
 
     src = args.from_ or os.path.join(config.ROOT, ss.MISSES_NAME)
-    questions = ss.read_misses(src)
-    if not questions:
+    if not ss.read_misses(src):
         print("기록된 질문이 없습니다: {}".format(src))
+        print(index_commands.format_result({"op": "suggest-synonyms", "ok": False,
+                                            "why": "기록된 질문이 없습니다: {}".format(src)}))
         return 1
-    app = App()
+    app = None
     try:
+        app = App()
         app.warmup(wait=True, skip_llm=args.no_llm, on_log=_log)
         app.wait_rerank()
         llm = None if args.no_llm else app.pipeline.generator.complete
-        result = ss.suggest(app.retriever, questions, llm_complete=llm, log=_log)
-        path = ss.save(result, args.out)
+        summary, result = ss.run(app.retriever, llm_complete=llm, src=src, out=args.out, log=_log)
+    except Exception as e:
+        # 인덱스를 다른 프로세스(실행 중인 chat 워커)가 쥐고 있으면 여기로 온다 — 이유를 결과 줄에 남긴다
+        summary, result = {"op": "suggest-synonyms", "ok": False, "why": "{}: {}".format(type(e).__name__, str(e)[:200])}, None
+    finally:
+        if app is not None:
+            app.close()
+    if result:
         print("\n질문 {}개 → 후보 낱말 {}개 ({}) — {}".format(
-            result["n_questions"], len(result["candidates"]), "1.7B 고르기" if result["llm"] else "e5 순서", path))
+            result["n_questions"], len(result["candidates"]), "1.7B 고르기" if result["llm"] else "e5 순서", summary["path"]))
         for c in result["candidates"][:10]:
             terms = " · ".join("{}{} {:.2f}".format(t["term"], "★" if t["llm"] else "", t["score"]) for t in c["terms"])
             print("  {} ({}회) → {}".format(c["word"], c["count"], terms))
-        return 0
-    finally:
-        app.close()
+    else:
+        print("후보 제안 실패: {}".format(summary["why"]))
+    # RAGSearchBox 가 읽는 결과 한 줄 — chat 워커의 /suggest-synonyms 와 같은 모양
+    print(index_commands.format_result(summary))
+    return 0 if summary["ok"] else 1
 
 
 #------------------------------------------------------------------
