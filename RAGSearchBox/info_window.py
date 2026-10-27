@@ -17,10 +17,12 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from tkinter import font as tkfont
+from tkinter import ttk
 
 import dock as rsb_dock
 import log as rsb_log
 import settings as rsb_settings
+import synonym_store
 
 REFRESH_MS = 1000       # 떠 있는 동안 값을 다시 읽는 주기
 FOLDER_ROWS = 3         # 인덱싱 폴더 목록 칸의 높이(줄)
@@ -74,6 +76,25 @@ def folder_note(info):
 
 
 #------------------------------------------------------------------
+# 동의어 칸 아래 안내 줄 (순수 부분 — 시험에서 쓴다)
+#=> 놓친 질문 수 · 남은 후보 수 · 승인한 일상어 수, 그리고 마지막 동작 결과.
+#
+# -in: n_miss = 놓친 질문 수 / n_left = 남은 후보 수 / n_ok = 승인한 일상어 수 / msg = 마지막 결과 글
+#
+# -out: 안내 글
+# -out: error = 없음
+#------------------------------------------------------------------
+def synonym_note(n_miss, n_left, n_ok, msg=""):
+    if n_left:
+        head = "후보 {}개 남음 · 승인한 동의어 {}개".format(n_left, n_ok)
+    elif n_miss:
+        head = "답을 못 찾은 질문 {}개 — [후보 만들기] 로 사전 후보를 뽑으세요 · 승인한 동의어 {}개".format(n_miss, n_ok)
+    else:
+        head = "답을 못 찾은 질문이 쌓이면 여기서 동의어 후보를 고를 수 있습니다 · 승인한 동의어 {}개".format(n_ok)
+    return head + ("\n" + msg if msg else "")
+
+
+#------------------------------------------------------------------
 # 설정 창
 #=> 한 번 만든 창을 숨겼다 다시 보이는 식으로 쓴다(여러 개 뜨지 않게).
 #
@@ -82,7 +103,9 @@ def folder_note(info):
 # -필드: set_folders = 인덱싱 폴더를 바꿀 때 부를 함수 fn(목록) -> (ok, 안내 글). 없으면 버튼을 잠근다
 # -필드: rescan      = [다시 확인] 을 누르면 부를 함수 fn() -> (ok, 안내 글). 없으면 버튼을 잠근다
 # -필드: actions     = 예전 트레이 메뉴 동작 {"open"|"unload"|"reload"|"autorun": fn() -> 안내 글}
+# -필드: suggest     = [후보 만들기] 를 누르면 부를 함수 fn() -> 안내 글. 없으면 버튼을 잠근다
 # -필드: visible   = 지금 떠 있는가
+#   동의어 칸은 get_info 의 "data_home"(워커 데이터 폴더)에서 후보·사전 파일을 직접 읽고 쓴다.
 #------------------------------------------------------------------
 class InfoWindow:
     #--------------------------------------------------------------
@@ -96,12 +119,13 @@ class InfoWindow:
     # -in: set_folders = 인덱싱 폴더를 바꾸는 함수 fn(목록) -> (ok, 안내 글) (기본 None)
     # -in: rescan      = 폴더를 곧바로 다시 대조하는 함수 fn() -> (ok, 안내 글) (기본 None)
     # -in: actions     = 화면 열기·모델 내리기/올리기·자동 시작 함수들 {이름: fn() -> 안내 글} (기본 None)
+    # -in: suggest     = 동의어 후보를 만드는 함수 fn() -> 안내 글 (기본 None)
     #
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
     def __init__(self, root, settings, get_info, open_logs, set_folders=None, rescan=None,
-                 actions=None):
+                 actions=None, suggest=None):
         self.root = root
         self.s = settings
         self.get_info = get_info
@@ -109,6 +133,20 @@ class InfoWindow:
         self.set_folders = set_folders
         self.rescan = rescan
         self.actions = dict(actions or {})
+        self.suggest = suggest
+        self._home = None          # 워커 데이터 폴더(동의어 파일이 있는 곳)
+        self._syn_sig = None       # 동의어 칸을 마지막으로 그린 파일 상태(바뀔 때만 다시 그린다)
+        self._syn_box = None       # 후보 줄들을 담는 틀
+        self._syn_note = None
+        self._syn_msg = ""         # 마지막 동의어 동작 결과
+        self._syn_word = None      # 직접 추가 — 일상어 칸
+        self._syn_term = None      # 직접 추가 — 문서 용어 칸
+        self._syn_counts = (0, 0, 0)   # (놓친 질문, 남은 후보, 승인한 수)
+        self._syn_pairs = []       # 승인한 동의어 목록 칸에 그려 둔 짝들 [(일상어, 문서 용어)]
+        self._syn_list = None
+        self._tabs = None
+        self._syn_job_seen = None  # 안내 줄에 이미 보인 후보 만들기 소식 번호
+        self._fonts = None
         self._btn_unload = None
         self._btn_reload = None
         self._autorun_var = None
@@ -159,8 +197,13 @@ class InfoWindow:
         f_base = tkfont.Font(family="Malgun Gothic", size=size)
         f_bold = tkfont.Font(family="Malgun Gothic", size=size, weight="bold")
 
-        body = tk.Frame(win, bg="white", padx=14, pady=12)
-        body.pack(fill="both", expand=True)
+        # 탭 두 개 — 기본(모델·폴더·자동 시작·로그) · 동의어(후보 승인·직접 추가·승인한 목록)
+        self._tabs = ttk.Notebook(win)
+        self._tabs.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+        body = tk.Frame(self._tabs, bg="white", padx=14, pady=12)
+        syn_tab = tk.Frame(self._tabs, bg="white", padx=14, pady=12)
+        self._tabs.add(body, text="기본")
+        self._tabs.add(syn_tab, text="동의어")
 
         # 이름 칸을 먼저 만들어 두고 값만 갱신한다(줄 수는 info_rows 가 정한다)
         rows = info_rows({})
@@ -231,8 +274,10 @@ class InfoWindow:
         tk.Button(body, text="열기", command=self._open_logs, relief="groove",
                   font=f_base, padx=10).grid(row=r, column=2, sticky="e", padx=(8, 0), pady=3)
 
+        self._build_syn(syn_tab, f_base, f_bold)
+
         foot = tk.Frame(win, bg="white", padx=14, pady=0)
-        foot.pack(fill="x")
+        foot.pack(fill="x", pady=(10, 0))
         tk.Button(foot, text="닫기", command=self.hide, relief="groove",
                   font=f_base, padx=14).pack(side="right", pady=(0, 12))
         # 화면 열기(트레이에도 있다) — 닫아 둔 폴더 패널을 다시 띄운다
@@ -241,6 +286,53 @@ class InfoWindow:
                   state="normal" if "open" in self.actions else "disabled"
                   ).pack(side="left", pady=(0, 12))
         self.win = win
+
+    #--------------------------------------------------------------
+    # 동의어 탭 만들기 (동의어 설계서 §8)
+    #=> 위에서부터
+    #    1) 안내 글 · 후보 줄들(바뀔 때만 다시 그림 — _syn_draw)
+    #    2) 직접 추가(일상어 → 문서 용어) · [후보 만들기]
+    #    3) 안내 줄(놓친 질문 · 남은 후보 · 승인한 수 · 마지막 결과)
+    #    4) 승인한 동의어 목록과 [빼기]
+    #
+    # -in: tab = 동의어 탭 틀 / f_base, f_bold = 글꼴
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _build_syn(self, tab, f_base, f_bold):
+        self._fonts = (f_base, f_bold)
+        tk.Label(tab, text="답을 못 찾은 질문에서 뽑은 후보예요. 맞으면 승인하세요 — 다음 질문부터 바로 적용됩니다.",
+                 font=f_base, bg="white", fg="#475063", anchor="w", justify="left",
+                 wraplength=WRAP_PX + 120).pack(fill="x")
+        self._syn_box = tk.Frame(tab, bg="white")
+        self._syn_box.pack(fill="x", pady=(6, 0))
+        add = tk.Frame(tab, bg="white")
+        add.pack(fill="x", pady=(8, 0))
+        self._syn_word = tk.Entry(add, width=12, font=f_base, relief="solid", bd=1)
+        self._syn_word.pack(side="left")
+        tk.Label(add, text="→", font=f_base, bg="white").pack(side="left", padx=4)
+        self._syn_term = tk.Entry(add, width=14, font=f_base, relief="solid", bd=1)
+        self._syn_term.pack(side="left")
+        tk.Button(add, text="직접 추가", command=self._syn_add, relief="groove", font=f_base,
+                  padx=8).pack(side="left", padx=(6, 0))
+        tk.Button(add, text="후보 만들기", command=self._syn_suggest, relief="groove", font=f_base,
+                  padx=8, state="normal" if self.suggest else "disabled").pack(side="right")
+        self._syn_note = tk.Label(tab, text="", font=f_base, bg="white", fg="#647083",
+                                  anchor="w", justify="left", wraplength=WRAP_PX + 120)
+        self._syn_note.pack(fill="x", pady=(4, 0))
+        # 승인한 동의어 — 무엇을 넣었는지 보고 잘못 넣은 것은 뺀다
+        tk.Label(tab, text="승인한 동의어", font=f_bold, bg="white", fg="#475063",
+                 anchor="w").pack(fill="x", pady=(10, 2))
+        lst = tk.Frame(tab, bg="white")
+        lst.pack(fill="x")
+        box = tk.Frame(lst, bg="#d7dbe3", padx=1, pady=1)
+        box.pack(side="left", fill="x", expand=True)
+        self._syn_list = tk.Listbox(box, height=4, font=f_base, relief="flat", highlightthickness=0,
+                                    bd=0, activestyle="none", exportselection=False)
+        self._syn_list.pack(fill="both", expand=True)
+        tk.Button(lst, text="빼기", command=self._syn_remove, relief="groove", font=f_base,
+                  padx=10).pack(side="left", anchor="n", padx=(8, 0))
 
     #--------------------------------------------------------------
     # 보이기 (트레이 "설정")
@@ -383,6 +475,14 @@ class InfoWindow:
             if self._folder_note.cget("text") != note:
                 self._folder_note.config(text=note)
                 changed = True
+            # 동의어 칸 — 후보·사전 파일이 바뀌었을 때만 줄을 다시 그린다
+            self._home = info.get("data_home")
+            # 후보 만들기 진행 소식은 새 소식(번호가 바뀜)일 때만 안내 줄에 — 사용자 동작 결과를 매초 덮지 않게
+            job = info.get("syn_job")
+            if job and job[0] != self._syn_job_seen:
+                self._syn_job_seen = job[0]
+                self._syn_msg = job[1]
+            changed = self._syn_refresh() or changed
             # 모델 단추 — 올라가 있으면 내리기만, 내려가 있으면 올리기만 누를 수 있다
             up = info.get("model_up")
             for btn, name, want in ((self._btn_unload, "unload", True),
@@ -532,6 +632,162 @@ class InfoWindow:
             msg = "하지 못했습니다: {}".format(e)
         if msg:
             self._action_msg = msg
+        self._refresh_now()
+
+    #--------------------------------------------------------------
+    # 동의어 칸 다시 그리기 (1초마다 부르지만 파일이 바뀌었을 때만 줄을 새로 만든다)
+    #=> 1) 후보·사전·놓친 질문 파일의 수정 시각으로 바뀌었는지 본다
+    #   2) 바뀌었으면 후보 줄(최대 5개)을 지우고 다시 만든다 — 줄마다 일상어 → [문서 용어 고르기] [맞음] [아님]
+    #      아래 회색 줄에 놓친 질문 예와 그 용어가 나오는 문서
+    #   3) 안내 줄(놓친 질문 수 · 남은 후보 · 승인한 수 · 마지막 결과)을 맞춘다
+    #
+    # -in: 없음
+    #
+    # -out: True = 화면이 바뀜(창 크기 다시 맞추기용)
+    # -out: error = 없음 (파일 못 읽음은 빈 칸으로)
+    #--------------------------------------------------------------
+    def _syn_refresh(self):
+        home = self._home
+        if not home or self._syn_box is None:
+            return False
+
+        # 파일 수정 시각 — 없으면 None
+        def mt(name):
+            try:
+                return os.path.getmtime(os.path.join(home, name))
+            except OSError:
+                return None
+        sig = (home, mt(synonym_store.CANDIDATES_NAME), mt(synonym_store.USER_NAME),
+               mt(synonym_store.MISSES_NAME))
+        changed = False
+        if sig != self._syn_sig:
+            self._syn_sig = sig
+            rows, n_left = synonym_store.pending(home)
+            n_miss, n_ok = synonym_store.counts(home)
+            self._syn_counts = (n_miss, n_left, n_ok)
+            self._syn_draw(rows)
+            # 승인한 목록 — 다시 그리면 고른 줄이 풀리므로 파일이 바뀐 때만
+            self._syn_pairs = synonym_store.approved_pairs(home)
+            self._syn_list.delete(0, "end")
+            for w, t in self._syn_pairs:
+                self._syn_list.insert("end", "{}  →  {}".format(w, t))
+            # 탭 이름에 남은 후보 수 — 기본 탭을 보고 있어도 후보가 쌓인 걸 알 수 있게
+            self._tabs.tab(1, text="동의어 ({})".format(n_left) if n_left else "동의어")
+            changed = True
+        note = synonym_note(*self._syn_counts, msg=self._syn_msg)
+        if self._syn_note.cget("text") != note:
+            self._syn_note.config(text=note)
+            changed = True
+        return changed
+
+    #--------------------------------------------------------------
+    # 후보 줄 만들기
+    #
+    # -in: rows = synonym_store.pending 의 줄 목록
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _syn_draw(self, rows):
+        f_base, f_bold = self._fonts
+        for w in self._syn_box.winfo_children():
+            w.destroy()
+        for row in rows:
+            fr = tk.Frame(self._syn_box, bg="white")
+            fr.pack(fill="x", pady=(2, 0))
+            top = tk.Frame(fr, bg="white")
+            top.pack(fill="x")
+            tk.Label(top, text=row["word"] + "  →", font=f_bold, bg="white").pack(side="left")
+            combo = ttk.Combobox(top, values=row["terms"], state="readonly", width=14, font=f_base)
+            combo.current(0)
+            combo.pack(side="left", padx=(4, 0))
+            why = tk.Label(fr, text="", font=f_base, bg="white", fg="#647083", anchor="w",
+                           justify="left", wraplength=WRAP_PX)
+
+            # 고른 문서 용어가 나오는 문서를 회색 줄에 보인다
+            def show_why(_e=None, row=row, combo=combo, why=why):
+                docs = row["docs"].get(combo.get()) or []
+                text = "놓친 질문: \"{}\"".format(row["example"])
+                if docs:
+                    text += " · '{}' 이 나오는 문서: {}".format(combo.get(), ", ".join(docs))
+                why.config(text=text)
+            combo.bind("<<ComboboxSelected>>", show_why)
+            show_why()
+            tk.Button(top, text="✕ 아님", relief="groove", font=f_base, padx=6,
+                      command=lambda w=row["word"], c=combo: self._syn_do(synonym_store.reject, w, c.get())
+                      ).pack(side="right")
+            tk.Button(top, text="✓ 맞음", relief="groove", font=f_base, padx=6,
+                      command=lambda w=row["word"], c=combo: self._syn_do(synonym_store.approve, w, c.get())
+                      ).pack(side="right", padx=(0, 4))
+            why.pack(fill="x")
+
+    #--------------------------------------------------------------
+    # [맞음] · [아님] · [직접 추가] 공통 — 사전에 적고 칸을 곧바로 다시 그린다
+    #
+    # -in: fn = synonym_store.approve | reject / word = 일상어 / term = 문서 용어
+    #
+    # -out: True = 성공
+    # -out: error = 없음 (실패는 안내 줄로)
+    #--------------------------------------------------------------
+    def _syn_do(self, fn, word, term):
+        if not self._home:
+            self._syn_msg = "SimpleRAG 데이터 폴더를 찾지 못했습니다"
+            self._refresh_now()
+            return False
+        ok, msg = fn(self._home, word, term)
+        self._syn_msg = msg
+        # 파일이 바뀌었으니 다음 갱신에서 줄을 새로 그리게 한다
+        self._syn_sig = None
+        self._refresh_now()
+        return ok
+
+    #--------------------------------------------------------------
+    # [직접 추가] — 두 칸에 적은 짝을 사전에 넣는다. 성공하면 칸을 비운다
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _syn_add(self):
+        word, term = self._syn_word.get().strip(), self._syn_term.get().strip()
+        if self._syn_do(synonym_store.approve, word, term):
+            self._syn_word.delete(0, "end")
+            self._syn_term.delete(0, "end")
+
+    #--------------------------------------------------------------
+    # [빼기] — 승인한 목록에서 고른 짝을 사전에서 뺀다 ([아님] 과 달리 다시 제안될 수 있다)
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _syn_remove(self):
+        sel = self._syn_list.curselection()
+        if not sel:
+            self._syn_msg = "뺄 동의어를 목록에서 고르세요"
+            self._refresh_now()
+            return
+        w, t = self._syn_pairs[sel[0]]
+        self._syn_do(synonym_store.remove, w, t)
+
+    #--------------------------------------------------------------
+    # [후보 만들기] — app 이 뒤에서 suggest-synonyms 를 돌리고, 끝나면 후보 파일이 바뀌어 칸이 다시 그려진다
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음 (app 쪽 예외는 로그와 안내 줄로)
+    #--------------------------------------------------------------
+    def _syn_suggest(self):
+        if not self.suggest:
+            return
+        try:
+            self._syn_msg = self.suggest() or ""
+        except Exception as e:
+            self.log.exception("동의어 후보 만들기에서 예외")
+            self._syn_msg = "후보를 만들지 못했습니다: {}".format(e)
         self._refresh_now()
 
     #--------------------------------------------------------------

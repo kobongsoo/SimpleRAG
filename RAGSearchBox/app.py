@@ -46,6 +46,52 @@ SCOPE_WARN = "범위 폴더 미설정 — RAGSearchBox.ini 의 [Scope] Folders �
 # -필드: q      = 모든 스레드가 이벤트를 넣는 큐
 # -필드: worker = SimpleRAG 워커(실행 파일을 못 찾으면 None)
 #------------------------------------------------------------------
+
+#------------------------------------------------------------------
+# 명령 출력에서 결과 줄("@index {json}") 꺼내기
+#=> suggest-synonyms 명령은 마지막에 chat 워커와 같은 결과 줄을 낸다. 없으면 옛 simplerag 다.
+#
+# -in: out = 명령 출력 전체
+#
+# -out: 결과 dict (없으면 {"ok": False, "unknown": True, ...})
+# -out: error = 없음
+#------------------------------------------------------------------
+def parse_result_line(out):
+    import json
+
+    res = None
+    for ln in (out or "").splitlines():
+        if ln.startswith("@index "):
+            try:
+                res = json.loads(ln[len("@index "):])
+            except ValueError:
+                pass
+    if res is None:
+        tail = (out or "").strip().splitlines()
+        res = {"ok": False, "unknown": True, "why": tail[-1] if tail else ""}
+    return res
+
+
+#------------------------------------------------------------------
+# 후보 만들기 결과 → 설정 창 소식 글
+#
+# -in: res = 결과 dict (워커 명령 결과 또는 parse_result_line)
+#
+# -out: 안내 글
+# -out: error = 없음
+#------------------------------------------------------------------
+def synonym_result_msg(res):
+    res = res or {}
+    if res.get("ok"):
+        return "후보를 만들었습니다: 질문 {}개 → 후보 낱말 {}개 ({})".format(
+            res.get("n_questions", "?"), res.get("n_words", "?"), "1.7B 고르기" if res.get("llm") else "e5 순서")
+    if res.get("stopped"):
+        return "워커가 내려가 중단됐습니다 — 다시 누르세요"
+    if res.get("unknown"):
+        return "SimpleRAG 가 이 명령을 모릅니다 — simplerag 를 새로 빌드하세요"
+    return "후보를 만들지 못했습니다: {}".format(res.get("why") or "알 수 없는 이유")
+
+
 class App:
     #--------------------------------------------------------------
     # 생성자
@@ -74,7 +120,8 @@ class App:
                                            actions={"open": self._act_open,
                                                     "unload": self._act_unload,
                                                     "reload": self._act_reload,
-                                                    "autorun": self._act_autorun})
+                                                    "autorun": self._act_autorun},
+                                           suggest=self._suggest_synonyms)
 
         self.worker = None
         self.worker_error = None          # 실행 파일을 못 찾았을 때의 안내 문구
@@ -126,6 +173,9 @@ class App:
         self.panel.on_scope_change = self._on_scope_change
         self._state_cache = (None, None)       # (상태 파일 mtime, 문서 키 목록)
         self._cmd = cmd
+        # 동의어 후보 만들기 소식 (번호, 글) — 설정 창이 번호가 바뀔 때만 안내 줄에 보인다. 뒤 스레드가 통째로 바꾼다
+        self._syn_job = (0, "")
+        self._syn_running = False
         self._quitting = False
         self._last_tooltip = ""
         # 예약해 둔 root.after 두 개(큐 처리·상태 갱신). 끝낼 때 취소한다.
@@ -455,8 +505,27 @@ class App:
         return name, sum(1 for k in keys if k.startswith(base))
 
     #--------------------------------------------------------------
+    # 워커의 데이터 폴더 (인덱스 상태 파일 · 동의어 사전·후보가 있는 곳)
+    #=> SIMPLERAG_HOME → simplerag.exe 옆 → 개발용 소스면 프로젝트 폴더.
+    #
+    # -in: 없음
+    #
+    # -out: 폴더 경로, 모르면 None
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _data_home(self):
+        home = os.environ.get("SIMPLERAG_HOME")
+        cmd = self._cmd or []
+        if not home and cmd:
+            exe = os.path.abspath(cmd[-1])
+            if exe.lower().endswith(".exe"):
+                home = os.path.dirname(exe)
+            else:                                   # [python, .../src/simplerag/cli.py]
+                home = os.path.dirname(os.path.dirname(os.path.dirname(exe)))
+        return home or None
+
+    #--------------------------------------------------------------
     # SimpleRAG 상태 파일의 문서 키들 (시각이 바뀔 때만 다시 읽는다)
-    #=> 워커의 데이터 폴더: SIMPLERAG_HOME → simplerag.exe 옆 → 개발용 소스면 프로젝트 폴더.
     #
     # -in: 없음
     #
@@ -466,15 +535,7 @@ class App:
     def _state_keys(self):
         import json
         try:
-            cmd = self._cmd or []
-            home = os.environ.get("SIMPLERAG_HOME")
-            if not home and cmd:
-                exe = os.path.abspath(cmd[-1])
-                if exe.lower().endswith(".exe"):
-                    home = os.path.dirname(exe)
-                else:                                   # [python, .../src/simplerag/cli.py]
-                    home = os.path.dirname(os.path.dirname(os.path.dirname(exe)))
-            path = os.path.join(home, "index_state.json")
+            path = os.path.join(self._data_home(), "index_state.json")
             mtime = os.path.getmtime(path)
             if self._state_cache[0] == mtime:
                 return self._state_cache[1]
@@ -760,7 +821,7 @@ class App:
     # -out: error = 없음 (값 하나를 못 구해도 나머지는 채운다)
     #--------------------------------------------------------------
     def _info(self):
-        info = {"log_dir": rsb_log.log_dir()}
+        info = {"log_dir": rsb_log.log_dir(), "data_home": self._data_home(), "syn_job": self._syn_job}
         if self.worker:
             # 모델 단추를 켜고 끄는 데 쓴다 — 준비 중도 "올라가는 중" 이라 내리기 쪽으로 본다
             info["model_up"] = self.worker.availability() != "down"
@@ -869,6 +930,65 @@ class App:
             return "SimpleRAG 를 찾지 못해 내릴 모델이 없습니다"
         self._on_tray("unload")
         return "모델을 내렸습니다 — 이제 index 명령을 실행할 수 있습니다"
+
+    #--------------------------------------------------------------
+    # 설정 창 [후보 만들기] — 동의어 후보(synonym_candidates.json)를 뒤에서 만든다 (동의어 설계서 4단계)
+    #=> 인덱스는 한 프로세스만 열 수 있어서, 워커 상태에 따라 길을 고른다(자동 인덱싱과 같은 방식).
+    #    1) 워커가 떠 있으면 워커에게 "/suggest-synonyms" 를 보낸다 — 올려 둔 1.7B 로 고르고(메모리를 더 쓰지 않음),
+    #       명령 시간 제한(300초) 안에 끝나게 최근 놓친 질문 60개까지만 본다. 그동안 온 질문은 끝난 뒤에 답한다.
+    #    2) 내려가 있으면 "suggest-synonyms" 명령을 따로 돌리고, 그동안 워커가 뜨지 않게 막는다(hold)
+    #    3) 끝나면 결과 줄("@index {json}")로 소식을 남긴다 — 후보 파일이 바뀌어 설정 창이 줄을 새로 그린다
+    #
+    # -in: 없음
+    #
+    # -out: 안내 글
+    # -out: error = 없음 (실패는 소식 글로)
+    #--------------------------------------------------------------
+    def _suggest_synonyms(self):
+        import threading
+
+        if not self._cmd:
+            return "SimpleRAG 를 찾지 못해 후보를 만들 수 없습니다"
+        if self._syn_running:
+            return "후보를 만드는 중입니다 — 끝나면 여기에 보입니다"
+        self._syn_running = True
+
+        # 결과를 소식으로 남긴다(워커 스레드·뒤 스레드에서 불린다 — 튜플을 통째로 바꾼다)
+        def done(res):
+            msg = synonym_result_msg(res)
+            self.log.info("동의어 후보 만들기 끝: %s", msg)
+            self._syn_running = False
+            self._syn_job = (self._syn_job[0] + 1, msg)
+
+        if self.worker and self.worker.availability() != "down":
+            self.log.info("동의어 후보 만들기: 워커에게 /suggest-synonyms")
+            self.worker.command("/suggest-synonyms", done)
+            how = "워커가 1.7B 로 — 최근 질문 60개까지, 1~3분. 그동안 온 질문은 끝난 뒤에 답합니다"
+        else:
+            cmd = list(self._cmd) + ["suggest-synonyms"]
+            self.log.info("동의어 후보 만들기: %s", " ".join(cmd))
+
+            # 뒤 스레드 — 명령이 인덱스를 쥔 동안 워커가 뜨면 잠금 충돌이므로 막았다가 푼다
+            def run():
+                if self.worker:
+                    self.worker.hold("동의어 후보 만드는 중")
+                res = None
+                try:
+                    cwd = os.path.dirname(os.path.abspath(cmd[0]))
+                    p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       stdin=subprocess.DEVNULL, timeout=3600,
+                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    res = parse_result_line(p.stdout.decode("utf-8", errors="replace"))
+                except Exception as e:
+                    res = {"ok": False, "why": "{}: {}".format(type(e).__name__, e)}
+                finally:
+                    if self.worker:
+                        self.worker.hold(None)
+                done(res)
+            threading.Thread(target=run, name="suggest-synonyms", daemon=True).start()
+            how = "모델이 내려가 있어 따로 실행 — 1~3분"
+        self._syn_job = (self._syn_job[0] + 1, "후보를 만드는 중입니다 ({})".format(how))
+        return self._syn_job[1]
 
     #--------------------------------------------------------------
     # 설정 창 [모델 다시 올리기] — 예전 트레이 "모델 다시 올리기"

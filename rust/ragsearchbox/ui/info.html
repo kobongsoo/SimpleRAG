@@ -7,6 +7,8 @@
   설정 창 (Python info_window.py)
   - 모델 정보(1초마다 새 값) · 모델 내리기/다시 올리기
   - 인덱싱 폴더 [추가…] [빼기] [다시 확인]
+  - 탭 두 개: 기본(위 항목들) · 동의어(후보 [맞음] [아님] · 직접 추가 · [후보 만들기] · 승인한 목록 [빼기])
+    (동의어 설계서 4단계, Python info_window 와 같은 구성)
   - 자동 시작 · 로그 폴더 [열기] · 화면 열기 · 닫기
 -->
 <style>
@@ -25,9 +27,23 @@
   .row .grow { flex: 1; }
   .col button { display: block; width: 100%; }
   .foot { display: flex; justify-content: space-between; margin-top: 12px; }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid #b9c0cc; margin-bottom: 10px; }
+  .tabs button { margin: 0 0 -1px 0; border-radius: 4px 4px 0 0; border-bottom: none; padding: 3px 14px; background: #f1f3f6; }
+  .tabs button.on { background: #fff; border-bottom: 1px solid #fff; font-weight: bold; }
+  .hidden { display: none; }
+  .lead { color: #475063; margin-bottom: 6px; }
+  .syn { margin-bottom: 4px; }
+  .syn .top { display: flex; align-items: center; gap: 4px; }
+  .syn .top b { white-space: nowrap; }
+  .syn .top select { width: auto; min-width: 9em; }
+  .syn .top .sp { flex: 1; }
+  .syn .top button { margin: 0 0 0 4px; }
+  input[type=text] { font: inherit; border: 1px solid #b9c0cc; padding: 1px 4px; width: 8em; }
 </style>
 </head>
 <body>
+<div class="tabs"><button id="t_basic" class="on">기본</button><button id="t_syn">동의어</button></div>
+<div id="tab_basic">
 <table>
   <tr><th>생성 모델</th><td id="v_model"></td></tr>
   <tr><th>임베딩 모델</th><td id="v_embed"></td></tr>
@@ -42,6 +58,16 @@
   <tr><th>자동 시작</th><td><label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label></td></tr>
   <tr><th>로그 폴더</th><td><div class="row"><div class="grow" id="logdir"></div><button id="b_logs">열기</button></div></td></tr>
 </table>
+</div>
+<div id="tab_syn" class="hidden">
+  <div class="lead">답을 못 찾은 질문에서 뽑은 후보예요. 맞으면 승인하세요 — 다음 질문부터 바로 적용됩니다.</div>
+  <div id="synrows"></div>
+  <div class="row" style="align-items:center; margin-top:8px"><input type="text" id="syn_w" placeholder="일상어"> → <input type="text" id="syn_t" placeholder="문서 용어">
+    <button id="b_syn_add">직접 추가</button><div class="grow"></div><button id="b_syn_suggest">후보 만들기</button></div>
+  <div class="note" id="synnote"></div>
+  <div style="margin-top:10px; color:#475063; font-weight:bold">승인한 동의어</div>
+  <div class="row"><div class="grow"><select id="synlist" size="4"></select></div><div class="col"><button id="b_syn_remove">빼기</button></div></div>
+</div>
 <div class="foot"><button id="b_open">화면 열기</button><button id="b_close">닫기</button></div>
 <script>
 "use strict";
@@ -73,7 +99,74 @@ window.rsb = {
     $("foldernote").textContent = note;
     if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
     $("logdir").textContent = info.log_dir || "";
+    if (info.syn) drawSyn(info.syn);
   },
+};
+
+// 탭 바꾸기 — 기본 · 동의어
+function showTab(name) {
+  for (const t of ["basic", "syn"]) {
+    $("tab_" + t).classList.toggle("hidden", t !== name);
+    $("t_" + t).classList.toggle("on", t === name);
+  }
+}
+$("t_basic").onclick = () => showTab("basic");
+$("t_syn").onclick = () => showTab("syn");
+
+// 동의어 탭 — 후보 줄·승인 목록은 바뀌었을 때만 다시 그린다(고른 문서 용어·고른 줄이 매초 풀리지 않게)
+let synSig = null, listSig = null, lastAdd = null, pairs = [];
+function drawSyn(syn) {
+  // 탭 이름에 남은 후보 수 — 기본 탭을 보고 있어도 후보가 쌓인 걸 알 수 있게
+  $("t_syn").textContent = syn.n_left ? "동의어 (" + syn.n_left + ")" : "동의어";
+  const ls = JSON.stringify(syn.approved || []);
+  if (ls !== listSig) {
+    listSig = ls; pairs = syn.approved || [];
+    const sel = $("synlist"); sel.innerHTML = "";
+    for (const [w, t] of pairs) { const o = document.createElement("option"); o.textContent = w + "  →  " + t; sel.appendChild(o); }
+  }
+  const sig = JSON.stringify(syn.rows || []);
+  if (sig !== synSig) {
+    synSig = sig;
+    const box = $("synrows"); box.innerHTML = "";
+    for (const row of syn.rows || []) {
+      const d = document.createElement("div"); d.className = "syn";
+      const top = document.createElement("div"); top.className = "top";
+      const b = document.createElement("b"); b.textContent = row.word + "  →"; top.appendChild(b);
+      const sel = document.createElement("select");
+      for (const t of row.terms) { const o = document.createElement("option"); o.textContent = t; o.value = t; sel.appendChild(o); }
+      top.appendChild(sel);
+      const sp = document.createElement("div"); sp.className = "sp"; top.appendChild(sp);
+      const ok = document.createElement("button"); ok.textContent = "✓ 맞음";
+      ok.onclick = () => send({ type: "syn_approve", word: row.word, term: sel.value });
+      const no = document.createElement("button"); no.textContent = "✕ 아님";
+      no.onclick = () => send({ type: "syn_reject", word: row.word, term: sel.value });
+      top.appendChild(ok); top.appendChild(no);
+      const why = document.createElement("div"); why.className = "note";
+      // 고른 문서 용어가 나오는 문서를 회색 줄에 보인다
+      const showWhy = () => {
+        const docs = (row.docs || {})[sel.value] || [];
+        why.textContent = "놓친 질문: \"" + row.example + "\"" + (docs.length ? " · '" + sel.value + "' 이 나오는 문서: " + docs.join(", ") : "");
+      };
+      sel.onchange = showWhy; showWhy();
+      d.appendChild(top); d.appendChild(why); box.appendChild(d);
+    }
+  }
+  $("synnote").textContent = syn.note || "";
+  // 직접 추가가 받아들여졌으면 칸을 비운다(거절되면 고칠 수 있게 그대로 둔다)
+  if (lastAdd && (syn.note || "").includes(lastAdd[0] + " → " + lastAdd[1])) {
+    $("syn_w").value = ""; $("syn_t").value = ""; lastAdd = null;
+  }
+}
+$("b_syn_add").onclick = () => {
+  const w = $("syn_w").value.trim(), t = $("syn_t").value.trim();
+  lastAdd = [w, t];
+  send({ type: "syn_approve", word: w, term: t });
+};
+$("b_syn_suggest").onclick = () => send({ type: "syn_suggest" });
+$("b_syn_remove").onclick = () => {
+  const i = $("synlist").selectedIndex;
+  if (i < 0) { send({ type: "syn_msg", msg: "뺄 동의어를 목록에서 고르세요" }); return; }
+  send({ type: "syn_remove", word: pairs[i][0], term: pairs[i][1] });
 };
 $("b_unload").onclick = () => send({ type: "unload" });
 $("b_reload").onclick = () => send({ type: "reload" });

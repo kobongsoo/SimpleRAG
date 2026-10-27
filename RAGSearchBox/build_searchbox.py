@@ -48,9 +48,10 @@ EXCLUDE = [
     "simplerag", "csoclassify",
     "llama_cpp", "onnxruntime", "onnx", "qdrant_client", "tokenizers",
     "numpy", "scipy", "pandas", "torch", "transformers", "matplotlib",
-    "PIL", "yaml", "pypdfium2", "pypdfium2_raw", "xlrd", "olefile",
+    "PIL", "pypdfium2", "pypdfium2_raw", "xlrd", "olefile",
     "IPython", "pytest", "PyInstaller",
 ]
+# yaml 은 넣는다 — 설정 창 동의어 칸(synonym_store)이 사용자 사전 synonyms.yaml 을 읽는다(수백 KB)
 
 # 정적 분석에 안 잡히는 것들 — UIA 래퍼는 위 설명대로 미리 만들어 둔 모듈이다.
 HIDDEN = [

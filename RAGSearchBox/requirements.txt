@@ -4,3 +4,4 @@
 # pywin32 와 pyinstaller 는 SimpleRAG 쪽에 이미 들어 있다.
 # tkinter 는 파이썬 표준 라이브러리라 따로 받지 않는다.
 comtypes>=1.4
+pyyaml>=6

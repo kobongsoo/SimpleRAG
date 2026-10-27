@@ -14,6 +14,7 @@ mod monitor;
 mod panel;
 mod scope;
 mod settings;
+mod synonyms;
 mod tray;
 mod watcher;
 mod win;
@@ -77,6 +78,10 @@ struct InfoWin {
     ready: bool,
     action_msg: String,
     folder_msg: String,
+    // 동의어 칸 마지막 결과 글 · 후보 만들기 뒤 스레드가 남긴 소식(다음 갱신 때 syn_msg 로 옮긴다) · 도는 중인가
+    syn_msg: String,
+    syn_done: Arc<Mutex<Option<String>>>,
+    syn_running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 //------------------------------------------------------------------
@@ -104,6 +109,39 @@ struct App {
     t_info: Instant,
     quitting: bool,
     selftest_done: bool,
+}
+
+//------------------------------------------------------------------
+// 명령 출력에서 결과 줄("@index {json}") 꺼내기 (Python parse_result_line 과 같다) — 없으면 옛 simplerag
+//------------------------------------------------------------------
+fn parse_result_line(out: &str) -> Value {
+    let mut res = None;
+    for ln in out.lines() {
+        if let Some(js) = ln.strip_prefix("@index ") {
+            if let Ok(v) = serde_json::from_str::<Value>(js) {
+                res = Some(v);
+            }
+        }
+    }
+    res.unwrap_or_else(|| json!({"ok": false, "unknown": true, "why": out.trim().lines().last().unwrap_or("")}))
+}
+
+//------------------------------------------------------------------
+// 후보 만들기 결과 → 설정 창 소식 글 (Python synonym_result_msg 와 같은 글)
+//------------------------------------------------------------------
+fn synonym_result_msg(res: &Value) -> String {
+    if res["ok"].as_bool().unwrap_or(false) {
+        let n = |k: &str| res.get(k).map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+        return format!("후보를 만들었습니다: 질문 {}개 → 후보 낱말 {}개 ({})", n("n_questions"), n("n_words"),
+                       if res["llm"].as_bool().unwrap_or(false) { "1.7B 고르기" } else { "e5 순서" });
+    }
+    if res["stopped"].as_bool().unwrap_or(false) {
+        return "워커가 내려가 중단됐습니다 — 다시 누르세요".into();
+    }
+    if res["unknown"].as_bool().unwrap_or(false) {
+        return "SimpleRAG 가 이 명령을 모릅니다 — simplerag 를 새로 빌드하세요".into();
+    }
+    format!("후보를 만들지 못했습니다: {}", res["why"].as_str().filter(|s| !s.is_empty()).unwrap_or("알 수 없는 이유"))
 }
 
 // 글 한 줄로(공백 접기 · 앞 '/' 떼기 · 종료 낱말 보호) — query_filter.one_line
@@ -297,13 +335,20 @@ impl App {
     }
 
     //------------------------------------------------------------------
+    // 워커의 데이터 폴더(인덱스 상태 파일 · 동의어 사전·후보) — SIMPLERAG_HOME → 워커 exe 옆
+    //------------------------------------------------------------------
+    fn data_home(&self) -> Option<String> {
+        match std::env::var("SIMPLERAG_HOME") {
+            Ok(h) if !h.is_empty() => Some(h),
+            _ => Some(std::path::Path::new(self.cmd.last()?).parent()?.to_string_lossy().into_owned()),
+        }
+    }
+
+    //------------------------------------------------------------------
     // 인덱스 상태 파일의 문서 키들(소문자) — mtime 이 같으면 다시 읽지 않는다
     //------------------------------------------------------------------
     fn state_keys(&mut self) -> Option<Vec<String>> {
-        let home = match std::env::var("SIMPLERAG_HOME") {
-            Ok(h) if !h.is_empty() => h,
-            _ => std::path::Path::new(self.cmd.last()?).parent()?.to_string_lossy().into_owned(),
-        };
+        let home = self.data_home()?;
         let path = std::path::Path::new(&home).join("index_state.json");
         let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
         if self.state_cache.0 == Some(mtime) {
@@ -646,7 +691,82 @@ impl App {
         info["folders"] = json!(folders);
         info["action_msg"] = json!(self.info.action_msg);
         info["folder_msg"] = json!(self.info.folder_msg);
+        // 동의어 칸 — 후보 만들기가 끝났으면 그 소식을 결과 글로 옮긴다
+        if let Some(m) = self.info.syn_done.lock().unwrap().take() {
+            self.info.syn_msg = m;
+        }
+        if let Some(home) = self.data_home() {
+            let (rows, n_left) = synonyms::pending(&home, synonyms::SHOW_ROWS);
+            let (n_miss, n_ok) = synonyms::counts(&home);
+            info["syn"] = json!({"rows": rows, "n_left": n_left, "approved": synonyms::approved_pairs(&home),
+                                 "note": synonyms::note(n_miss, n_left, n_ok, &self.info.syn_msg)});
+        }
         info
+    }
+
+    //------------------------------------------------------------------
+    // 설정 창 [후보 만들기] — 동의어 후보(synonym_candidates.json)를 뒤에서 만든다 (Python _suggest_synonyms 와 같다)
+    //=> 인덱스는 한 프로세스만 열 수 있어서, 워커 상태에 따라 길을 고른다(자동 인덱싱과 같은 방식).
+    //    1) 워커가 떠 있으면 워커에게 "/suggest-synonyms" — 올려 둔 1.7B 로 고르고, 최근 놓친 질문 60개까지만
+    //    2) 내려가 있으면 "suggest-synonyms" 명령을 따로 돌리고, 그동안 워커가 뜨지 않게 막는다(hold)
+    //    3) 끝나면 결과 줄("@index {json}")로 소식을 syn_done 에 남긴다 — 후보 파일이 바뀌어 줄이 새로 그려진다
+    //   돌려줌: 안내 글
+    //------------------------------------------------------------------
+    fn suggest_synonyms(&mut self) -> String {
+        use std::sync::atomic::Ordering;
+        if self.cmd.is_empty() {
+            return "SimpleRAG 를 찾지 못해 후보를 만들 수 없습니다".into();
+        }
+        if self.info.syn_running.load(Ordering::SeqCst) {
+            return "후보를 만드는 중입니다 — 끝나면 여기에 보입니다".into();
+        }
+        self.info.syn_running.store(true, Ordering::SeqCst);
+        let (done, running) = (self.info.syn_done.clone(), self.info.syn_running.clone());
+        // 결과를 소식으로 남긴다(워커 스레드·뒤 스레드에서 불린다)
+        let finish = move |res: Value| {
+            let msg = synonym_result_msg(&res);
+            crate::info!("app", "동의어 후보 만들기 끝: {}", msg);
+            *done.lock().unwrap() = Some(msg);
+            running.store(false, Ordering::SeqCst);
+        };
+        let how = match &self.worker {
+            Some(w) if w.availability() != "down" => {
+                crate::info!("app", "동의어 후보 만들기: 워커에게 /suggest-synonyms");
+                w.command("/suggest-synonyms".into(), Box::new(finish));
+                "워커가 1.7B 로 — 최근 질문 60개까지, 1~3분. 그동안 온 질문은 끝난 뒤에 답합니다"
+            }
+            _ => {
+                let mut cmd = self.cmd.clone();
+                cmd.push("suggest-synonyms".into());
+                crate::info!("app", "동의어 후보 만들기: {}", cmd.join(" "));
+                let worker = self.worker.clone();
+                std::thread::spawn(move || {
+                    // 명령이 인덱스를 쥔 동안 워커가 뜨면 잠금 충돌이므로 막았다가 푼다
+                    if let Some(w) = &worker {
+                        w.hold(Some("동의어 후보 만드는 중".into()));
+                    }
+                    let mut c = std::process::Command::new(&cmd[0]);
+                    c.args(&cmd[1..]).stdin(std::process::Stdio::null());
+                    if let Some(d) = std::path::Path::new(&cmd[0]).parent() {
+                        c.current_dir(d);
+                    }
+                    {
+                        use std::os::windows::process::CommandExt;
+                        c.creation_flags(0x0800_0000);
+                    }
+                    let res = match c.output() {
+                        Ok(o) => parse_result_line(&(String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr))),
+                        Err(e) => json!({"ok": false, "why": e.to_string()}),
+                    };
+                    if let Some(w) = &worker {
+                        w.hold(None);
+                    }
+                    finish(res);
+                });
+                "모델이 내려가 있어 따로 실행 — 1~3분"
+            }
+        };
+        format!("후보를 만드는 중입니다 ({})", how)
     }
 
     fn refresh_info(&mut self) {
@@ -729,6 +849,18 @@ impl App {
             "open_logs" => {
                 let _ = win::open_explorer(&log::log_dir());
             }
+            // 동의어 탭 — [맞음] · [아님] · [직접 추가] · [빼기] · [후보 만들기]
+            "syn_approve" | "syn_reject" | "syn_remove" => {
+                let (w, t) = (m["word"].as_str().unwrap_or(""), m["term"].as_str().unwrap_or(""));
+                self.info.syn_msg = match self.data_home() {
+                    None => "SimpleRAG 데이터 폴더를 찾지 못했습니다".into(),
+                    Some(home) if m["type"] == "syn_approve" => synonyms::approve(&home, w, t).1,
+                    Some(home) if m["type"] == "syn_reject" => synonyms::reject(&home, w, t).1,
+                    Some(home) => synonyms::remove(&home, w, t).1,
+                };
+            }
+            "syn_msg" => self.info.syn_msg = m["msg"].as_str().unwrap_or("").to_string(),
+            "syn_suggest" => self.info.syn_msg = self.suggest_synonyms(),
             "open" => self.on_tray("open"),
             "hide" => {
                 self.info.visible = false;
@@ -918,7 +1050,7 @@ fn main() {
 
     // 설정 창
     let iwin = WindowBuilder::new().with_title("RAGSearchBox-rs 설정").with_visible(false).with_window_icon(icon)
-        .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(560.0, 360.0)).build(&event_loop).expect("설정 창");
+        .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(600.0, 640.0)).build(&event_loop).expect("설정 창");
     let p2 = proxy.clone();
     let iview = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
         .with_html(INFO_HTML.replace("__FONT_PX__", &font))
@@ -948,7 +1080,8 @@ fn main() {
     let history_path = history::default_path();
     let mut app = App {
         panel: Panel::new(pwin, pview, &s),
-        info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new() },
+        info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
+                       syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)) },
         history: history::load(&history_path),
         history_path,
         s,
