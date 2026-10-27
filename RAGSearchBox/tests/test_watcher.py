@@ -230,64 +230,106 @@ class TestTick(unittest.TestCase):
         self.assertTrue(out[0].rescan and out[0].reason == "순찰")
 
 
+# 실제 알림 시험의 단계별 대기 한도(초) — 설계서 ④
+#   PC 가 바쁘면(Rust 컴파일·인덱싱과 동시에 돌 때) 알림 전달·감시 스레드·"다 써졌나" 확인이 늦어져
+#   8초를 넘긴 일이 두 번 있었다(2026-10-26, 따로 돌리면 3/3 통과). 정상일 때는 알림이 곧 오므로
+#   한도를 늘려도 시험 시간은 거의 늘지 않는다. 환경변수 WATCH_TEST_TIMEOUT 으로 바꿀 수 있다.
+LIVE_TIMEOUT_S = float(os.environ.get("WATCH_TEST_TIMEOUT") or 20)
+
+
+#------------------------------------------------------------------
+# 받은 묶음 한 줄 요약 (실패 메시지용)
+#=> 언제(시작 뒤 몇 초) 무엇이 왔는지 — 전체 대조 여부·사유·바뀐/사라진 파일 이름.
+#
+# -in: t = 시작 뒤 초 / b = Batch
+#
+# -out: 요약 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def _batch_line(t, b):
+    names = lambda ps: ",".join(os.path.basename(p) for p in ps) or "-"
+    return "  +{:.1f}s rescan={} reason={!r} changed=[{}] removed=[{}]".format(
+        t, b.rescan, b.reason, names(b.changed or []), names(b.removed or []))
+
+
 class TestLive(unittest.TestCase):
     #--------------------------------------------------------------
     # 실제 알림 — 만들기·고치기·이름 바꾸기·지우기·하위 폴더
     #=> 조용히 0.4초로 줄여 빨리 돈다. 묶음이 올 때까지 기다린다.
+    #   받은 묶음은 시각과 함께 모두 남겨(history) 실패할 때 무엇이 언제 왔는지 보여 준다.
     #--------------------------------------------------------------
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="rsb_watch_live_")
         self.got = []
+        self.history = []
+        self.t0 = time.time()
         self.lock = threading.Lock()
 
         def on_batch(b):
             with self.lock:
                 self.got.append(b)
+                self.history.append((time.time() - self.t0, b))
 
         self.w = FolderWatcher([self.dir], on_batch, quiet_s=0.4, rescan_min=0, stable_s=0.2,
                                tick_s=0.1)
         self.w.start()
-        self.wait(lambda b: b.rescan and "시작" in b.reason)
+        self.wait(lambda b: b.rescan and "시작" in b.reason, "감시 시작")
 
     def tearDown(self):
         self.w.stop()
         shutil.rmtree(self.dir, ignore_errors=True)
 
-    def wait(self, pred, timeout=8.0):
-        end = time.time() + timeout
-        while time.time() < end:
+    #--------------------------------------------------------------
+    # 조건에 맞는 묶음이 올 때까지 기다리기
+    #=> 한도 안에 오면 그 묶음을 꺼내 돌려준다. 안 오면 어느 단계에서 몇 초 기다렸는지와
+    #   지금까지 받은 묶음(마지막 8개)을 시각과 함께 실패 메시지에 남긴다.
+    #
+    # -in: pred    = 묶음 판정 함수
+    # -in: step    = 단계 이름(실패 메시지용 — "만들기" 등)
+    # -in: timeout = 한도(초, 기본 LIVE_TIMEOUT_S)
+    #
+    # -out: 맞은 묶음
+    # -out: error = 한도를 넘기면 self.fail(AssertionError)
+    #--------------------------------------------------------------
+    def wait(self, pred, step="", timeout=None):
+        limit = timeout or LIVE_TIMEOUT_S
+        start = time.time()
+        while time.time() - start < limit:
             with self.lock:
                 for i, b in enumerate(self.got):
                     if pred(b):
                         return self.got.pop(i)
             time.sleep(0.05)
-        self.fail("묶음이 오지 않았다: {}".format(self.got))
+        with self.lock:
+            hist = "\n".join(_batch_line(t, b) for t, b in self.history[-8:]) or "  (받은 묶음 없음)"
+        self.fail("[{}] {:.1f}초 기다렸지만 묶음이 오지 않았다(시작 뒤 {:.1f}초). 받은 묶음:\n{}".format(
+            step or "?", time.time() - start, time.time() - self.t0, hist))
 
     def test_live(self):
         a = os.path.join(self.dir, "a.docx")
         with open(a, "w") as f:
             f.write("1")
-        self.wait(lambda b: a in b.changed)
+        self.wait(lambda b: a in b.changed, "만들기")
 
         with open(a, "a") as f:
             f.write("2")
-        self.wait(lambda b: a in b.changed)
+        self.wait(lambda b: a in b.changed, "고치기")
 
         b2 = os.path.join(self.dir, "b.docx")
         os.rename(a, b2)
         # 옛 이름(사라짐)은 바로, 새 이름은 두 번 재고 나서 — 다른 묶음으로 올 수 있다
-        self.wait(lambda b: a in b.removed)
-        self.wait(lambda b: b2 in b.changed)
+        self.wait(lambda b: a in b.removed, "이름 바꾸기 — 옛 이름")
+        self.wait(lambda b: b2 in b.changed, "이름 바꾸기 — 새 이름")
 
         os.remove(b2)
-        self.wait(lambda b: b2 in b.removed)
+        self.wait(lambda b: b2 in b.removed, "지우기")
 
         # 하위 폴더를 통째로 넣으면(안의 파일 알림이 오지 않을 수 있다) 전체 대조
         src = tempfile.mkdtemp(prefix="rsb_src_")
         with open(os.path.join(src, "c.txt"), "w") as f:
             f.write("c")
         shutil.move(src, os.path.join(self.dir, "sub"))
-        self.wait(lambda b: b.rescan and "하위 폴더" in b.reason)
+        self.wait(lambda b: b.rescan and "하위 폴더" in b.reason, "하위 폴더 넣기")
 
         # 폴더가 그 자리에서 사라지면(이름 변경·분리) 옛 경로로 알리지 않고, 돌아오면 전체 대조
         import watcher as wmod
@@ -300,7 +342,8 @@ class TestLive(unittest.TestCase):
                 f.write("x")
             time.sleep(1.5)
             os.rename(away, self.dir)
-            self.wait(lambda b: b.rescan and "다시 연결" in b.reason, timeout=12)
+            self.wait(lambda b: b.rescan and "다시 연결" in b.reason, "폴더 다시 연결",
+                      timeout=max(12.0, LIVE_TIMEOUT_S))
             with self.lock:
                 self.assertFalse([b for b in self.got if b.changed or b.removed], self.got)
         finally:
