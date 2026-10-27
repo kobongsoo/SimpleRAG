@@ -21,6 +21,9 @@
 #   사용:
 #     .venv\Scripts\python.exe build_exe.py            # 빌드 + 모델 복사
 #     .venv\Scripts\python.exe build_exe.py --no-models  # 모델 복사 생략
+#
+#   배포 폴더의 데이터는 지킨다 — 인덱스·config.yaml·RAGSearchBox·모델 등 빌드 산출물이 아닌 것은
+#   빌드 동안 build/keep_<시각>/ 로 옮겼다가 되돌리고, config.yaml 은 없을 때만 복사한다.
 #------------------------------------------------------------------
 
 import argparse
@@ -211,6 +214,129 @@ def copy_runtime():
 
 
 #------------------------------------------------------------------
+# 배포 폴더가 잠겨 있지 않은지 미리 확인
+#=> PyInstaller 는 dist/simplerag 를 지우고 다시 만든다. 그 폴더를 누가 쥐고 있으면
+#   (그 안에서 연 셸, 실행 중인 simplerag.exe · RAGSearchBox.exe) 파일만 지우다가 멈춰
+#   반쯤 빈 폴더가 남는다(2026-10-26 실제로 겪음). 그래서 빌드 전에 폴더 이름을 잠깐
+#   바꿔 보고, 안 바뀌면 아무것도 건드리지 않고 멈춘다.
+#
+# -in: app_dir = 배포 폴더
+#
+# -out: None = 괜찮음 / 문자열 = 멈춰야 하는 이유
+# -out: error = 없음 (이름 바꾸기 실패는 이유 문자열로 돌려준다)
+#------------------------------------------------------------------
+def check_unlocked(app_dir):
+    if not os.path.isdir(app_dir):
+        return None
+    here = os.path.normcase(os.path.abspath(os.getcwd()))
+    if here == os.path.normcase(app_dir) or here.startswith(os.path.normcase(app_dir) + os.sep):
+        return "빌드 스크립트의 작업 폴더가 배포 폴더 안입니다: " + here
+    probe = app_dir + "_locktest"
+    try:
+        os.rename(app_dir, probe)
+    except OSError as e:
+        return "배포 폴더를 다른 프로세스가 쓰고 있습니다({}). simplerag.exe · RAGSearchBox.exe 를 끄고, " \
+               "그 폴더 안에 있는 셸·탐색기 창을 닫은 뒤 다시 실행하세요.".format(e.strerror or e)
+    os.rename(probe, app_dir)
+    return None
+
+
+# 빌드가 새로 만드는 것 — 이것만 빼고 배포 폴더의 나머지는 빌드 동안 옮겨 두었다 되돌린다
+BUILD_OUTPUTS = {"_internal", APP + ".exe"}
+
+
+#------------------------------------------------------------------
+# 배포 데이터 잠시 치워 두기
+#=> 빌드 산출물(_internal · simplerag.exe)이 아닌 것은 전부 build/keep_<시각>/ 로 옮겨 둔다 —
+#   운영 인덱스(qdrant_data · bm25_index.npz · index_state.json), gen_backend.json, config.yaml,
+#   RAGSearchBox.exe · .ini, 모델, 런타임, 그 밖에 사용자가 둔 파일. 목록을 따로 두지 않아
+#   새 파일이 생겨도 빠지지 않는다. 같은 드라이브 안의 이동이라 모델(수 GB)도 바로 끝난다.
+#
+# -in: app_dir = 배포 폴더
+#
+# -out: (보관 폴더, 옮긴 이름 목록) — 배포 폴더가 없으면 (None, [])
+# -out: error = 옮기다 실패하면 이미 옮긴 것을 되돌린 뒤 OSError 전파
+#------------------------------------------------------------------
+def stash_dist(app_dir):
+    if not os.path.isdir(app_dir):
+        return None, []
+    keep = os.path.join(BUILD, "keep_" + time.strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(keep, exist_ok=True)
+    moved = []
+    try:
+        for name in sorted(os.listdir(app_dir)):
+            if name in BUILD_OUTPUTS:
+                continue
+            shutil.move(os.path.join(app_dir, name), os.path.join(keep, name))
+            moved.append(name)
+    except OSError:
+        # 반만 옮긴 채로 빌드하지 않는다 — 옮긴 것을 되돌리고 멈춘다
+        restore_dist(app_dir, keep, moved)
+        raise
+    print("[keep] 배포 데이터 {}개를 잠시 옮겼습니다: {}".format(len(moved), keep))
+    return keep, moved
+
+
+#------------------------------------------------------------------
+# 치워 둔 배포 데이터 되돌리기
+#=> 빌드가 성공하든 실패하든 반드시 부른다(main 의 finally). 빌드가 같은 이름을 새로
+#   만들었으면(그럴 일은 없지만) 덮어쓰지 않고 보관 폴더에 남긴 채 알린다.
+#
+# -in: app_dir = 배포 폴더 / keep = 보관 폴더 / moved = 옮긴 이름 목록
+#
+# -out: 없음
+# -out: error = 없음 (되돌리지 못한 것은 보관 폴더 경로와 함께 알린다)
+#------------------------------------------------------------------
+def restore_dist(app_dir, keep, moved):
+    if not keep:
+        return
+    os.makedirs(app_dir, exist_ok=True)
+    left = []
+    for name in moved:
+        src, dst = os.path.join(keep, name), os.path.join(app_dir, name)
+        if os.path.exists(dst):
+            left.append(name)
+            continue
+        shutil.move(src, dst)
+    if left:
+        print("  ⚠️ 빌드가 같은 이름을 만들어 되돌리지 못했습니다: {} — 보관 위치 {}".format(left, keep))
+    else:
+        os.rmdir(keep)
+        print("[keep] 배포 데이터 {}개를 되돌렸습니다".format(len(moved)))
+
+
+#------------------------------------------------------------------
+# config.yaml 배치 — 배포 폴더에 없을 때만 복사
+#=> 배포본에서만 바꾼 설정(예: parent: section)을 빌드가 덮어쓰지 않게 한다.
+#   이미 있으면 그대로 두고, 프로젝트 config.yaml 에만 있는 키(새로 생긴 옵션)를 알린다.
+#
+# -in: 없음
+#
+# -out: 없음
+# -out: error = 없음 (YAML 을 못 읽으면 키 비교만 건너뛴다)
+#------------------------------------------------------------------
+def place_config():
+    src_cfg = os.path.join(ROOT, "config.yaml")
+    dst_cfg = os.path.join(DIST, APP, "config.yaml")
+    if not os.path.isfile(src_cfg):
+        return
+    if not os.path.isfile(dst_cfg):
+        shutil.copy2(src_cfg, dst_cfg)
+        print("  config.yaml 복사")
+        return
+    try:
+        import yaml
+        keys = lambda p: {"{}.{}".format(s, k) for s, v in (yaml.safe_load(open(p, encoding="utf-8")) or {}).items()
+                          if isinstance(v, dict) for k in v}
+        new = sorted(keys(src_cfg) - keys(dst_cfg))
+    except Exception:
+        new = []
+    print("  config.yaml 은 배포본 것을 그대로 둡니다(덮어쓰지 않음)")
+    if new:
+        print("  ℹ️ 프로젝트 config.yaml 에만 있는 키: {} — 필요하면 배포본에 옮겨 적으세요".format(", ".join(new)))
+
+
+#------------------------------------------------------------------
 # 배포 폴더 요약
 #------------------------------------------------------------------
 def summarize():
@@ -237,19 +363,29 @@ def main():
     sys.path.insert(0, SRC)
 
     if not args.models_only:
+        app_dir = os.path.join(DIST, APP)
+        # 잠긴 폴더를 지우다 멈추면 반쯤 빈 폴더가 남는다 — 아무것도 건드리기 전에 확인
+        why = check_unlocked(app_dir)
+        if why:
+            print("[build] 멈춤: " + why, file=sys.stderr)
+            return 1
         cso = find_cso_src()
         print("[build] CSOClassify src: {}".format(cso or "없음(추출 기능 제한)"))
-        if not build(cso):
+        # PyInstaller 가 배포 폴더를 통째로 지우므로 인덱스·설정·트레이 앱 등은 옮겨 두었다가 되돌린다
+        keep, moved = stash_dist(app_dir)
+        try:
+            ok = build(cso)
+        finally:
+            restore_dist(app_dir, keep, moved)
+        if not ok:
             return 1
 
     print("\n[runtime] iGPU(Vulkan) 런타임 복사")
     copy_runtime()
 
-    # 검색·청킹 계수 파일(REPORT §35) — exe 옆에 두면 코드 수정 없이 바꿀 수 있다
-    src_cfg = os.path.join(ROOT, "config.yaml")
-    if os.path.isfile(src_cfg):
-        shutil.copy2(src_cfg, os.path.join(DIST, APP, "config.yaml"))
-        print("  config.yaml 복사")
+    # 검색·청킹 계수 파일(REPORT §35) — exe 옆에 두면 코드 수정 없이 바꿀 수 있다.
+    #   배포본에서 바꾼 설정을 지키려고 없을 때만 복사한다
+    place_config()
 
     if not args.no_models:
         print("\n[models] exe 옆으로 모델 복사")

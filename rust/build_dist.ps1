@@ -21,10 +21,18 @@ if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build 실패" }
 Pop-Location
 
 # 2) exe 배치
+#    실행 중인 exe(트레이의 RAGSearchBox-rs, 그 워커 simplerag-rs)는 잠겨 있어 덮어쓸 수 없다.
+#    그 하나만 건너뛰고 알린다 — 나머지 배치와 설정·모델 준비는 계속한다.
 New-Item -ItemType Directory -Force $dist | Out-Null
+$skipped = @()
 foreach ($exe in "simplerag-rs.exe", "RAGSearchBox-rs.exe") {
-    Copy-Item (Join-Path $rust "target\release\$exe") $dist -Force
-    "배치: $exe"
+    try {
+        Copy-Item (Join-Path $rust "target\release\$exe") $dist -Force
+        "배치: $exe"
+    } catch [System.IO.IOException] {
+        $skipped += $exe
+        "건너뜀(실행 중이라 잠김): $exe"
+    }
 }
 
 # 없을 때만 복사
@@ -65,4 +73,7 @@ if (-not (Test-Path "$dist\RAGSearchBox.ini") -and (Test-Path "$py\RAGSearchBox.
     "만듦: $dist\RAGSearchBox.ini"
 }
 "완료 — $dist"
+if ($skipped.Count -gt 0) {
+    "⚠️ 실행 중이라 바꾸지 못한 exe: $($skipped -join ', ') — 트레이에서 RAGSearchBox-rs 를 끈 뒤 이 스크립트를 다시 실행하세요"
+}
 "인덱스가 없으면: dist-rust\simplerag-rs.exe import --from dist\simplerag  (Python 판 인덱스 가져오기, 다시 임베딩 없음)"
