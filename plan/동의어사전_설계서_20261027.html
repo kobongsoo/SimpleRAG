@@ -390,6 +390,22 @@ rejected:            # [아님] 을 누른 짝 — 다시 제안하지 않는다
   </ol>
   <p>승인하면 <code>synonyms.yaml</code> 에 저장되고 워커가 다시 읽어 <b>다음 질문부터 바로 적용</b>된다(앱 재시작 불필요).
   Python 판은 정보 창(<code>info_window.py</code>, tkinter)에, Rust 판은 설정 창(<code>ui/info.html</code>)에 같은 칸을 둔다.</p>
+  <h3>4단계 구현 (2026-10-27) — 위 그림과 달라진 점</h3>
+  <ul>
+    <li><b>자리</b> — 트레이 "설정" 창을 <b>기본 · 동의어 두 탭</b>으로 나눴다(Python <code>info_window.py</code> ttk.Notebook · Rust <code>ui/info.html</code>).
+      동의어 탭 이름에 남은 후보 수가 붙는다("동의어 (3)") — 트레이 메뉴 대신 여기서 알린다.</li>
+    <li><b>동의어 탭</b> — 위에서부터 후보 5줄(일상어 → [문서 용어 고르기 상자(최대 3개)] [✓ 맞음] [✕ 아님], 아래 회색 줄에 놓친 질문과 그 용어가 나오는 문서),
+      직접 추가 · [후보 만들기], 안내 줄, <b>승인한 동의어 목록과 [빼기]</b>. [빼기]는 사전에서만 빼고([아님] 목록에 넣지 않음) 그 낱말은 다시 후보로 보일 수 있다.
+      창 높이: Rust 640px(논리) 안에 기본 탭 385px · 동의어 탭 583px, Python 은 탭 높이에 맞춰 커진다(배율 133% 에서 775 물리 px ≈ 논리 580px).</li>
+    <li><b>[후보 만들기]</b> — 인덱스는 한 프로세스만 열 수 있어 워커 상태에 따라 길을 고른다(자동 인덱싱과 같은 방식).
+      워커가 떠 있으면 워커에게 <code>/suggest-synonyms</code> 를 보낸다 — 올려 둔 1.7B 로 고르고(메모리를 더 쓰지 않음), 명령 시간 제한(300초) 안에 끝나게 최근 놓친 질문 60개까지만.
+      내려가 있으면 <code>suggest-synonyms</code> 명령을 따로 돌리고 그동안 워커가 뜨지 않게 막는다. 두 길 모두 마지막 결과 줄 <code>@index {json}</code> 으로 소식을 남긴다.
+      (처음에는 늘 명령을 따로 돌렸다가, 워커가 떠 있으면 인덱스 잠금으로 "후보를 만들지 못했습니다" 만 뜨는 것을 실제 창에서 찾아 고쳤다)</li>
+    <li><b>파일</b> — 설정 창이 데이터 폴더 <code>synonyms.yaml</code> 을 직접 고친다(두 판이 글자까지 같은 모양, 낱말은 JSON 꼴 따옴표 글자). 고치기 전 파일은
+      <code>synonyms.yaml.bak</code>. 손으로 적은 주석은 다시 쓰면 사라진다. YAML 로 읽히지 않는 사전은 덮어쓰지 않고 안내만 한다.
+      [아님] 은 그 짝만 rejected 에 — 앞서 승인했던 짝이면 사전에서도 뺀다. 직접 추가는 한 글자 일상어·같은 말을 받지 않는다.</li>
+    <li>Python 판 RAGSearchBox 빌드는 그동안 yaml 을 빼고 묶었다 — 이제 넣는다(exe 13.2MB).</li>
+  </ul>
   <h3>함께 고민할 점</h3>
   <ul>
     <li><b>답변 화면에서 바로 승인</b> — 패널에 "관련 근거 없음"이 뜬 직후 "'할아버지'를 '조부모'로 찾아볼까요? [예]" 한 줄을 띄우는 방법.
@@ -434,7 +450,7 @@ rejected:            # [아님] 을 누른 짝 — 다시 제안하지 않는다
       <tr><td>1</td><td>바꿔 말한 질문 세트 만들고 지금 놓침 재기</td><td>dataset/paraphrase_pdf30.jsonl · bench/paraphrase/measure.py</td><td><span class="tag t-good">완료</span> 24/42</td></tr>
       <tr><td>2</td><td>기본 사전 + 질문 확장(BM25) + 넓힘 때 근거 한 건 더 — 두 판</td><td>synonyms.default.yaml · synonyms.py / synonyms.rs · hybrid.py / retrieve.rs</td><td><span class="tag t-good">완료</span> 37/42</td></tr>
       <tr><td>3</td><td>놓친 질문 기록 + 후보 제안 — 두 판 (문서 용어는 검색 후보 10건에서 그때그때 뽑는다, §7)</td><td>synonym_misses.jsonl · suggest-synonyms · synonym_candidates.json</td><td><span class="tag t-good">완료</span> 정답 짝 1위 9 · 상위 3 13 /33</td></tr>
-      <tr><td>4</td><td>승인 화면 — 정보·설정 창 "동의어" 칸 (Python·Rust RAGSearchBox)</td><td>info_window.py · ui/info.html · synonyms.yaml 저장·다시 읽기</td><td>—</td></tr>
+      <tr><td>4</td><td>승인 화면 — 설정 창 "동의어" 칸 (Python·Rust RAGSearchBox)</td><td>synonym_store.py / synonyms.rs · info_window.py · ui/info.html</td><td><span class="tag t-good">완료</span> §8</td></tr>
       <tr><td>5</td><td>(선택) 조건부 멀티쿼리 · 자동 적용 문턱</td><td>config 옵션 · 측정</td><td>—</td></tr>
     </tbody>
   </table></div>
@@ -447,7 +463,7 @@ rejected:            # [아님] 을 누른 짝 — 다시 제안하지 않는다
   </ul>
 </section>
 
-<footer>작성 2026-10-27 · 1·2·3단계 실측 반영 2026-10-27 · 측정: 1.7B iGPU 검색어 재작성 5문항, e5-small 일상어→문서 용어 11쌍, simplerag.exe search 비교 · 관련: plan/코드수정_설계서_20261026.html ⑥</footer>
+<footer>작성 2026-10-27 · 1~4단계 반영 2026-10-27 · 측정: 1.7B iGPU 검색어 재작성 5문항, e5-small 일상어→문서 용어 11쌍, simplerag.exe search 비교 · 관련: plan/코드수정_설계서_20261026.html ⑥</footer>
 </div>
 </body>
 </html>
