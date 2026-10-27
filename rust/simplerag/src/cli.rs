@@ -66,6 +66,8 @@ pub struct Args {
     pub verbose: bool,
     pub reprobe: bool,
     pub from: Option<String>,
+    pub out: Option<String>,
+    pub no_llm: bool,
 }
 
 fn model_mode(alias: &str) -> String {
@@ -766,6 +768,53 @@ pub fn cmd_search(a: &Args) -> i32 {
                 }
                 0
             }
+        }
+    };
+    app.close();
+    code
+}
+
+//------------------------------------------------------------------
+// 동의어 후보 제안 명령 (동의어 설계서 3단계, Python cmd_suggest 와 같다)
+//=> 놓친 질문 기록(synonym_misses.jsonl)을 읽어 "일상어 → 문서 용어" 후보를 synonym_candidates.json 에 쓴다.
+//    1) 검색 구성요소를 올린다(1.7B 는 --no-llm 이 아니면 함께 — 후보 하나를 고르게 한다)
+//    2) 질문마다 후보를 뽑아 낱말별로 모은다 · 3) 결과 파일을 쓰고 상위 후보를 보여 준다
+//   --from 에 바꿔 말한 질문 세트(jsonl)를 넣으면 평가에 쓸 수 있다.
+//   돌려줌: 0 = 성공, 1 = 기록된 질문 없음·실패
+//------------------------------------------------------------------
+pub fn cmd_suggest(a: &Args) -> i32 {
+    use crate::synonym_suggest as ss;
+    let src = a.from.clone().unwrap_or_else(|| pyutil::join(&cfg().root, ss::MISSES_NAME));
+    let questions = ss::read_misses(&src);
+    if questions.is_empty() {
+        outln(&format!("기록된 질문이 없습니다: {}", src));
+        return 1;
+    }
+    let app = App::new(None);
+    app.warmup(a.no_llm, &mut |s| log(s), None);
+    app.wait_rerank();
+    let gen = app.generator.clone();
+    let complete = move |p: &str, n: usize| gen.complete(p, n);
+    let llm: Option<&dyn Fn(&str, usize) -> Result<String, String>> = if a.no_llm { None } else { Some(&complete) };
+    let r = ss::suggest(&app.retriever, &app.embedder, &questions, llm, &mut |s| log(s))
+        .and_then(|res| ss::save(&res, a.out.as_deref()).map(|p| (res, p)));
+    let code = match r {
+        Err(e) => {
+            log(&format!("후보 제안 실패: {}", e));
+            1
+        }
+        Ok((res, path)) => {
+            let cands = res["candidates"].as_array().cloned().unwrap_or_default();
+            outln(&format!("\n질문 {}개 → 후보 낱말 {}개 ({}) — {}", res["n_questions"], cands.len(),
+                if res["llm"].as_bool().unwrap_or(false) { "1.7B 고르기" } else { "e5 순서" }, path));
+            for c in cands.iter().take(10) {
+                let terms = c["terms"].as_array().cloned().unwrap_or_default().iter()
+                    .map(|t| format!("{}{} {:.2}", t["term"].as_str().unwrap_or(""), if t["llm"].as_bool().unwrap_or(false) { "★" } else { "" },
+                                     t["score"].as_f64().unwrap_or(0.0)))
+                    .collect::<Vec<_>>().join(" · ");
+                outln(&format!("  {} ({}회) → {}", c["word"].as_str().unwrap_or(""), c["count"], terms));
+            }
+            0
         }
     };
     app.close();

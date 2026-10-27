@@ -24,6 +24,7 @@ pub mod pyutil;
 pub mod retrieve;
 pub mod store;
 pub mod structure;
+pub mod synonym_suggest;
 pub mod synonyms;
 pub mod tok;
 pub mod xlsdate;

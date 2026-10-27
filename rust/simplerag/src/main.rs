@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use simplerag::cli::{self, Args};
 use simplerag::config;
 
-const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,clear,status,backend,warmup,import} ...
+const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,clear,status,backend,warmup,import,suggest-synonyms} ...
 
 로컬 문서 RAG (Rust 판)
 
@@ -25,6 +25,7 @@ const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,cle
   backend  생성 백엔드(CPU/iGPU) 확인  [--reprobe]
   warmup   예열만 수행                 [--model M] [--precise]
   import   Python 판 인덱스 가져오기   --from <Python 데이터 폴더(예: dist\\simplerag)>
+  suggest-synonyms  놓친 질문으로 동의어 사전 후보 뽑기  [--from <질문 jsonl>] [--out <결과 json>] [--no-llm]
 ";
 
 // 인자 오류 — argparse 처럼 사용법과 함께 2 로 끝낸다
@@ -47,7 +48,7 @@ fn parse(argv: &[String]) -> Args {
         std::process::exit(0);
     }
     a.cmd = argv[0].clone();
-    let valid = ["index", "ask", "chat", "extract", "search", "clear", "status", "backend", "warmup", "import"];
+    let valid = ["index", "ask", "chat", "extract", "search", "clear", "status", "backend", "warmup", "import", "suggest-synonyms"];
     if !valid.contains(&a.cmd.as_str()) {
         arg_error(&format!("argument cmd: invalid choice: '{}' (choose from {})", a.cmd,
             valid.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ")));
@@ -94,6 +95,8 @@ fn parse(argv: &[String]) -> Args {
             "-v" | "--verbose" => a.verbose = true,
             "--reprobe" => a.reprobe = true,
             "--from" => a.from = Some(next(&mut i, "--from")),
+            "--out" => a.out = Some(next(&mut i, "--out")),
+            "--no-llm" => a.no_llm = true,
             s if s.starts_with("--") => arg_error(&format!("unrecognized arguments: {}", s)),
             s => positional.push(s.to_string()),
         }
@@ -192,6 +195,7 @@ fn main() {
         "backend" => cli::cmd_backend(&args),
         "warmup" => cli::cmd_warmup(&args),
         "import" => cli::cmd_import(&args),
+        "suggest-synonyms" => cli::cmd_suggest(&args),
         _ => 2,
     };
     console_restore();

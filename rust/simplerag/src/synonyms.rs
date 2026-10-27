@@ -125,6 +125,31 @@ pub fn expand(query: &str) -> (String, Vec<(String, String)>) {
     with_rules(|rules| expand_with(rules, query))
 }
 
+// 이 낱말을 사전이 이미 넓히나(후보 제안이 다시 묻지 않게) — 넓히기를 끈 상태면 사전도 없는 것으로 본다
+pub fn covers(word: &str) -> bool {
+    cfg().synonyms && with_rules(|rules| !expand_with(rules, word).1.is_empty())
+}
+
+//------------------------------------------------------------------
+// 사용자가 [아님] 한 짝 (Python synonyms.rejected 와 같다)
+//=> 후보 제안(synonym_suggest)이 다시 묻지 않게 사전 파일들의 rejected 를 모은다. 읽지 못한 파일은 건너뛴다.
+//------------------------------------------------------------------
+pub fn rejected() -> HashSet<(String, String)> {
+    let mut out = HashSet::new();
+    for p in paths() {
+        let y: serde_yaml::Value = match std::fs::read_to_string(&p).ok().and_then(|s| serde_yaml::from_str(&s).ok()) {
+            Some(v) => v,
+            None => continue,
+        };
+        for pair in y.get("rejected").and_then(|v| v.as_sequence()).into_iter().flatten() {
+            if let Some(s) = pair.as_sequence().filter(|s| s.len() == 2) {
+                out.insert((yaml_str(&s[0]).trim().to_string(), yaml_str(&s[1]).trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
 // 주어진 규칙으로 질문 넓히기(expand 의 본체 — 시험에서 사전 파일 없이 쓴다)
 fn expand_with(rules: &[Rule], query: &str) -> (String, Vec<(String, String)>) {
     let nq = WS.replace_all(query, "").into_owned();

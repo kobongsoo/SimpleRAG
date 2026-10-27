@@ -104,6 +104,31 @@ def rules():
 
 
 #------------------------------------------------------------------
+# 사용자가 [아님] 한 짝
+#=> 후보 제안(synonym_suggest)이 다시 묻지 않게 사전 파일들의 rejected 를 모은다.
+#
+# -in: 없음
+#
+# -out: {(일상어, 문서 용어)}
+# -out: error = 없음 (읽지 못한 파일은 건너뛴다)
+#------------------------------------------------------------------
+def rejected():
+    import yaml
+
+    out = set()
+    for p in _paths():
+        try:
+            with open(p, encoding="utf-8") as f:
+                y = yaml.safe_load(f) or {}
+        except Exception:
+            continue
+        for pair in y.get("rejected") or []:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                out.add((str(pair[0]).strip(), str(pair[1]).strip()))
+    return out
+
+
+#------------------------------------------------------------------
 # 질문 넓히기
 #=> 질문에 있는 일상어마다 문서 용어를 덧붙인 BM25 질의를 만든다.
 #    · 문서 용어가 이미 질문에 있으면 덧붙이지 않는다(공백 무시 비교)

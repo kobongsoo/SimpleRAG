@@ -19,6 +19,7 @@ import time
 
 from . import config
 from .generate.prompts import parse_answer, recite
+from .retrieve import synonym_suggest
 
 # 폴더 한정 검색에서 그 폴더에 인덱싱된 문서가 없을 때 알리는 글
 NO_DOCS_IN_FOLDER = ("이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다. "
@@ -72,6 +73,8 @@ class RagPipeline:
         else:
             chunks, timing = self.retriever.search(query, top_k=top_k, folder=folder)
         yield ("evidence", chunks, timing)
+        # 근거를 못 찾았거나 리랭커가 확신하지 못한 질문은 동의어 후보 제안용으로 남긴다(동의어 설계서 3단계)
+        synonym_suggest.log_miss(query, timing)
 
         if not chunks and timing.get("no_relevant"):
             # 가장 가까운 근거도 질문과 동떨어졌다 — 모델을 부르지 않는다(지어낸 답을 막으려고)

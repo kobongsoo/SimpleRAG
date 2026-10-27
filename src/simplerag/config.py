@@ -275,6 +275,10 @@ SYNONYMS = ((os.environ["SIMPLERAG_SYNONYMS"] != "0") if os.environ.get("SIMPLER
 #   ⚠️ 붙는 질문만 TTFT 가 약 1초 늘어난다(근거 약 100토큰). 끄려면 SIMPLERAG_SYNONYM_EXTRA=0.
 SYNONYM_EXTRA = ((os.environ["SIMPLERAG_SYNONYM_EXTRA"] != "0") if os.environ.get("SIMPLERAG_SYNONYM_EXTRA")
                  else bool(_YAML.get("retrieval.synonym_extra", True)))
+# 놓친 질문 기록(동의어 설계서 3단계) — 근거를 못 찾았거나 리랭커 최고 점수가 0 미만인 질문을
+#   <데이터 폴더>/synonym_misses.jsonl 에 남겨 suggest-synonyms 가 사전 후보를 뽑는 재료로 쓴다. 이 PC 에만 남는다.
+SYNONYM_LOG = ((os.environ["SIMPLERAG_SYNONYM_LOG"] != "0") if os.environ.get("SIMPLERAG_SYNONYM_LOG")
+               else bool(_YAML.get("retrieval.synonym_log", True)))
 BM25_MODE = "subword"
 
 # 리랭킹 — RRF 후보 RERANK_POOL 건을 크로스인코더로 재정렬해 상위 TOP_K 를 쓴다.

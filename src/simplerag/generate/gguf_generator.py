@@ -292,3 +292,20 @@ class GgufGenerator(Generator):
         _, kept, note = guard.finish(capped=(ch.get("finish_reason") == "length" and n_out >= TAIL_WINDOW))
         self.last_note = note
         return kept
+
+    #------------------------------------------------------------------
+    # 짧은 판정용 생성 (프롬프트 그대로)
+    #=> 동의어 후보 고르기(synonym_suggest)처럼 근거·답변 형식이 필요 없는 짧은 질문에 쓴다.
+    #   그리디(온도 0)로 몇 토큰만 받는다 — 반복·인용 처리는 하지 않는다.
+    #
+    # -in: prompt     = 대화 형식까지 갖춘 프롬프트(build_prompt 결과)
+    # -in: max_tokens = 받을 토큰 수
+    #
+    # -out: 생성된 글
+    # -out: error = 로딩 실패 시 GenerateError
+    #------------------------------------------------------------------
+    def complete(self, prompt, max_tokens=8):
+        self.ensure_loaded()
+        with self._infer_lock:
+            r = self._llm.create_completion(prompt, max_tokens=max_tokens, temperature=0.0)
+        return r["choices"][0]["text"]

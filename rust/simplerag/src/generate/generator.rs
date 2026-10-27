@@ -218,6 +218,36 @@ impl Generator {
     pub fn generate(&self, query: &str, chunks: &[String], max_tokens: Option<usize>) -> Result<String, String> {
         self.stream(query, chunks, max_tokens, None, &mut |_| {}).map(|o| o.text)
     }
+
+    //------------------------------------------------------------------
+    // 짧은 판정용 생성 (프롬프트 그대로, Python GgufGenerator.complete 와 같다)
+    //=> 동의어 후보 고르기(synonym_suggest)처럼 근거·답변 형식이 필요 없는 짧은 질문에 쓴다.
+    //   그리디로 max_tokens 개까지 받는다 — 반복·인용 처리는 하지 않는다.
+    //
+    // -in: prompt = 대화 형식까지 갖춘 프롬프트(build_prompt 결과) / max_tokens = 받을 토큰 수
+    //
+    // -out: Ok(생성된 글)
+    // -out: error = 적재·디코드 실패면 Err
+    //------------------------------------------------------------------
+    pub fn complete(&self, prompt: &str, max_tokens: usize) -> Result<String, String> {
+        self.ensure_loaded()?;
+        let mut g = self.model.lock().unwrap();
+        let m = g.as_mut().unwrap();
+        let ptoks = m.prompt_tokens(prompt);
+        let mut logits = m.eval_prompt(&ptoks)?;
+        let mut bytes: Vec<u8> = vec![];
+        for n in 0..max_tokens {
+            let tok = llama::argmax(&logits);
+            if m.is_eog(tok) {
+                break;
+            }
+            bytes.extend(m.piece(tok));
+            if n + 1 < max_tokens {
+                logits = m.feed(&[tok])?;
+            }
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 // 바이트 안에서 조각 찾기

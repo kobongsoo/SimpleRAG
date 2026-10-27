@@ -185,6 +185,8 @@ impl App {
             self.retriever.search(query, top_k, folder)?
         };
         on_event(Event::Evidence(chunks.clone(), timing.clone()));
+        // 근거를 못 찾았거나 리랭커가 확신하지 못한 질문은 동의어 후보 제안용으로 남긴다(동의어 설계서 3단계)
+        crate::synonym_suggest::log_miss(query, &timing);
         let done_simple = |answer: &str| Done {
             answer: answer.to_string(), answer_stream: answer.to_string(), cited: vec![], cite_fixes: vec![],
             note: None, ttft_s: 0.0, llm_ttft_s: None,

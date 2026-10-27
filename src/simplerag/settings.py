@@ -205,6 +205,8 @@ SCHEMA = {
         "synonyms": _bool,
         # 넓힘이 일어난 질문이면 RRF 1위를 근거로 한 건 더(top_k+1)
         "synonym_extra": _bool,
+        # 놓친 질문을 synonym_misses.jsonl 에 기록(동의어 후보 제안 재료)
+        "synonym_log": _bool,
     },
     "rerank": {
         "mode": _rerank_mode,

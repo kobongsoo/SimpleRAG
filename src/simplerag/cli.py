@@ -839,6 +839,45 @@ def cmd_search(args):
 
 
 #------------------------------------------------------------------
+# 동의어 후보 제안 명령 (동의어 설계서 3단계)
+#=> 놓친 질문 기록(synonym_misses.jsonl)을 읽어 "일상어 → 문서 용어" 후보를 synonym_candidates.json 에 쓴다.
+#    1) 검색 구성요소를 올린다(1.7B 는 --no-llm 이 아니면 함께 — 후보 하나를 고르게 한다)
+#    2) 질문마다 후보를 뽑아 낱말별로 모은다(synonym_suggest.suggest)
+#    3) 결과 파일을 쓰고 상위 후보를 화면에 보여 준다
+#
+# -in: args.from_ = 질문 목록 jsonl(기본 <데이터 폴더>/synonym_misses.jsonl, 바꿔 말한 질문 세트도 됨)
+# -in: args.out   = 결과 경로(기본 <데이터 폴더>/synonym_candidates.json)
+# -in: args.no_llm = True 면 e5 순서만 쓴다(모델을 올리지 않아 빠르다)
+#
+# -out: 종료 코드 (0 = 성공, 1 = 기록된 질문 없음)
+# -out: error = 검색·임베딩 실패는 예외 전파
+#------------------------------------------------------------------
+def cmd_suggest(args):
+    from simplerag.retrieve import synonym_suggest as ss
+
+    src = args.from_ or os.path.join(config.ROOT, ss.MISSES_NAME)
+    questions = ss.read_misses(src)
+    if not questions:
+        print("기록된 질문이 없습니다: {}".format(src))
+        return 1
+    app = App()
+    try:
+        app.warmup(wait=True, skip_llm=args.no_llm, on_log=_log)
+        app.wait_rerank()
+        llm = None if args.no_llm else app.pipeline.generator.complete
+        result = ss.suggest(app.retriever, questions, llm_complete=llm, log=_log)
+        path = ss.save(result, args.out)
+        print("\n질문 {}개 → 후보 낱말 {}개 ({}) — {}".format(
+            result["n_questions"], len(result["candidates"]), "1.7B 고르기" if result["llm"] else "e5 순서", path))
+        for c in result["candidates"][:10]:
+            terms = " · ".join("{}{} {:.2f}".format(t["term"], "★" if t["llm"] else "", t["score"]) for t in c["terms"])
+            print("  {} ({}회) → {}".format(c["word"], c["count"], terms))
+        return 0
+    finally:
+        app.close()
+
+
+#------------------------------------------------------------------
 # 상태 명령
 #=> 인덱스 규모와 마지막 갱신 상황을 보여 준다.
 #------------------------------------------------------------------
@@ -1172,6 +1211,12 @@ def main(argv=None):
     pb = sub.add_parser("backend", help="생성 백엔드(CPU/iGPU) 확인·재측정")
     pb.add_argument("--reprobe", action="store_true", help="저장된 측정을 무시하고 다시 잰다")
     pb.set_defaults(func=cmd_backend)
+
+    psg = sub.add_parser("suggest-synonyms", help="놓친 질문으로 동의어 사전 후보 뽑기")
+    psg.add_argument("--from", dest="from_", default=None, help="질문 목록 jsonl (기본: 데이터 폴더 synonym_misses.jsonl)")
+    psg.add_argument("--out", default=None, help="결과 경로 (기본: 데이터 폴더 synonym_candidates.json)")
+    psg.add_argument("--no-llm", action="store_true", help="1.7B 고르기 없이 e5 순서만")
+    psg.set_defaults(func=cmd_suggest)
 
     pw = sub.add_parser("warmup", help="예열만 수행(콜드스타트 측정)")
     pw.add_argument("--model", default=None, choices=list(config.USER_GEN_MODELS))

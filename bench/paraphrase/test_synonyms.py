@@ -60,5 +60,33 @@ for name, got, want in EXTRA:
     ok = (got and got["id"]) == want if want else got is None
     fail += not ok
     print(("✅ " if ok else "🔴 ") + name)
+
+# 후보 제안의 낱말 거르기(synonym_suggest.words_and_terms) — Rust words_like_python 과 같은 사례
+from simplerag.retrieve.synonym_suggest import words_and_terms  # noqa: E402
+
+config.SYNONYMS = False
+w, t = words_and_terms("할아버지 돌아가시면 휴가 며칠 줘? 공무원한테 되고",
+                       ["경조사 휴가는 조부모 사망 시 3일을 부여한다. 공무원 등에 따른 규정"])
+ok = w == ["할아버지", "돌아가시면"] and "조부모" in t and "사망" in t and "따른" not in t
+fail += not ok
+print(("✅ " if ok else "🔴 ") + "후보 제안 낱말 거르기" + ("" if ok else " {} {}".format(w, t)))
+
+# 놓친 질문 기록(log_miss) — 점수 0 미만 · 관련 근거 없음만, 옵션 끄면 안 남김, 읽을 때 같은 질문은 횟수로
+from simplerag.retrieve import synonym_suggest as ss  # noqa: E402
+
+with tempfile.TemporaryDirectory() as d:
+    root, config.ROOT = config.ROOT, d
+    config.SYNONYM_LOG = True
+    r1 = ss.log_miss("할아버지 돌아가시면", {"rerank_top": -1.2})
+    r2 = ss.log_miss("조부모 사망 시 휴가", {"rerank_top": 3.5})
+    r3 = ss.log_miss("비트코인 숙박비", {"no_relevant": True})
+    r4 = ss.log_miss("할아버지 돌아가시면", {"rerank_top": -0.5})
+    config.SYNONYM_LOG = False
+    r5 = ss.log_miss("와이프 출산", {"rerank_top": -2.0})
+    got = ss.read_misses(os.path.join(d, ss.MISSES_NAME))
+    config.ROOT = root
+ok = (r1, r2, r3, r4, r5) == (True, False, True, True, False) and got == [("할아버지 돌아가시면", 2), ("비트코인 숙박비", 1)]
+fail += not ok
+print(("✅ " if ok else "🔴 ") + "놓친 질문 기록" + ("" if ok else " {} {}".format((r1, r2, r3, r4, r5), got)))
 print("실패 %d건" % fail)
 raise SystemExit(1 if fail else 0)

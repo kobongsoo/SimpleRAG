@@ -43,6 +43,9 @@ retrieval:
   synonym_extra: true           # 넓힘이 일어난 질문이면 RRF 1위를 근거로 한 건 더 붙인다(근거 3 → 4건) — 리랭커가 일상어 질문만 보고
                                 #   밀어낸 조항을 되살린다. 바꿔 말한 질문 42문항: 근거 적중 29 → 37 · 골든 100문항 85 그대로
                                 #   ⚠️ 붙는 질문만 TTFT 약 +1초(근거 약 100토큰 · 실측 중앙값 2.96 → 4.17초). synonyms 가 꺼져 있으면 무시
+  synonym_log: true             # 근거를 못 찾은 질문(관련 근거 없음 · 리랭커 최고 점수 0 미만)을 데이터 폴더 synonym_misses.jsonl 에 기록
+                                #   → "suggest-synonyms" 명령이 이 기록으로 사전 후보(일상어 → 문서 용어)를 synonym_candidates.json 에 뽑는다
+                                #   질문 글이 이 PC 에 남는다 — 남기기 싫으면 false
 
 rerank:
   mode: auto                    # auto(iGPU 로 생성할 때만 켬) | on | off

@@ -109,6 +109,8 @@ pub struct Config {
     pub synonyms: bool,
     // 넓힘이 일어난 질문이면 RRF 1위를 근거로 한 건 더(retrieval.synonym_extra, 기본 켬) — retrieve::synonym_extra
     pub synonym_extra: bool,
+    // 놓친 질문 기록(retrieval.synonym_log, 기본 켬) — synonym_suggest.rs
+    pub synonym_log: bool,
     pub rrf_k: f64,
     pub bm25_k1: f64,
     pub bm25_b: f64,
@@ -282,6 +284,11 @@ fn build() -> Result<Config, ConfigError> {
         Some(v) => v != "0",
         None => pick_bool(&y, "retrieval.synonym_extra", true),
     };
+    // 놓친 질문을 synonym_misses.jsonl 에 — 끄려면 SIMPLERAG_SYNONYM_LOG=0 (Python config.SYNONYM_LOG 와 같다)
+    let synonym_log = match env("SIMPLERAG_SYNONYM_LOG") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "retrieval.synonym_log", true),
+    };
     let rrf_k = pick_num(&y, "retrieval.rrf_k", 60.0, None)?;
     let bm25_k1 = pick_num(&y, "retrieval.bm25_k1", 1.5, None)?;
     let bm25_b = pick_num(&y, "retrieval.bm25_b", 0.75, None)?;
@@ -366,6 +373,7 @@ fn build() -> Result<Config, ConfigError> {
         dedup_evidence,
         synonyms,
         synonym_extra,
+        synonym_log,
         rrf_k,
         bm25_k1,
         bm25_b,
@@ -477,6 +485,7 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("dedup", Check::Bool),
             ("synonyms", Check::Bool),
             ("synonym_extra", Check::Bool),
+            ("synonym_log", Check::Bool),
         ]),
         ("rerank", vec![
             ("mode", Check::RerankMode),
