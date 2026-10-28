@@ -58,7 +58,7 @@ impl Tray {
     // 시작 — 트레이 스레드를 띄우고 창이 준비될 때까지(최대 5초) 기다린다
     //------------------------------------------------------------------
     pub fn start(on_action: Box<dyn Fn(&str) + Send + Sync>) -> Tray {
-        let state = Arc::new(Mutex::new(TrayState { tooltip: "RAGSearchBox-rs".into(), title: "RAGSearchBox-rs".into(), ..Default::default() }));
+        let state = Arc::new(Mutex::new(TrayState { tooltip: "MoAI-S".into(), title: "MoAI-S".into(), ..Default::default() }));
         let _ = CTX.set(Ctx { state: state.clone(), on_action });
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new().name("rsb-tray".into()).spawn(move || run(tx)).ok();
@@ -128,7 +128,7 @@ fn run(ready: std::sync::mpsc::Sender<()>) {
         HWND_TRAY.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
         let mut n = nid(hwnd);
         n.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        fill(&mut n.szTip, "RAGSearchBox-rs");
+        fill(&mut n.szTip, "MoAI-S");
         let _ = Shell_NotifyIconW(NIM_ADD, &n);
         let _ = ready.send(());
         let mut msg = MSG::default();

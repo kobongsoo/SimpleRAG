@@ -13,7 +13,7 @@
 #   화면 모양은 Gemini 옆 창을 따른다(사용자 요청).
 #    - 머리: 대화 제목 · 폴더, 오른쪽에 ⋯(대화 기록) · ✎(새 대화)
 #    - 질문은 오른쪽 회색 말풍선, 답은 상자 없이 본문으로
-#    - 출처는 답 아래 "▸ 참조 원문 N건" — 누르면 펼쳐진다(뉴플로이 AI 처럼)
+#    - 출처는 답 아래 "▸ 출처 N건" — 누르면 펼쳐진다(뉴플로이 AI 처럼)
 #    - 아래는 둥근 입력 카드(폴더 칩 · 범위 · 보내기)
 #   대화는 history.py 로 최근 10개까지 남기고 ⋯ 메뉴에서 다시 연다.
 #
@@ -23,13 +23,13 @@
 import os
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 import dock as rsb_dock
 import history as rsb_history
 import log as rsb_log
 import settings as rsb_settings
-from chat_parser import setup_bits
+from chat_parser import meta_line
 
 MAX_TURNS = 20          # 이보다 오래된 대화는 지운다(메모리·그리기 비용)
 # 검색 범위(폴더 한정 검색 설계서 §3) — 인덱싱 폴더 = 패널 폴더라 "인덱스 전체" 는 두지 않는다
@@ -48,8 +48,15 @@ CHIP = "#dde3ea"         # 입력 카드 안 폴더 칩
 HOVER = "#eef1f5"        # 아이콘 단추에 마우스를 올렸을 때
 LINK = "#1a5fb4"         # 눌러지는 글자(출처 문서 · [...])
 SRC_BG = "#f3f4f6"       # 출처 본문 상자
-SEND = "#1f1f1f"         # 보내기 단추
+SEND = "#e5163f"         # 보내기 단추 — MoAI-S 브랜드 빨강(Rust panel.html --brand 와 같다)
 ERR = "#b4462f"          # 오류 글자
+# 문서 업로드 한도(문서 업로드 설계서 §10) · 올릴 수 있는 확장자(SimpleRAG indexer.TEXT_EXTS 와 같다)
+UPLOAD_MAX_FILES = 5
+UPLOAD_MAX_MB = 30
+UPLOAD_EXTS = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".hwp", ".hwpx",
+               ".txt", ".md", ".html", ".htm", ".py", ".ipynb")
+UP_BG = "#fdecef"         # 업로드 범위 칩 — MoAI-S 브랜드 옅은 빨강
+UP_INK = "#b8102f"
 BUBBLE_RATIO = 0.78      # 말풍선이 차지할 수 있는 폭(대화 칸 폭에 대한 비율)
 SRC_LINES = 4            # 출처 본문 상자 높이(줄) — 넘치면 상자 안에서 굴린다
 
@@ -318,6 +325,8 @@ class Turn:
         self.ans = None          # 답 칸(기다림 글 → 답 본문)
         self.meta = None         # 소요 줄 칸
         self.src = None          # 출처 칸
+        self.lbl_scope = None    # 말풍선 아래 범위 글 — 출처가 그려지면 출처 머리로 옮긴다
+        self.scope_text = ""     # 범위 글("sample_pdf · 문서 30건")
         self.lbl_wait = None     # "근거를 찾는 중…"
         self.txt_answer = None
 
@@ -337,7 +346,7 @@ class ChatPanel:
     #
     # -in: root     = 숨겨 둔 tk.Tk (메인 스레드)
     # -in: settings = Settings
-    # -in: on_ask   = 사용자가 질문을 보냈을 때 부를 함수 fn(text)
+    # -in: on_ask   = 사용자가 질문을 보냈을 때 부를 함수 fn(text, prev) — prev 는 같은 대화의 바로 앞 질문(없으면 None)
     # -in: history_path = 대화 기록 파일(비우면 로그 폴더 옆 history.json)
     #
     # -out: 없음
@@ -371,6 +380,11 @@ class ChatPanel:
         self.history_path = history_path or rsb_history.default_path(rsb_log.log_dir())
         self.history = rsb_history.load(self.history_path)
         self.conv = None
+        # 이 대화에 올린 문서 [{name, state: "up"|"done"|"fail", chunks, why, pct}] — done 이 있으면 그 문서에서만 찾는다
+        self.ups = []
+        self.on_upload = None          # fn(대화 id, 경로들) -> None | 안내 글 — app 이 워커에 맡긴다
+        self.on_upload_remove = None   # fn(대화 id, 문서 이름)
+        self.on_uploads_gone = None    # fn(대화 id 목록 | None=전부) — 지운 대화의 업로드 폴더를 지운다
         self._wrap_labels = []      # [(Label, 폭 비율)] — 패널 폭이 바뀌면 줄바꿈 폭을 다시 준다
 
     # ── 창 만들기 ─────────────────────────────────────
@@ -393,7 +407,7 @@ class ChatPanel:
         s = self.s
         win = tk.Toplevel(self.root)
         win.withdraw()
-        win.title("RAGSearchBox")
+        win.title("MoAI-S")
         ico = rsb_settings.icon_path()
         if ico:
             try:
@@ -441,6 +455,8 @@ class ChatPanel:
         self.lbl_scope = tk.Label(crow, text="", font=self.f_small, bg=CHIP, fg=INK2,
                                   padx=8, pady=2, anchor="w")
         self.lbl_scope.pack(side="left")
+        # 첨부 칩 줄 — 올린 문서마다 이름 · 상태 · [×] (비어 있으면 숨긴다)
+        self.frm_ups = tk.Frame(card, bg=CARD)
         self.txt_input = tk.Text(card, height=INPUT_LINES, font=self.f_base, wrap="word",
                                  bg=CARD, fg=INK, relief="flat", highlightthickness=0, bd=0,
                                  padx=2, pady=6, insertbackground=INK)
@@ -469,6 +485,10 @@ class ChatPanel:
             scope_menu.add_radiobutton(label=lbl, variable=self._scope_var, value=lbl,
                                        command=lambda v=lbl: self._scope_chosen(v))
         self.mb_scope["menu"] = scope_menu
+        # [+] — 문서 올리기(올린 문서에서만 찾아 답한다)
+        self.btn_plus = tk.Button(bar, text="+", command=self._pick_uploads, font=self.f_bold, bg=CARD, fg=INK2,
+                                  activebackground=HOVER, relief="flat", bd=0, width=2, cursor="hand2")
+        self.btn_plus.pack(side="left", padx=(0, 4))
         self.mb_scope.pack(side="left")
         self.lbl_state = tk.Label(bar, text="", font=self.f_small, bg=CARD, fg=MUTED, anchor="w")
         self.lbl_state.pack(side="left", padx=(6, 0))
@@ -746,7 +766,7 @@ class ChatPanel:
 
     #--------------------------------------------------------------
     # 근거 받기 (답변보다 먼저 온다)
-    #=> 기록에 남기고, 답 칸 아래 출처 칸에 "▸ 참조 원문 N건" 으로 접어 그린다.
+    #=> 기록에 남기고, 답 칸 아래 출처 칸에 "▸ 출처 N건" 으로 접어 그린다.
     #
     # -in: items = [{no, doc, snippet, full?, path?}, …] (full·path 는 새 워커만 준다)
     # -in: ms    = 검색에 걸린 시간
@@ -804,18 +824,8 @@ class ChatPanel:
         for warn in info.get("warnings", []):
             self.append_token("\n" + warn)
         self._drop_wait(t)
-        bits = []
-        if info.get("search_ms") is not None:
-            bits.append("검색 {}ms".format(info["search_ms"]))
-        if info.get("ttft_s") is not None:
-            bits.append("첫 글자 {:.2f}s".format(info["ttft_s"]))
-        if info.get("total_s") is not None:
-            bits.append("완료 {:.2f}s".format(info["total_s"]))
-        # 답을 만든 모델과 parent 설정 — 예전 simplerag.exe 면 줄이 없어 건너뛴다
-        bits.extend(setup_bits(info))
-        # AI 가 만든 답이면 출처로 확인하라는 말을 앞에 둔다(Gemini 의 작은 안내 자리)
-        if t.txt_answer is not None:
-            bits.insert(0, "AI 요약 — 아래 출처로 확인하세요")
+        # "정확한 내용은 아래 출처로 확인하세요.  검색/첫 글자/완료(s) , 모델" — AI 답이 있을 때만 안내를 앞에 둔다
+        meta = meta_line(info, t.txt_answer is not None) + (" , 업로드 문서" if self._n_uploads() else "")
         # 모델이 끝에 빈 줄을 붙이는 일이 잦다 — 그만큼 칸이 늘어 빈 틈이 생기므로 걷어 낸다
         if t.txt_answer is not None:
             try:
@@ -829,8 +839,8 @@ class ChatPanel:
                 t.record["answer"] = t.record.get("answer", "").rstrip()
             except Exception:
                 pass
-        if bits:
-            t.record["meta"] = " · ".join(bits)
+        if meta:
+            t.record["meta"] = meta
             self._draw_meta(t, t.record["meta"])
         rsb_log.diag(self.log, "답변 완료: 근거 %d건 · 답변 %d자", len(t.docs), t.answer_chars)
         self._save_history()
@@ -907,6 +917,8 @@ class ChatPanel:
         already = self.conv is None and not self.turns
         self._clear_turns()
         self.conv = None
+        self.ups = []
+        self._draw_ups()
         self.lbl_title.config(text="새 대화")
         self._flash_state("이미 새 대화입니다 — 질문을 입력하세요" if already
                           else "새 대화를 시작합니다 (이전 대화는 ⋯ 에 있습니다)")
@@ -975,6 +987,8 @@ class ChatPanel:
                              command=lambda c=conv: self.open_conv(c))
         if self.history:
             menu.add_separator()
+            if self.conv is not None and any(c is self.conv for c in self.history):
+                menu.add_command(label="이 대화 지우기", command=self._delete_conv)
             menu.add_command(label="기록 모두 지우기", command=self._clear_history)
         try:
             # ⋯ 바로 아래, 오른쪽 끝을 맞춰 연다
@@ -999,6 +1013,9 @@ class ChatPanel:
             return
         self._clear_turns()
         self.conv = conv
+        self.ups = [{"name": u.get("name", ""), "chunks": u.get("chunks", 0), "state": "done"}
+                    for u in conv.get("uploads") or []]
+        self._draw_ups()
         self.lbl_title.config(text=conv.get("title", ""))
         try:
             for rec in conv.get("turns", []):
@@ -1018,13 +1035,219 @@ class ChatPanel:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _clear_history(self):
-        if not messagebox.askyesno("대화 기록 지우기", "저장된 대화 기록 {}개를 모두 지울까요?"
-                                   .format(len(self.history)), parent=self.win):
+        n = sum(len(c.get("uploads") or []) for c in self.history)
+        if not messagebox.askyesno("대화 기록 지우기", "저장된 대화 기록 {}개를 모두 지울까요?{}".format(
+                len(self.history), "\n올린 문서 {}건과 그 인덱스도 함께 지웁니다.".format(n) if n else ""),
+                parent=self.win):
             return
         self.history[:] = []
+        self.conv = None
         self._save_history()
+        # 올린 문서도 모두 지운다(문서 업로드 설계서 §9)
+        if self.on_uploads_gone:
+            self.on_uploads_gone(None)
         self.new_chat()
         self.log.info("대화 기록을 모두 지웠다")
+
+    #--------------------------------------------------------------
+    # 이 대화 지우기 (⋯ 메뉴) — 기록에서 빼고 올린 문서와 그 인덱스도 지운다(문서 업로드 설계서 §9)
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _delete_conv(self):
+        if self._busy or self._uploading():
+            self.set_state("답변·업로드가 끝난 뒤에 지울 수 있습니다")
+            return
+        n = self._n_uploads()
+        if not messagebox.askyesno("대화 지우기", "이 대화를 지울까요?{}".format(
+                "\n올린 문서 {}건과 그 인덱스도 함께 지웁니다.".format(n) if n else ""), parent=self.win):
+            return
+        cid = self.conv.get("id")
+        self.history[:] = [c for c in self.history if c is not self.conv]
+        self.conv = None
+        self._save_history()
+        if self.on_uploads_gone and cid:
+            self.on_uploads_gone([cid])
+        self.new_chat()
+        self.log.info("대화 한 건을 지웠다: %s", cid)
+
+    #--------------------------------------------------------------
+    # 올린 문서 수(다 올린 것) · 올리는 중인가
+    #--------------------------------------------------------------
+    def _n_uploads(self):
+        return sum(1 for u in self.ups if u["state"] == "done")
+
+    def _uploading(self):
+        return any(u["state"] == "up" for u in self.ups)
+
+    #--------------------------------------------------------------
+    # [+] — 파일 고르기 · 한도 확인 · app 에 맡기기 (문서 업로드 설계서 §4·§10)
+    #=> 대화가 없으면 이때 만든다(제목은 첫 질문이 오면 바꾼다). 한도에 걸린 파일은 실패 칩으로 보인다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _pick_uploads(self):
+        if self._busy:
+            self.set_state("답변이 끝난 뒤에 올릴 수 있습니다")
+            return
+        if self._uploading():
+            self.set_state("올리는 중입니다 — 끝난 뒤에 더 올릴 수 있습니다")
+            return
+        paths = filedialog.askopenfilenames(parent=self.win, title="질문할 문서 고르기 (여러 개 가능)",
+                                            filetypes=[("문서", " ".join("*" + e for e in UPLOAD_EXTS))])
+        if not paths:
+            return
+        if self.conv is None:
+            self.conv = rsb_history.new_conv("업로드 문서", self.folder)
+            self.lbl_title.config(text=self.conv["title"])
+        n = self._n_uploads()
+        ok = []
+        for p in paths:
+            name = os.path.basename(p)
+            why = None
+            if os.path.splitext(name)[1].lower() not in UPLOAD_EXTS:
+                why = "지원하지 않는 형식입니다"
+            elif os.path.getsize(p) > UPLOAD_MAX_MB * 1024 * 1024:
+                why = "{}MB 를 넘습니다 — 인덱싱 폴더에 넣어 쓰세요".format(UPLOAD_MAX_MB)
+            elif n >= UPLOAD_MAX_FILES:
+                why = "대화 하나에 {}개까지 올릴 수 있습니다".format(UPLOAD_MAX_FILES)
+            if why:
+                self.ups.append({"name": name, "state": "fail", "why": why})
+                continue
+            n += 1
+            ok.append(p)
+            self.ups.append({"name": name, "state": "up", "pct": 0})
+        if ok and self.on_upload:
+            msg = self.on_upload(self.conv["id"], ok)
+            if msg:
+                # 맡기지 못했다 — 올리는 중 칩을 실패로 바꾼다
+                for u in self.ups:
+                    if u["state"] == "up":
+                        u.update(state="fail", why=msg)
+                self.set_state(msg)
+        self._draw_ups()
+
+    #--------------------------------------------------------------
+    # 올리는 중 진행 (app 이 워커 stderr 를 % 로 바꿔 부른다 — 맨 앞 "up" 칩)
+    #
+    # -in: pct = 진행률 / text = 진행 글
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def upload_progress(self, pct, text):
+        for u in self.ups:
+            if u["state"] == "up":
+                u["pct"] = pct
+                self._draw_ups()
+                return
+
+    #--------------------------------------------------------------
+    # 한 파일 끝 (app 이 메인 스레드에서 부른다) — 성공이면 n청크, 실패면 사유
+    #
+    # -in: res = 워커 결과 {"op", "ok", "name", "chunks" | "why"}
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def upload_done(self, res):
+        if res.get("op") == "upload-remove":
+            if not res.get("ok"):
+                self._flash_state("문서를 빼지 못했습니다: {}".format(res.get("why", "")))
+            return
+        u = next((x for x in self.ups if x["state"] == "up" and x["name"] == res.get("name")), None) \
+            or next((x for x in self.ups if x["state"] == "up"), None)
+        if u is None:
+            return
+        if res.get("ok"):
+            u.update(state="done", chunks=res.get("chunks", 0))
+        else:
+            u.update(state="fail", why=res.get("why") or "실패")
+        self._sync_conv_uploads()
+        self._draw_ups()
+        if not self._uploading():
+            self._flash_state("문서를 올렸습니다 — 이제 질문은 올린 문서에서만 찾습니다" if self._n_uploads()
+                              else "문서를 올리지 못했습니다")
+
+    #--------------------------------------------------------------
+    # 대화 기록에 업로드 목록 남기기(다 올린 것만)
+    #--------------------------------------------------------------
+    def _sync_conv_uploads(self):
+        if self.conv is None:
+            return
+        self.conv["uploads"] = [{"name": u["name"], "chunks": u.get("chunks", 0)}
+                                for u in self.ups if u["state"] == "done"]
+        self._save_history()
+
+    #--------------------------------------------------------------
+    # 첨부 칩 [×] — 다 올린 문서면 워커에 빼기를 맡기고, 실패 칩이면 닫기만
+    #
+    # -in: u = 칩 dict
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _remove_upload(self, u):
+        if self._busy or self._uploading():
+            self.set_state("답변·업로드가 끝난 뒤에 뺄 수 있습니다")
+            return
+        self.ups = [x for x in self.ups if x is not u]
+        if u["state"] == "done" and self.conv is not None:
+            if self.on_upload_remove:
+                self.on_upload_remove(self.conv["id"], u["name"])
+            self._sync_conv_uploads()
+            self._flash_state("'{}' 을 뺐습니다".format(u["name"]))
+        self._draw_ups()
+
+    #--------------------------------------------------------------
+    # 첨부 칩 줄 · 범위 칩 · 범위 단추 · 입력 안내를 지금 상태에 맞춘다
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _draw_ups(self):
+        if not self.win:
+            return
+        for w in self.frm_ups.winfo_children():
+            w.destroy()
+        for u in self.ups:
+            fail = u["state"] == "fail"
+            chip = tk.Frame(self.frm_ups, bg="#fdf1ef" if fail else "white", highlightthickness=1,
+                            highlightbackground="#f1b8b0" if fail else "#e6e8ec")
+            # 좁은 패널에서 옆으로 넘치지 않게 칩마다 한 줄
+            chip.pack(anchor="w", pady=(4, 0))
+            st = ("올리는 중 {}%".format(u.get("pct", 0)) if u["state"] == "up"
+                  else "{}청크".format(u.get("chunks", 0)) if u["state"] == "done" else u.get("why", "실패"))
+            tk.Label(chip, text=("⚠ " if fail else "📄 ") + u["name"], font=self.f_small, bg=chip["bg"],
+                     fg=INK).pack(side="left", padx=(6, 4))
+            tk.Label(chip, text=st, font=self.f_small, bg=chip["bg"], fg="#b4462f" if fail else MUTED).pack(side="left")
+            if u["state"] != "up":
+                x = tk.Label(chip, text="×", font=self.f_small, bg=chip["bg"], fg=MUTED, cursor="hand2")
+                x.pack(side="left", padx=(4, 6))
+                x.bind("<Button-1>", lambda _e, u=u: self._remove_upload(u))
+            else:
+                tk.Label(chip, text="", bg=chip["bg"]).pack(side="left", padx=2)
+        if self.ups:
+            self.frm_ups.pack(fill="x", before=self.txt_input)
+        else:
+            self.frm_ups.pack_forget()
+        n = self._n_uploads()
+        if n:
+            self.lbl_scope.config(text="📎 업로드 문서 {}건에서 찾기".format(n), bg=UP_BG, fg=UP_INK)
+            self.mb_scope.config(state="disabled")
+        else:
+            self.lbl_scope.config(bg=CHIP, fg=INK2)
+            self.mb_scope.config(state="normal")
+            self.refresh_scope()
+        self.lbl_ph.config(text="올린 문서에 대해 물어보세요 (Enter 전송)" if n else "무엇이든 물어보세요 (Enter 전송)")
 
     #--------------------------------------------------------------
     # 대화 기록 저장
@@ -1036,8 +1259,13 @@ class ChatPanel:
     # -out: error = 없음 (쓰기 실패는 로그만 — 대화는 계속된다)
     #--------------------------------------------------------------
     def _save_history(self):
+        before = {c.get("id") for c in self.history}
         if self.conv is not None:
             rsb_history.touch(self.history, self.conv)
+        # 10개 한도로 밀려난 대화의 업로드 폴더도 지운다
+        gone = before - {c.get("id") for c in self.history}
+        if gone and self.on_uploads_gone:
+            self.on_uploads_gone(sorted(x for x in gone if x))
         if not rsb_history.save(self.history_path, self.history):
             self.log.warning("대화 기록을 저장하지 못했다: %s", self.history_path)
 
@@ -1107,7 +1335,7 @@ class ChatPanel:
     # 소요 줄 그리기 (답 아래 작은 회색 글)
     #
     # -in: t    = 마디
-    # -in: text = "AI 요약 — … · 검색 430ms · 완료 10.62s · …"
+    # -in: text = "정확한 내용은 아래 출처로 확인하세요.  0.51s/6.85s/9.64s , qwen3-4b-q4(정밀)"
     #
     # -out: 없음
     # -out: error = 없음
@@ -1150,7 +1378,7 @@ class ChatPanel:
         self._bind_wheel(t.ans)
 
     #--------------------------------------------------------------
-    # 출처 그리기 — "▸ 참조 원문 N건" (뉴플로이 AI 처럼 누르면 펼쳐진다)
+    # 출처 그리기 — "▸ 출처 N건" (뉴플로이 AI 처럼 누르면 펼쳐진다)
     #=> 처음에는 접어 둔다. 펼치면 근거마다
     #    1) "번호. 문서 이름" — 경로를 알면 눌러서 그 파일을 연다
     #    2) [...] — 전체 본문을 큰 팝업으로
@@ -1171,7 +1399,7 @@ class ChatPanel:
             return
         head = tk.Frame(t.src, bg=BG)
         head.pack(fill="x", pady=(10, 0))
-        label = "참조 원문 {}건".format(len(items))
+        label = "출처 {}건".format(len(items))
         tog = tk.Label(head, text="▸ " + label, font=self.f_small, bg=BG, fg=INK2, cursor="hand2")
         tog.pack(side="left")
         if self.on_show_evidence:
@@ -1180,6 +1408,12 @@ class ChatPanel:
                             cursor="hand2")
             show.pack(side="right")
             show.bind("<Button-1>", lambda _e: self._show_files(docs))
+        # 범위 글을 말풍선 아래에서 "탐색기에서 보기" 왼쪽으로 옮긴다
+        if t.scope_text:
+            if t.lbl_scope is not None:
+                t.lbl_scope.destroy()
+                t.lbl_scope = None
+            tk.Label(head, text=t.scope_text, font=self.f_small, bg=BG, fg=MUTED).pack(side="right", padx=(0, 12))
         box = tk.Frame(t.src, bg=BG)          # 펼쳤을 때만 붙인다
         for it in items:
             self._draw_source_item(box, it)
@@ -1489,12 +1723,23 @@ class ChatPanel:
         if self._busy:
             self.set_state("답변이 끝난 뒤에 보낼 수 있습니다")
             return
+        # 반쯤 올라간 문서로 묻지 않게 — 올리는 동안은 보내지 않는다
+        if self._uploading():
+            self.set_state("문서를 올리는 중입니다 — 끝난 뒤에 보낼 수 있습니다")
+            return
         self.txt_input.delete("1.0", "end")
         self._sync_placeholder()
         if self.conv is None:
             self.conv = rsb_history.new_conv(text, self.folder)
             self.lbl_title.config(text=self.conv["title"])
-        record = {"q": text, "scope": self._scope_desc()}
+        elif not self.conv["turns"] and self.conv.get("title") == "업로드 문서":
+            # 문서부터 올린 대화 — 첫 질문으로 제목을 바꾼다
+            self.conv["title"] = rsb_history.new_conv(text, self.folder)["title"]
+            self.lbl_title.config(text=self.conv["title"])
+        # 같은 대화의 바로 앞 질문 — 워커가 따라 묻는 질문의 빠진 주제를 채운다(멀티턴). 새 대화(✎)면 없다
+        prev = self.conv["turns"][-1].get("q") if self.conv["turns"] else None
+        n_up = self._n_uploads()
+        record = {"q": text, "scope": "업로드 문서 {}건".format(n_up) if n_up else self._scope_desc()}
         self.conv["turns"].append(record)
         self._save_history()
         t = self._start_turn(text, record["scope"], record)
@@ -1507,7 +1752,7 @@ class ChatPanel:
         self._scroll_bottom()
         if self.on_ask:
             try:
-                self.on_ask(text)
+                self.on_ask(text, prev, self.conv.get("id"), n_up > 0)
             except Exception:
                 self.log.exception("질문 전달에서 예외")
 
@@ -1532,10 +1777,13 @@ class ChatPanel:
                           justify="left", anchor="w", padx=14, pady=9),
                  BUBBLE_RATIO).pack(side="right")
         # 어느 범위에서 찾은 답인지 — 나중에 기록을 열어도 알 수 있게 말풍선 아래 남긴다
-        if scope:
-            tk.Label(frame, text=scope.replace("범위: ", ""), font=self.f_small, bg=BG,
-                     fg=MUTED, anchor="e").pack(fill="x", pady=(2, 0))
+        #   출처가 오면 그 머리("▸ 출처 N건 … 범위 · 탐색기에서 보기")로 옮긴다(_draw_sources) — 출처가 없는 답만 여기 남는다
         t = Turn(frame, question, record)
+        if scope:
+            t.scope_text = scope.replace("범위: ", "")
+            t.lbl_scope = tk.Label(frame, text=t.scope_text, font=self.f_small, bg=BG,
+                                   fg=MUTED, anchor="e")
+            t.lbl_scope.pack(fill="x", pady=(2, 0))
         t.ans = tk.Frame(frame, bg=BG)
         t.ans.pack(fill="x", pady=(10, 0))
         t.meta = tk.Frame(frame, bg=BG)
@@ -1584,6 +1832,8 @@ class ChatPanel:
         if not self.win:
             return
         desc = self._scope_desc()
+        if self._n_uploads():
+            return             # 업로드 범위 칩("📎 업로드 문서 n건에서 찾기")을 그대로 둔다
         # 입력 카드의 폴더 칩 — "📁 sample_pdf · 문서 30건"
         self.lbl_scope.config(text=("📁 " + desc.replace("범위: ", "")) if desc else "📁 범위 모름")
 

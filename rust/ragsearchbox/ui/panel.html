@@ -2,109 +2,209 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>RAGSearchBox-rs</title>
+<title>MoAI-S</title>
 <!--
-  폴더 패널 화면 (Python chat_panel.py 의 tkinter 화면을 HTML 로 옮김)
-  - 머리: 대화 제목 · 폴더, 오른쪽에 ⋯(대화 기록) · ✎(새 대화)
-  - 질문은 오른쪽 회색 말풍선, 답은 상자 없이 본문으로 흘러나온다
-  - 답 아래 "▸ 참조 원문 N건" — 누르면 출처가 펼쳐진다(문서 이름=파일 열기, [...]=전체 본문 팝업)
-  - 아래는 둥근 입력 카드(폴더 칩 · 범위 ▾ · 상태 · 보내기)
+  MoAI-S 폴더 패널 화면 (Python chat_panel.py 의 tkinter 화면을 HTML 로 옮김)
+  - 머리: MoAI-S 로고 · 대화 제목 · 폴더, 오른쪽에 대화 기록 · 새 대화 단추
+  - 빈 화면: 아이콘 · 인사 · 예시 질문 칩(누르면 바로 묻는다)
+  - 질문은 오른쪽 말풍선, 답은 왼쪽 아이콘 아바타 옆에 본문으로 흘러나온다(기다리는 동안 점 애니메이션)
+  - 답 아래 소요 줄 · "출처 N건" 카드 — 누르면 펼쳐진다(문서 이름=파일 열기, 전체 보기=전체 본문 팝업)
+  - 아래는 떠 있는 입력 카드(폴더 칩 · 범위 ▾ · 상태 · 보내기)
   Rust 와는 window.ipc.postMessage(JSON) / window.rsb.* 함수로 주고받는다.
 -->
 <style>
   :root {
-    --bg: #ffffff; --ink: #1f1f1f; --ink2: #444746; --muted: #6b7280; --rule: #e3e6ea;
-    --bubble: #e9eef6; --card: #f0f4f9; --chip: #dde3ea; --hover: #eef1f5; --link: #1a5fb4;
-    --src: #f3f4f6; --send: #1f1f1f; --err: #b4462f; --fs: __FONT_PX__px;
+    --bg: #f7f7f8; --surface: #ffffff; --ink: #16181d; --ink2: #3c4049; --muted: #7a808c; --rule: #e6e8ec;
+    --brand: #e5163f; --brand-ink: #b8102f; --brand-soft: #fdecef;
+    --bubble: #16181d; --bubble-ink: #ffffff; --hover: #eef0f3; --link: #1f5fbf; --src: #f4f5f7;
+    --err: #b4462f; --shadow: 0 6px 24px rgba(20, 24, 33, .08), 0 1px 3px rgba(20, 24, 33, .06);
+    --fs: __FONT_PX__px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
-    font-family: "Malgun Gothic", "맑은 고딕", sans-serif; font-size: var(--fs); }
+    font-family: "Malgun Gothic", "맑은 고딕", "Segoe UI", sans-serif; font-size: var(--fs);
+    -webkit-font-smoothing: antialiased; }
   body { display: flex; flex-direction: column; overflow: hidden; }
-  header { display: flex; align-items: flex-start; padding: 8px 14px; border-bottom: 1px solid var(--rule); }
+  svg { display: block; }
+
+  /* ── 머리 ── 로고 · 제목/폴더 · 단추 */
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface);
+    border-bottom: 1px solid var(--rule); }
+  .brand { display: flex; align-items: center; gap: 7px; flex: none; padding-right: 10px; border-right: 1px solid var(--rule); }
+  .brand img { width: 26px; height: 26px; object-fit: contain; }
+  .brand b { font-size: calc(var(--fs) * 1.02); letter-spacing: .2px; }
+  .brand b span { color: var(--brand); }
   header .titles { flex: 1; min-width: 0; }
-  #title { font-weight: bold; font-size: calc(var(--fs) * 1.1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #folder { color: var(--muted); font-size: calc(var(--fs) * 0.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .icon { font-family: "Segoe UI Symbol", sans-serif; font-size: calc(var(--fs) * 1.3); color: var(--ink2);
-    padding: 0 7px; cursor: pointer; border-radius: 6px; user-select: none; position: relative; }
-  .icon:hover { background: var(--hover); }
-  .icon[data-tip]:hover::after { content: attr(data-tip); position: absolute; top: 120%; right: 0; white-space: nowrap;
-    background: var(--ink); color: #fff; font-size: calc(var(--fs) * 0.8); padding: 2px 6px; border-radius: 4px;
-    font-family: "Malgun Gothic", sans-serif; z-index: 20; }
-  #body { flex: 1; overflow-y: auto; padding: 10px 14px; }
-  #hint { text-align: center; margin-top: 18vh; }
-  #hint img { width: 72px; height: auto; margin-bottom: 14px; }
-  #hint .hello { font-size: calc(var(--fs) * 1.9); font-weight: bold; }
-  #hint .sub { color: var(--muted); margin-top: 8px; white-space: pre-line; }
-  .turn { margin: 4px 0 16px; }
+  #title { font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #folder { color: var(--muted); font-size: calc(var(--fs) * 0.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: var(--ink2);
+    cursor: pointer; position: relative; flex: none; }
+  .icon:hover { background: var(--hover); color: var(--ink); }
+  .icon svg { width: 18px; height: 18px; }
+  .icon[data-tip]:hover::after { content: attr(data-tip); position: absolute; top: 112%; right: 0; white-space: nowrap;
+    background: var(--ink); color: #fff; font-size: calc(var(--fs) * 0.78); padding: 3px 8px; border-radius: 6px; z-index: 20; }
+
+  /* ── 본문 ── 넓은 창에서도 읽기 좋게 가운데 단 */
+  #body { flex: 1; overflow-y: auto; padding: 18px 16px 8px; scroll-behavior: smooth; }
+  #body > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+  #body::-webkit-scrollbar { width: 10px; }
+  #body::-webkit-scrollbar-thumb { background: #d3d6dc; border-radius: 10px; border: 3px solid var(--bg); }
+
+  /* 빈 화면 */
+  #hint { text-align: center; margin-top: 14vh; }
+  /* 아이콘 그림에 흰 바탕이 있어 앱 아이콘처럼 흰 둥근 판에 올린다 */
+  #hint img { width: 88px; height: 88px; object-fit: contain; background: #fff; border-radius: 24px; padding: 8px;
+    box-shadow: 0 8px 24px rgba(20, 24, 33, .10), 0 0 0 1px var(--rule); }
+  #hint .hello { font-size: calc(var(--fs) * 1.7); font-weight: bold; margin-top: 14px; letter-spacing: -.3px; }
+  #hint .sub { color: var(--muted); margin-top: 6px; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 22px; }
+  .chips div { background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; padding: 7px 14px;
+    color: var(--ink2); font-size: calc(var(--fs) * 0.9); cursor: pointer; box-shadow: 0 1px 2px rgba(20, 24, 33, .04);
+    transition: border-color .15s, color .15s, transform .15s; }
+  .chips div:hover { border-color: var(--brand); color: var(--brand-ink); transform: translateY(-1px); }
+
+  /* 마디 — 질문 말풍선 · 답 */
+  .turn { margin: 2px 0 22px; animation: rise .25s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .q { display: flex; justify-content: flex-end; }
-  .q div { background: var(--bubble); padding: 9px 14px; border-radius: 16px; max-width: 78%;
-    white-space: pre-wrap; word-break: break-word; }
-  .scope { text-align: right; color: var(--muted); font-size: calc(var(--fs) * 0.85); margin-top: 2px; }
-  .ans { margin-top: 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
-  .wait { color: var(--muted); font-size: calc(var(--fs) * 0.85); }
+  .q div { background: var(--bubble); color: var(--bubble-ink); padding: 10px 15px; border-radius: 18px 18px 4px 18px;
+    max-width: 80%; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+  .scope { text-align: right; color: var(--muted); font-size: calc(var(--fs) * 0.8); margin-top: 4px; }
+  .a { display: flex; gap: 10px; margin-top: 14px; }
+  .avatar { width: 30px; height: 30px; flex: none; border-radius: 50%; background: var(--surface); border: 1px solid var(--rule);
+    display: grid; place-items: center; overflow: hidden; }
+  .avatar img { width: 24px; height: 24px; object-fit: contain; }
+  .abody { flex: 1; min-width: 0; }
+  .aname { font-size: calc(var(--fs) * 0.8); font-weight: bold; color: var(--ink2); margin: 5px 0 4px; }
+  .ans { white-space: pre-wrap; word-break: break-word; line-height: 1.7; }
+  .wait { color: var(--muted); font-size: calc(var(--fs) * 0.88); display: flex; align-items: center; gap: 8px; }
+  .dots { display: inline-flex; gap: 4px; }
+  .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); opacity: .25; animation: blink 1.2s infinite; }
+  .dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
   .raw { color: var(--ink2); }
-  .err { color: var(--err); font-size: calc(var(--fs) * 0.85); margin-top: 4px; }
-  .meta { color: var(--muted); font-size: calc(var(--fs) * 0.85); margin-top: 6px; }
-  .srchead { display: flex; justify-content: space-between; margin-top: 10px; font-size: calc(var(--fs) * 0.85); }
-  .tog { color: var(--ink2); cursor: pointer; user-select: none; }
-  .link { color: var(--link); cursor: pointer; text-decoration: underline; }
-  .srcitem { margin: 6px 0 0 10px; font-size: calc(var(--fs) * 0.85); }
-  .srctop { display: flex; justify-content: space-between; gap: 6px; }
-  .srcbox { background: var(--src); color: var(--ink2); padding: 4px 8px; margin-top: 3px; white-space: pre-wrap;
-    word-break: break-word; max-height: calc(var(--fs) * 0.85 * 1.5 * 4 + 8px); overflow-y: auto; }
-  footer { padding: 10px 12px; }
-  .card { background: var(--card); border-radius: 18px; padding: 8px 12px; }
-  #chip { display: inline-block; background: var(--chip); color: var(--ink2); font-size: calc(var(--fs) * 0.85);
-    padding: 2px 8px; border-radius: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .err { color: var(--err); font-size: calc(var(--fs) * 0.88); margin-top: 4px; }
+  .meta { color: var(--muted); font-size: calc(var(--fs) * 0.8); margin-top: 10px; white-space: pre-wrap; }
+
+  /* 출처 카드 */
+  .srccard { margin-top: 10px; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; }
+  .srchead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px;
+    font-size: calc(var(--fs) * 0.85); }
+  .tog { color: var(--ink); font-weight: bold; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+  .tog .chev { display: inline-block; transition: transform .15s; color: var(--muted); }
+  .tog.open .chev { transform: rotate(90deg); }
+  .tog .n { background: var(--brand-soft); color: var(--brand-ink); border-radius: 999px; padding: 0 7px; font-size: calc(var(--fs) * 0.75); }
+  .srcright { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .srcscope { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srcbtn { color: var(--link); cursor: pointer; white-space: nowrap; }
+  .srcbtn:hover { text-decoration: underline; }
+  .link { color: var(--link); cursor: pointer; }
+  .link:hover { text-decoration: underline; }
+  .srclist { border-top: 1px solid var(--rule); padding: 4px 12px 10px; }
+  .srcitem { margin-top: 8px; font-size: calc(var(--fs) * 0.85); }
+  .srctop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .srcname { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .srcname .no { flex: none; width: 20px; height: 20px; border-radius: 6px; background: var(--ink); color: #fff;
+    display: grid; place-items: center; font-size: calc(var(--fs) * 0.72); font-weight: bold; }
+  .srcname span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .srcbox { background: var(--src); color: var(--ink2); padding: 7px 10px; margin-top: 5px; border-radius: 8px; white-space: pre-wrap;
+    word-break: break-word; max-height: calc(var(--fs) * 0.85 * 1.5 * 4 + 14px); overflow-y: auto; line-height: 1.5; }
+
+  /* ── 입력 카드 ── */
+  footer { padding: 8px 14px 14px; }
+  .card { max-width: 760px; margin: 0 auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 20px;
+    padding: 10px 12px 8px 14px; box-shadow: var(--shadow); transition: border-color .15s, box-shadow .15s; }
+  .card:focus-within { border-color: #f3a5b4; box-shadow: var(--shadow), 0 0 0 3px rgba(229, 22, 63, .08); }
+  #chip { display: inline-flex; align-items: center; gap: 5px; background: var(--src); color: var(--ink2);
+    font-size: calc(var(--fs) * 0.8); padding: 3px 10px; border-radius: 999px; max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
   textarea { width: 100%; border: 0; outline: 0; resize: none; background: transparent; font: inherit; color: var(--ink);
-    padding: 6px 2px; height: calc(var(--fs) * 1.45 * 3 + 12px); }
-  .bar { display: flex; align-items: center; gap: 6px; font-size: calc(var(--fs) * 0.85); }
-  #scopebtn { color: var(--ink2); cursor: pointer; padding: 2px 4px; border-radius: 4px; user-select: none; position: relative; }
+    padding: 8px 2px 4px; height: calc(var(--fs) * 1.5 * 2 + 12px); line-height: 1.5; }
+  textarea::placeholder { color: #a3a8b2; }
+  .bar { display: flex; align-items: center; gap: 8px; font-size: calc(var(--fs) * 0.82); }
+  #scopebtn { color: var(--ink2); cursor: pointer; padding: 4px 8px; border-radius: 8px; user-select: none; position: relative;
+    border: 1px solid var(--rule); }
   #scopebtn:hover { background: var(--hover); }
   #state { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #send { background: var(--send); color: #fff; border: 0; border-radius: 50%; width: 30px; height: 30px; font-weight: bold;
-    cursor: pointer; font-size: calc(var(--fs) * 1.1); }
-  .menu { position: fixed; background: #fff; border: 1px solid #d7dbe3; box-shadow: 0 4px 14px rgba(0,0,0,.12);
-    border-radius: 8px; padding: 4px 0; z-index: 30; font-size: calc(var(--fs) * 0.85); max-width: 92vw; }
-  .menu div { padding: 5px 14px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #send { background: var(--brand); color: #fff; border: 0; border-radius: 50%; width: 34px; height: 34px;
+    cursor: pointer; display: grid; place-items: center; box-shadow: 0 3px 10px rgba(229, 22, 63, .3); transition: transform .1s, background .15s; }
+  #send:hover { background: var(--brand-ink); }
+  #send:active { transform: scale(.94); }
+  #send svg { width: 17px; height: 17px; }
+  /* 첨부 칩 — 올린 문서마다 이름 · 상태(올리는 중 n% / n청크 / 실패) · [×] */
+  #ups { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  #ups:empty { display: none; }
+  .up { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 1px solid var(--rule); border-radius: 10px;
+    padding: 4px 8px 4px 10px; font-size: calc(var(--fs) * 0.8); background: var(--surface); position: relative; overflow: hidden; }
+  .up .nm { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+  .up .st { color: var(--muted); white-space: nowrap; }
+  .up.fail { border-color: #f1b8b0; background: #fdf1ef; } .up.fail .st { color: var(--err); }
+  .up .x { cursor: pointer; color: var(--muted); padding: 0 2px; } .up .x:hover { color: var(--ink); }
+  .up .bar2 { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--brand); transition: width .3s; }
+  #chip.on { background: var(--brand-soft); color: var(--brand-ink); font-weight: bold; }
+  #scopebtn.off { opacity: .45; cursor: default; }
+  #plus { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--rule); display: grid; place-items: center;
+    cursor: pointer; color: var(--ink2); flex: none; position: relative; }
+  #plus:hover { background: var(--hover); color: var(--ink); }
+  #plus svg { width: 16px; height: 16px; }
+  #plus[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: 120%; left: 0; white-space: nowrap;
+    background: var(--ink); color: #fff; font-size: calc(var(--fs) * 0.78); padding: 3px 8px; border-radius: 6px; z-index: 20; }
+  #hint .or { color: var(--muted); font-size: calc(var(--fs) * 0.85); margin-top: 14px; }
+  .powered { text-align: center; color: #b0b5be; font-size: calc(var(--fs) * 0.72); margin-top: 7px; }
+
+  /* 메뉴 · 팝업 */
+  .menu { position: fixed; background: #fff; border: 1px solid var(--rule); box-shadow: var(--shadow);
+    border-radius: 10px; padding: 5px; z-index: 30; font-size: calc(var(--fs) * 0.85); max-width: 92vw; }
+  .menu div { padding: 6px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 6px; }
   .menu div:hover { background: var(--hover); }
-  .menu .sep { border-top: 1px solid var(--rule); margin: 4px 0; padding: 0; cursor: default; }
+  .menu .sep { border-top: 1px solid var(--rule); margin: 4px 2px; padding: 0; cursor: default; border-radius: 0; }
   .menu .dis { color: var(--muted); cursor: default; }
   .menu .dis:hover { background: transparent; }
-  #pop { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none; z-index: 40; }
-  #pop .box { position: absolute; inset: 24px 12px; background: #fff; border-radius: 10px; display: flex; flex-direction: column; padding: 10px 12px; }
-  #pop .ph { color: #647083; font-size: calc(var(--fs) * 0.85); margin-bottom: 6px; word-break: break-all; }
+  #pop { position: fixed; inset: 0; background: rgba(15, 18, 25, .35); display: none; z-index: 40; }
+  #pop .box { position: absolute; inset: 24px 14px; background: #fff; border-radius: 14px; display: flex; flex-direction: column;
+    padding: 14px 16px; box-shadow: var(--shadow); }
+  #pop .ph { color: var(--muted); font-size: calc(var(--fs) * 0.8); margin-bottom: 8px; word-break: break-all; }
   #pop .pt { font-weight: bold; margin-bottom: 4px; }
-  #pop .pb { flex: 1; overflow-y: auto; border: 1px solid #d7dbe3; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; }
-  #pop .pf { text-align: right; margin-top: 8px; }
-  #pop button { font: inherit; padding: 3px 14px; }
+  #pop .pb { flex: 1; overflow-y: auto; background: var(--src); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap;
+    word-break: break-word; line-height: 1.6; }
+  #pop .pf { text-align: right; margin-top: 10px; }
+  #pop button { font: inherit; padding: 6px 18px; border-radius: 9px; border: 1px solid var(--rule); background: #fff; cursor: pointer; }
+  #pop button:hover { background: var(--hover); }
 </style>
 </head>
 <body>
 <header>
+  <div class="brand"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div>
   <div class="titles"><div id="title">새 대화</div><div id="folder"></div></div>
-  <span class="icon" id="btnHist" data-tip="대화 기록">⋯</span>
-  <span class="icon" id="btnNew" data-tip="새 대화">✎</span>
+  <span class="icon" id="btnHist" data-tip="대화 기록"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></span>
+  <span class="icon" id="btnNew" data-tip="새 대화"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
 </header>
 <div id="body">
   <div id="hint">
     <img src="data:image/png;base64,__MOAI__" alt="">
     <div class="hello">무엇을 찾아 드릴까요?</div>
-    <div class="sub">이 폴더의 문서에 대해 물어보세요.
-예) 연차 이월 기준은 어떻게 되나요</div>
+    <div class="sub">이 폴더의 문서에서 찾아 근거와 함께 답해 드립니다.</div>
+    <div class="chips" id="chips">
+      <div>출장 숙박비 한도는 얼마인가요?</div>
+      <div>경조휴가는 며칠인가요?</div>
+      <div>연차 이월 기준은 어떻게 되나요?</div>
+    </div>
+    <div class="or">또는 아래 [+] 로 문서를 올려 그 문서에 대해서만 물어보세요</div>
   </div>
 </div>
 <footer>
   <div class="card">
     <div><span id="chip">📁 범위 모름</span></div>
-    <textarea id="input" placeholder="무엇이든 물어보세요 (Enter 전송)"></textarea>
+    <div id="ups"></div>
+    <textarea id="input" placeholder="무엇이든 물어보세요 (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
     <div class="bar">
+      <span id="plus" data-tip="문서 올리기 — 올린 문서에서만 찾아 답합니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
       <span id="scopebtn">이 폴더 ▾</span>
       <span id="state"></span>
-      <button id="send" title="보내기">↑</button>
+      <button id="send" title="보내기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></button>
     </div>
   </div>
+  <div class="powered">MoAI-S · 내 PC 안에서만 찾고 답합니다</div>
 </footer>
 <div id="pop"><div class="box"><div class="pt"></div><div class="ph"></div><div class="pb"></div>
   <div class="pf"><button id="popClose">닫기</button></div></div></div>
@@ -119,6 +219,10 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 // 화면 상태 — 지금 대화(conv)와 마디 목록(turns)
 let conv = null, turns = [], busy = false, folder = "", scopeDesc = "", scopeMode = "__SCOPE__", history = [];
 let flashTimer = null;
+// 이 대화에 올린 문서 [{name, state: "up"|"done"|"fail", chunks, why, pct, text}] — 다 올린 것(done)이 있으면 그 문서에서만 찾는다
+let ups = [];
+const hasUploads = () => ups.some((u) => u.state === "done");
+const uploading = () => ups.some((u) => u.state === "up");
 
 function setState(t) { $("state").textContent = t || ""; }
 function flash(t) {
@@ -129,14 +233,22 @@ function flash(t) {
 function scrollBottom() { const b = $("body"); b.scrollTop = b.scrollHeight; }
 function lastTurn() { return turns.length ? turns[turns.length - 1] : null; }
 
-// 마디 하나 그리기 — 질문 말풍선 · 범위 · 답 칸 · 소요 줄 · 출처 칸
+// 마디 하나 그리기 — 질문 말풍선 · 범위 · (아바타 | MoAI-S · 답 칸 · 소요 줄 · 출처 카드)
+const MOAI_SRC = document.querySelector("#hint img").src;
 function startTurn(q, scope, record) {
   $("hint").style.display = "none";
   const frame = el("div", "turn");
   const qr = el("div", "q"); qr.appendChild(el("div", null, q)); frame.appendChild(qr);
-  if (scope) frame.appendChild(el("div", "scope", scope.replace("범위: ", "")));
-  const t = { frame, record, ans: el("div", "ans"), meta: el("div"), src: el("div"), answer: null, wait: null, docs: [] };
-  frame.appendChild(t.ans); frame.appendChild(t.meta); frame.appendChild(t.src);
+  // 범위 글 — 출처가 오면 출처 카드 머리("출처 N건 … 범위 · 탐색기에서 보기")로 옮긴다(drawSources). 출처가 없는 답만 여기 남는다
+  const scopeText = scope ? scope.replace("범위: ", "") : "";
+  const scopeEl = scopeText ? el("div", "scope", scopeText) : null;
+  if (scopeEl) frame.appendChild(scopeEl);
+  const a = el("div", "a");
+  const av = el("div", "avatar"); const img = el("img"); img.src = MOAI_SRC; img.alt = ""; av.appendChild(img);
+  const body = el("div", "abody"); body.appendChild(el("div", "aname", "MoAI-S"));
+  a.appendChild(av); a.appendChild(body); frame.appendChild(a);
+  const t = { frame, record, ans: el("div", "ans"), meta: el("div"), src: el("div"), answer: null, wait: null, docs: [], scopeText, scopeEl };
+  body.appendChild(t.ans); body.appendChild(t.meta); body.appendChild(t.src);
   $("body").appendChild(frame);
   turns.push(t);
   while (turns.length > MAX_TURNS) { const o = turns.shift(); o.frame.remove(); }
@@ -148,37 +260,129 @@ function drawMeta(t, text) { t.meta.innerHTML = ""; t.meta.appendChild(el("div",
 function drawRaw(t, text) { dropWait(t); t.ans.appendChild(el("div", "raw", text)); }
 function drawError(t, msg) { dropWait(t); t.ans.appendChild(el("div", "err", "● " + msg)); }
 
-// 출처 — 접힌 머리 + 펼치면 문서별 줄(이름 · [...] · 본문 상자)
+// 답 아래 소요 줄 — "정확한 내용은 아래 출처로 확인하세요.  0.51s/6.85s/9.64s , qwen3-4b-q4(정밀)"
+//   시간은 검색/첫 글자/완료 순서로 모두 초. AI 답이 있을 때만 안내를 앞에 둔다(Python chat_parser.meta_line 과 같은 글)
+function metaLine(info, answered) {
+  const times = [];
+  if (info.search_ms != null) times.push((info.search_ms / 1000).toFixed(2) + "s");
+  if (info.ttft_s != null) times.push(Number(info.ttft_s).toFixed(2) + "s");
+  if (info.total_s != null) times.push(Number(info.total_s).toFixed(2) + "s");
+  const model = info.model ? (info.model_mode && info.model_mode !== info.model ? info.model + "(" + info.model_mode + ")" : info.model) : "";
+  const tail = [times.join("/"), model].filter(Boolean).join(" , ");
+  return answered ? "정확한 내용은 아래 출처로 확인하세요." + (tail ? "  " + tail : "") : tail;
+}
+
+// ── 문서 업로드 (문서 업로드 설계서 §8) ─────────────────────
+// 대화가 없으면 만든다 — 질문보다 문서를 먼저 올려도 그 대화에 묶이게
+function ensureConv(title) {
+  if (conv) return;
+  conv = { id: (Date.now() / 1000).toFixed(6), title: title || "업로드 문서", folder, updated: Date.now() / 1000, turns: [] };
+  $("title").textContent = conv.title;
+}
+// 대화 기록에 남길 업로드 목록(다 올린 것만)
+function syncConvUploads() {
+  if (!conv) return;
+  conv.uploads = ups.filter((u) => u.state === "done").map((u) => ({ name: u.name, chunks: u.chunks || 0 }));
+}
+// 첨부 칩 · 범위 칩 · 범위 단추 · 입력 안내를 지금 상태에 맞춘다
+function drawUps() {
+  const box = $("ups"); box.innerHTML = "";
+  for (const u of ups) {
+    const c = el("span", "up" + (u.state === "fail" ? " fail" : ""));
+    c.appendChild(el("span", null, u.state === "fail" ? "⚠" : "📄"));
+    c.appendChild(el("span", "nm", u.name));
+    const st = u.state === "up" ? "올리는 중 " + (u.pct | 0) + "%" : u.state === "done" ? (u.chunks || 0) + "청크" : u.why || "실패";
+    c.appendChild(el("span", "st", st));
+    if (u.state !== "up") {
+      const x = el("span", "x", "×"); x.title = u.state === "done" ? "이 문서 빼기" : "닫기";
+      x.onclick = () => removeUpload(u);
+      c.appendChild(x);
+    } else {
+      const b = el("span", "bar2"); b.style.width = (u.pct | 0) + "%"; c.appendChild(b);
+      c.title = u.text || "";
+    }
+    box.appendChild(c);
+  }
+  const n = ups.filter((u) => u.state === "done").length;
+  $("chip").classList.toggle("on", n > 0);
+  $("chip").textContent = n > 0 ? "📎 업로드 문서 " + n + "건에서 찾기" : (scopeDesc ? "📁 " + scopeDesc.replace("범위: ", "") : "📁 범위 모름");
+  $("scopebtn").classList.toggle("off", n > 0);
+  $("input").placeholder = n > 0 ? "올린 문서에 대해 물어보세요 (Enter 전송)"
+                                 : "무엇이든 물어보세요 (Enter 전송 · Shift+Enter 줄바꿈)";
+  // 빈 화면 안내도 지금 찾는 곳에 맞춘다
+  $("hint").querySelector(".sub").textContent = n > 0 ? "올린 문서 " + n + "건에서만 찾아 근거와 함께 답해 드립니다."
+                                                      : "이 폴더의 문서에서 찾아 근거와 함께 답해 드립니다.";
+}
+function removeUpload(u) {
+  if (busy || uploading()) { setState("답변·업로드가 끝난 뒤에 뺄 수 있습니다"); return; }
+  ups = ups.filter((x) => x !== u);
+  if (u.state === "done" && conv) {
+    send({ type: "upload_remove", conv: conv.id, name: u.name });
+    syncConvUploads(); saveConv();
+    flash("'" + u.name + "' 을 뺐습니다");
+  }
+  drawUps();
+}
+$("plus").onclick = () => {
+  if (busy) { setState("답변이 끝난 뒤에 올릴 수 있습니다"); return; }
+  if (uploading()) { setState("올리는 중입니다 — 끝난 뒤에 더 올릴 수 있습니다"); return; }
+  ensureConv();
+  setState("문서를 고르세요…");
+  send({ type: "upload_pick", conv: conv.id, have: ups.filter((u) => u.state === "done").length });
+};
+
+// 기다림 줄 — 브랜드색 점 세 개 + 글
+function waitEl(text) {
+  const w = el("div", "wait");
+  const d = el("span", "dots"); d.appendChild(el("i")); d.appendChild(el("i")); d.appendChild(el("i"));
+  w.appendChild(d); w.appendChild(el("span", "wt", text));
+  return w;
+}
+
+// 출처 카드 — 접힌 머리("› 출처 N건 … 범위 · 탐색기에서 보기") + 펼치면 문서별 줄(번호 · 이름 · 전체 보기 · 본문 상자)
 function drawSources(t, items) {
   t.src.innerHTML = "";
   t.docs = items.map((it) => it.doc || "");
   if (!items.length) return;
+  const card = el("div", "srccard");
   const head = el("div", "srchead");
-  const label = "참조 원문 " + items.length + "건";
-  const tog = el("span", "tog", "▸ " + label);
+  const tog = el("span", "tog");
+  tog.appendChild(el("span", "chev", "›")); tog.appendChild(el("span", null, "출처")); tog.appendChild(el("span", "n", items.length + "건"));
   head.appendChild(tog);
   const docs = t.docs.slice();
-  const show = el("span", "link", "탐색기에서 보기");
+  const right = el("span", "srcright");
+  // 범위 글을 말풍선 아래에서 "탐색기에서 보기" 왼쪽으로 옮긴다
+  if (t.scopeText) {
+    if (t.scopeEl) { t.scopeEl.remove(); t.scopeEl = null; }
+    right.appendChild(el("span", "srcscope", t.scopeText));
+  }
+  const show = el("span", "srcbtn", "탐색기에서 보기");
   show.onclick = () => send({ type: "show_files", docs });
-  head.appendChild(show);
-  t.src.appendChild(head);
-  const box = el("div"); box.style.display = "none";
+  right.appendChild(show);
+  head.appendChild(right);
+  card.appendChild(head);
+  const box = el("div", "srclist"); box.style.display = "none";
   for (const it of items) {
     const row = el("div", "srcitem");
     const top = el("div", "srctop");
-    const name = el("span", it.path ? "link" : null, (it.no ?? "?") + ". " + (it.doc || ""));
-    if (it.path) name.onclick = () => send({ type: "open_file", path: it.path });
-    const more = el("span", "link", "[...]");
+    // 번호 배지 · 문서 이름(경로를 알면 눌러서 그 파일을 연다)
+    const name = el("span", "srcname");
+    name.appendChild(el("span", "no", String(it.no ?? "?")));
+    const nm = el("span", it.path ? "link" : null, it.doc || "");
+    if (it.path) nm.onclick = () => send({ type: "open_file", path: it.path });
+    name.appendChild(nm);
+    const more = el("span", "link", "전체 보기");
     more.onclick = () => popup(it);
     top.appendChild(name); top.appendChild(more); row.appendChild(top);
     row.appendChild(el("div", "srcbox", it.full || it.snippet || ""));
     box.appendChild(row);
   }
-  t.src.appendChild(box);
+  card.appendChild(box);
+  t.src.appendChild(card);
   tog.onclick = () => {
     const open = box.style.display === "none";
     box.style.display = open ? "block" : "none";
-    tog.textContent = (open ? "▾ " : "▸ ") + label;
+    tog.classList.toggle("open", open);
     if (open && lastTurn() === t) scrollBottom();
   };
 }
@@ -215,6 +419,8 @@ function doSend() {
   const text = $("input").value.trim();
   if (!text) return;
   if (busy) { setState("답변이 끝난 뒤에 보낼 수 있습니다"); return; }
+  // 반쯤 올라간 문서로 묻지 않게 — 올리는 동안은 보내지 않는다
+  if (uploading()) { setState("문서를 올리는 중입니다 — 끝난 뒤에 보낼 수 있습니다"); return; }
   $("input").value = "";
   if (!conv) {
     let title = text.split(/\s+/).join(" ");
@@ -222,21 +428,31 @@ function doSend() {
     conv = { id: (Date.now() / 1000).toFixed(6), title: title || "(제목 없음)", folder, updated: Date.now() / 1000, turns: [] };
     $("title").textContent = conv.title;
   }
-  const record = { q: text, scope: scopeDesc };
+  // 같은 대화의 바로 앞 질문 — 워커가 따라 묻는 질문의 빠진 주제를 채운다(멀티턴). 새 대화면 없다
+  const prev = conv.turns.length ? conv.turns[conv.turns.length - 1].q : null;
+  // 올린 문서가 있으면 범위 글도 업로드 문서로
+  const nUp = ups.filter((u) => u.state === "done").length;
+  const record = { q: text, scope: nUp ? "업로드 문서 " + nUp + "건" : scopeDesc };
+  if (conv.turns.length === 0 && conv.title === "업로드 문서") {
+    let title = text.split(/\s+/).join(" ");
+    if ([...title].length > 40) title = [...title].slice(0, 39).join("") + "…";
+    conv.title = title; $("title").textContent = title;
+  }
   conv.turns.push(record);
   saveConv();
   const t = startTurn(text, record.scope, record);
-  t.wait = el("div", "wait", "● 근거를 찾는 중…");
+  t.wait = waitEl("근거를 찾는 중…");
   t.ans.appendChild(t.wait);
   busy = true;
   setState("보내는 중");
   scrollBottom();
-  send({ type: "ask", text });
+  send({ type: "ask", text, prev, conv: conv.id, uploads: hasUploads() });
 }
 function newChat() {
   if (busy) { setState("답변이 끝난 뒤에 바꿀 수 있습니다"); return; }
   const already = conv === null && !turns.length;
   clearTurns(); conv = null; $("title").textContent = "새 대화";
+  ups = []; drawUps();
   flash(already ? "이미 새 대화입니다 — 질문을 입력하세요" : "새 대화를 시작합니다 (이전 대화는 ⋯ 에 있습니다)");
   $("input").focus();
 }
@@ -244,6 +460,8 @@ function openConv(c) {
   if (busy) { setState("답변이 끝난 뒤에 바꿀 수 있습니다"); return; }
   clearTurns(); conv = JSON.parse(JSON.stringify(c));
   $("title").textContent = conv.title || "";
+  ups = (conv.uploads || []).map((u) => ({ name: u.name, chunks: u.chunks, state: "done" }));
+  drawUps();
   for (const rec of conv.turns || []) replay(rec);
   setState(""); scrollBottom();
 }
@@ -275,14 +493,26 @@ $("btnHist").onclick = (e) => {
   for (const c of history) items.push({ label: (conv && conv.id === c.id ? "✓  " : "     ") + c.label, fn: () => openConv(c) });
   if (history.length) {
     items.push("-");
+    // 지금 대화 한 건 지우기 — 올린 문서와 그 인덱스도 함께 지운다(문서 업로드 설계서 §9)
+    if (conv && history.some((h) => h.id === conv.id)) {
+      items.push({ label: "이 대화 지우기", fn: () => {
+        if (busy || uploading()) { setState("답변·업로드가 끝난 뒤에 지울 수 있습니다"); return; }
+        const n = ups.filter((u) => u.state === "done").length;
+        if (!confirm("이 대화를 지울까요?" + (n ? "\n올린 문서 " + n + "건과 그 인덱스도 함께 지웁니다." : ""))) return;
+        send({ type: "delete_conv", id: conv.id }); conv = null; newChat();
+      } });
+    }
     items.push({ label: "기록 모두 지우기", fn: () => {
-      if (!confirm("저장된 대화 기록 " + history.length + "개를 모두 지울까요?")) return;
-      send({ type: "clear_history" }); newChat();
+      const n = history.reduce((a, h) => a + ((h.uploads || []).length), 0);
+      if (!confirm("저장된 대화 기록 " + history.length + "개를 모두 지울까요?" + (n ? "\n올린 문서 " + n + "건과 그 인덱스도 함께 지웁니다." : ""))) return;
+      send({ type: "clear_history" }); conv = null; newChat();
     } });
   }
   menu($("btnHist"), items, true);
 };
 $("btnNew").onclick = newChat;
+// 빈 화면 예시 질문 — 누르면 그 질문으로 바로 묻는다(시연용)
+for (const c of $("chips").children) c.onclick = () => { $("input").value = c.textContent; doSend(); };
 $("scopebtn").onclick = (e) => {
   e.stopPropagation();
   menu($("scopebtn"), Object.entries(SCOPE_LABELS).map(([k, v]) => ({ label: (k === scopeMode ? "● " : "○ ") + v, fn: () => chooseScope(k) })), false);
@@ -307,7 +537,27 @@ document.addEventListener("keydown", (e) => {
 // ── Rust 가 부르는 함수들 ───────────────────────────────
 window.rsb = {
   setFolder(f) { folder = f || ""; $("folder").textContent = folder; },
-  setScope(desc) { scopeDesc = desc || ""; $("chip").textContent = desc ? "📁 " + desc.replace("범위: ", "") : "📁 범위 모름"; },
+  setScope(desc) { scopeDesc = desc || ""; drawUps(); },
+  // [+] 로 고른 파일들 — ok 면 올리는 중 칩, 아니면 실패 칩
+  uploadQueued(list) {
+    setState("");
+    for (const it of list || []) ups.push(it.ok ? { name: it.name, state: "up", pct: 0 } : { name: it.name, state: "fail", why: it.why });
+    drawUps();
+  },
+  // 올리는 중 진행(맨 앞 "up" 칩)
+  uploadProgress(p) {
+    const u = ups.find((x) => x.state === "up"); if (!u) return;
+    u.pct = p.pct; u.text = p.text; drawUps();
+  },
+  // 한 파일 끝 — 성공이면 n청크, 실패면 사유
+  uploadDone(r) {
+    if (r.op === "upload-remove") { if (!r.ok) flash("문서를 빼지 못했습니다: " + (r.why || "")); return; }
+    const u = ups.find((x) => x.state === "up" && x.name === r.name) || ups.find((x) => x.state === "up");
+    if (!u) return;
+    if (r.ok) { u.state = "done"; u.chunks = r.chunks; } else { u.state = "fail"; u.why = r.why || "실패"; }
+    syncConvUploads(); saveConv(); drawUps();
+    if (!uploading()) flash(hasUploads() ? "문서를 올렸습니다 — 이제 질문은 올린 문서에서만 찾습니다" : "문서를 올리지 못했습니다");
+  },
   setScopeMode(k) { scopeMode = k; $("scopebtn").textContent = (SCOPE_LABELS[k] || SCOPE_LABELS.folder) + " ▾"; },
   setHistory(list) { history = list || []; },
   setState(t) { setState(t); },
@@ -316,7 +566,7 @@ window.rsb = {
     const t = lastTurn(); if (!t) return;
     t.record.evidence = items;
     drawSources(t, items);
-    if (t.wait) t.wait.textContent = "● 답변을 만드는 중…";
+    if (t.wait) t.wait.querySelector(".wt").textContent = "답변을 만드는 중…";
     scrollBottom();
   },
   token(text) {
@@ -331,18 +581,12 @@ window.rsb = {
     if (!t) return;
     for (const w of info.warnings || []) rsb.token("\n" + w);
     dropWait(t);
-    const bits = [];
-    if (info.search_ms != null) bits.push("검색 " + info.search_ms + "ms");
-    if (info.ttft_s != null) bits.push("첫 글자 " + Number(info.ttft_s).toFixed(2) + "s");
-    if (info.total_s != null) bits.push("완료 " + Number(info.total_s).toFixed(2) + "s");
-    if (info.model) bits.push(info.model_mode && info.model_mode !== info.model ? info.model + "(" + info.model_mode + ")" : info.model);
-    if (info.parent) bits.push("parent " + info.parent);
+    const meta = metaLine(info, !!t.answer) + (hasUploads() ? " , 업로드 문서" : "");
     if (t.answer) {
-      bits.unshift("AI 요약 — 아래 출처로 확인하세요");
       t.answer.textContent = t.answer.textContent.replace(/\s+$/, "");
       t.record.answer = (t.record.answer || "").replace(/\s+$/, "");
     }
-    if (bits.length) { t.record.meta = bits.join(" · "); drawMeta(t, t.record.meta); }
+    if (meta) { t.record.meta = meta; drawMeta(t, t.record.meta); }
     saveConv(); scrollBottom();
   },
   raw(text) {

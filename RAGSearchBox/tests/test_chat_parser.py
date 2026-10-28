@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from chat_parser import ChatParser, setup_bits  # noqa: E402
+from chat_parser import ChatParser, meta_line, setup_bits  # noqa: E402
 
 STARTUP = (
     "모델 적재 중...\n"
@@ -194,6 +194,20 @@ class TestChatParser(unittest.TestCase):
         self.assertIsNone(done["model"])
         self.assertIsNone(done["parent"])
         self.assertEqual(setup_bits(done), [])
+
+    #--------------------------------------------------------------
+    # 답 아래 소요 줄 — 검색/첫 글자/완료 모두 초 · 모델(정밀) · parent 는 빼고 · 안내는 AI 답이 있을 때만
+    #   (Rust ui/panel.html metaLine 과 같은 글)
+    #--------------------------------------------------------------
+    def test_meta_line(self):
+        done = {"search_ms": 513, "ttft_s": 6.85, "total_s": 9.64, "model": "qwen3-4b-q4",
+                "model_mode": "정밀", "parent": "section(상한 400토큰)"}
+        self.assertEqual(meta_line(done, True),
+                         "정확한 내용은 아래 출처로 확인하세요.  0.51s/6.85s/9.64s , qwen3-4b-q4(정밀)")
+        self.assertEqual(meta_line(dict(done, model_mode=None, model="qwen3-1.7b-q4"), False),
+                         "0.51s/6.85s/9.64s , qwen3-1.7b-q4")
+        self.assertEqual(meta_line({}, True), "정확한 내용은 아래 출처로 확인하세요.")
+        self.assertEqual(meta_line({}, False), "")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ import chat_panel
 import index_jobs
 import info_window
 import log as rsb_log
+import precision
+import shutil
 import query_filter
 import settings as rsb_settings
 import tray as rsb_tray
@@ -92,6 +94,42 @@ def synonym_result_msg(res):
     return "후보를 만들지 못했습니다: {}".format(res.get("why") or "알 수 없는 이유")
 
 
+#------------------------------------------------------------------
+# 대화 id → 업로드 폴더 이름 (SimpleRAG index/uploads.safe_id 와 같은 규칙)
+#
+# -in: conv = 대화 id
+#
+# -out: 폴더 이름 또는 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def upload_safe_id(conv):
+    import re
+    s = re.sub(r"[^0-9A-Za-z._-]", "_", str(conv or "")).strip("._")
+    return s or None
+
+
+#------------------------------------------------------------------
+# 업로드 진행 글 → (진행률 %, 글) — Rust main.rs upload_progress 와 같다
+#=> "[upload] 임베딩 64/128" 은 글자 뽑기를 10% 로 치고 임베딩이 나머지 90%.
+#
+# -in: line = 워커 stderr 한 줄
+#
+# -out: (pct, 글) 또는 None(업로드 진행 줄이 아님)
+# -out: error = 없음
+#------------------------------------------------------------------
+def upload_progress(line):
+    if not line.startswith("[upload] "):
+        return None
+    rest = line[len("[upload] "):]
+    if rest.startswith("임베딩 "):
+        try:
+            a, b = (float(x) for x in rest[len("임베딩 "):].split("/", 1))
+        except ValueError:
+            return None
+        return int(10 + 89 * a / max(b, 1.0)), "임베딩 {:g}/{:g}".format(a, b)
+    return 5, rest.split(" — ")[0]
+
+
 class App:
     #--------------------------------------------------------------
     # 생성자
@@ -120,7 +158,9 @@ class App:
                                            actions={"open": self._act_open,
                                                     "unload": self._act_unload,
                                                     "reload": self._act_reload,
-                                                    "autorun": self._act_autorun},
+                                                    "autorun": self._act_autorun,
+                                                    "precision": self._act_precision,
+                                                    "multiturn": self._act_multiturn},
                                            suggest=self._suggest_synonyms)
 
         self.worker = None
@@ -170,12 +210,20 @@ class App:
         self.panel.on_show_evidence = self._show_evidence
         # 폴더 한정 검색(폴더 한정 검색 설계서 §8)
         self.panel.scope_info = self._scope_info
+        # 문서 업로드(문서 업로드 설계서) — 패널이 고른 파일을 워커에 맡기고, 지운 대화의 업로드 폴더를 지운다
+        self.panel.on_upload = self._upload_files
+        self.panel.on_upload_remove = self._upload_remove
+        self.panel.on_uploads_gone = self._delete_uploads
+        self._up_running = 0          # 워커에 맡겨 둔 업로드·빼기 명령 수
+        self._up_last = None          # 마지막으로 패널에 보인 진행 글(같으면 다시 안 보낸다)
         self.panel.on_scope_change = self._on_scope_change
         self._state_cache = (None, None)       # (상태 파일 mtime, 문서 키 목록)
         self._cmd = cmd
         # 동의어 후보 만들기 소식 (번호, 글) — 설정 창이 번호가 바뀔 때만 안내 줄에 보인다. 뒤 스레드가 통째로 바꾼다
         self._syn_job = (0, "")
         self._syn_running = False
+        self._precision_msg = ""                # 마지막 정밀 모드 바꾸기 결과(설정 창 안내 줄)
+        self._multiturn_msg = ""                # 마지막 멀티턴 바꾸기 결과(설정 창 안내 줄)
         self._quitting = False
         self._last_tooltip = ""
         # 예약해 둔 root.after 두 개(큐 처리·상태 갱신). 끝낼 때 취소한다.
@@ -202,14 +250,20 @@ class App:
         for w in self.s.warnings:
             self.log.warning("설정: %s", w)
         if self.s.warnings:
-            self.tray.notify("RAGSearchBox 설정 확인", "\n".join(self.s.warnings[:3]))
+            self.tray.notify("MoAI-S 설정 확인", "\n".join(self.s.warnings[:3]))
 
         if self.worker_error:
-            self.tray.notify("RAGSearchBox", self.worker_error)
+            self.tray.notify("MoAI-S", self.worker_error)
+
+        # 기록에 없는 대화의 업로드 폴더 정리(지우다 실패했거나 기록 파일을 지운 경우)
+        try:
+            self._gc_uploads()
+        except Exception:
+            self.log.exception("업로드 폴더 정리에서 예외")
 
         if not self.scope.usable():
             self.log.warning("%s", SCOPE_WARN)
-            self.tray.notify("RAGSearchBox", SCOPE_WARN)
+            self.tray.notify("MoAI-S", SCOPE_WARN)
         elif self.worker and self.s.start_mode == "boot":
             # 로그인 직후 미리 올려 둔다(D7). 첫 질문 때 6.6초를 기다리지 않게 하려는 것이다.
             self.log.info("StartMode=boot — 모델을 미리 올린다")
@@ -253,6 +307,14 @@ class App:
             except Exception:
                 self.log.exception("이벤트 처리에서 예외: %s", ev[0] if ev else ev)
 
+        # 올리는 중이면 워커 진행 글을 % 로 바꿔 패널 첨부 칩에 보인다
+        if self._up_running and self.worker:
+            line = self.worker.last_stderr()
+            if line != self._up_last:
+                self._up_last = line
+                prog = upload_progress(line or "")
+                if prog:
+                    self.panel.upload_progress(*prog)
         # §17 — 붙어 있는 패널을 탐색기 창에 맞춘다. 이 주기(50ms)가 따라오는 속도다.
         # 창을 옮기는 일은 tkinter 스레드에서만 할 수 있어 여기에 얹었다.
         try:
@@ -377,7 +439,7 @@ class App:
         elif self.window.visible:
             self.window.show_error(msg)
         else:
-            self.tray.notify("RAGSearchBox", msg)
+            self.tray.notify("MoAI-S", msg)
 
     #--------------------------------------------------------------
     # 감시 스레드가 보낸 알림
@@ -400,7 +462,7 @@ class App:
             self._ui().notice(msg)
             return
         self.log.warning("감시 알림(%s): %s", kind, msg)
-        self.tray.notify("RAGSearchBox", msg)
+        self.tray.notify("MoAI-S", msg)
 
     #--------------------------------------------------------------
     # 지금 답을 보여 줄 화면 고르기
@@ -450,20 +512,25 @@ class App:
     #=> 검색창에서 온 질문과 같은 길로 흘려보낸다. 다만 ? 접두어는 필요 없다.
     #
     # -in: text = 사용자가 쓴 글
+    # -in: prev = 같은 대화의 바로 앞 질문(없으면 None)
+    # -in: conv, uploads = 대화 id · 올린 문서가 있는 대화인가
     #
     # -out: 없음
     # -out: error = 없음
     #--------------------------------------------------------------
-    def _on_panel_ask(self, text):
+    def _on_panel_ask(self, text, prev=None, conv=None, uploads=False):
         question = query_filter.one_line(text)
         if not question:
             return
+        # 같은 대화의 바로 앞 질문(멀티턴) — 워커 설정(generation.multiturn)이 켜져 있으면 검색에 이어 붙인다
+        prev = query_filter.one_line(prev) if prev else None
         folder = self._search_folder(self.panel.folder)
         self.log.info("패널 질문: %r (범위 %s)", question[:40], folder)
         if self.worker is None:
             self.panel.show_error(self.worker_error or "SimpleRAG 를 찾지 못했습니다")
             return
-        self.worker.ask(question, folder=folder)
+        # 대화 id · 올린 문서가 있는 대화인가 — 있으면 워커는 그 문서에서만 찾는다(문서 업로드)
+        self.worker.ask(question, folder=folder, prev=prev, conv=conv, uploads=uploads)
 
     #--------------------------------------------------------------
     # 질문의 검색 범위 폴더 (폴더 한정 검색 설계서 §3)
@@ -514,15 +581,26 @@ class App:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _data_home(self):
-        home = os.environ.get("SIMPLERAG_HOME")
+        return os.environ.get("SIMPLERAG_HOME") or self._app_dir()
+
+    #--------------------------------------------------------------
+    # 워커 프로그램 폴더 (config.yaml · models 가 있는 곳)
+    #=> simplerag.exe 옆, 개발용 소스면 프로젝트 폴더.
+    #
+    # -in: 없음
+    #
+    # -out: 폴더 경로, 모르면 None
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _app_dir(self):
         cmd = self._cmd or []
-        if not home and cmd:
-            exe = os.path.abspath(cmd[-1])
-            if exe.lower().endswith(".exe"):
-                home = os.path.dirname(exe)
-            else:                                   # [python, .../src/simplerag/cli.py]
-                home = os.path.dirname(os.path.dirname(os.path.dirname(exe)))
-        return home or None
+        if not cmd:
+            return None
+        exe = os.path.abspath(cmd[-1])
+        if exe.lower().endswith(".exe"):
+            return os.path.dirname(exe)
+        # [python, .../src/simplerag/cli.py]
+        return os.path.dirname(os.path.dirname(os.path.dirname(exe)))
 
     #--------------------------------------------------------------
     # SimpleRAG 상태 파일의 문서 키들 (시각이 바뀔 때만 다시 읽는다)
@@ -617,7 +695,7 @@ class App:
         elif name == "unload":
             if self.worker:
                 self.worker.unload("트레이 메뉴")
-                self.tray.notify("RAGSearchBox", "모델을 내렸습니다 — 이제 index 를 실행할 수 있습니다")
+                self.tray.notify("MoAI-S", "모델을 내렸습니다 — 이제 index 를 실행할 수 있습니다")
 
         elif name == "reload":
             if self.worker:
@@ -630,7 +708,7 @@ class App:
             else:
                 ok, msg = autorun.enable()
                 msg = "로그인할 때 자동으로 시작합니다" if ok else msg
-            self.tray.notify("RAGSearchBox", msg)
+            self.tray.notify("MoAI-S", msg)
 
         elif name == "info":
             self.info.show()
@@ -664,7 +742,7 @@ class App:
             self.panel.activate()
             return
         if not self.scope.active:
-            self.tray.notify("RAGSearchBox", SCOPE_WARN)
+            self.tray.notify("MoAI-S", SCOPE_WARN)
             return
         target = self.scope.active[0]
         self.log.info("화면 열기: 범위 폴더를 탐색기로 연다 — %s", target)
@@ -672,7 +750,7 @@ class App:
             subprocess.Popen(["explorer.exe", target])
         except Exception as e:
             self.log.warning("탐색기를 열지 못했다: %s", e)
-            self.tray.notify("RAGSearchBox", "탐색기를 열지 못했습니다: {}".format(target))
+            self.tray.notify("MoAI-S", "탐색기를 열지 못했습니다: {}".format(target))
 
     #--------------------------------------------------------------
     # 폴더 감시 시작 (자동 인덱싱)
@@ -729,7 +807,7 @@ class App:
                 self.panel.refresh_scope()          # 문서 수가 바뀌었을 수 있다
             return
         self.log.info("자동 인덱싱 알림(%s): %s", kind, msg)
-        self.tray.notify("RAGSearchBox", msg)
+        self.tray.notify("MoAI-S", msg)
         self._update_tooltip(once=True)
 
     #--------------------------------------------------------------
@@ -746,11 +824,11 @@ class App:
     #--------------------------------------------------------------
     def _on_tray_autoindex(self, name):
         if not self.jobs:
-            self.tray.notify("RAGSearchBox", "자동 인덱싱할 폴더가 없습니다 — [Scope] 또는 [AutoIndex] Folders 를 지정하세요")
+            self.tray.notify("MoAI-S", "자동 인덱싱할 폴더가 없습니다 — [Scope] 또는 [AutoIndex] Folders 를 지정하세요")
             return
         if name == "index_now":
             n = self.jobs.run_now()
-            self.tray.notify("RAGSearchBox", "폴더 {}개를 인덱싱합니다".format(n))
+            self.tray.notify("MoAI-S", "폴더 {}개를 인덱싱합니다".format(n))
         elif name == "autoindex":
             on = not self.jobs.enabled
             self.jobs.set_enabled(on)
@@ -762,7 +840,7 @@ class App:
                                                      1 if on else 0)
             if not ok:
                 self.log.warning("자동 인덱싱 설정을 저장하지 못했다: %s", detail)
-            self.tray.notify("RAGSearchBox", "자동 인덱싱을 {}".format("켰습니다" if on else "껐습니다"))
+            self.tray.notify("MoAI-S", "자동 인덱싱을 {}".format("켰습니다" if on else "껐습니다"))
         self._update_tooltip(once=True)
 
     #--------------------------------------------------------------
@@ -822,9 +900,20 @@ class App:
     #--------------------------------------------------------------
     def _info(self):
         info = {"log_dir": rsb_log.log_dir(), "data_home": self._data_home(), "syn_job": self._syn_job}
+        # 정밀 모드 — config.yaml 을 못 찾으면 None(체크를 잠근다)
+        cfg = precision.config_path(self._data_home(), self._app_dir())
+        on = precision.read(cfg) if cfg else None
+        info["precision"] = on
+        info["precision_note"] = precision.note(bool(on), precision.model_present(self._data_home(), self._app_dir()),
+                                                found=cfg is not None, msg=self._precision_msg)
+        # 멀티턴 — 줄이 없으면 기본 켬
+        info["multiturn"] = precision.read(cfg, "multiturn") if cfg else None
+        info["multiturn_note"] = "\n".join(x for x in (precision.MULTITURN_NOTE, self._multiturn_msg) if x)
         if self.worker:
             # 모델 단추를 켜고 끄는 데 쓴다 — 준비 중도 "올라가는 중" 이라 내리기 쪽으로 본다
             info["model_up"] = self.worker.availability() != "down"
+            # 올리는 중이면 경과 초·진행 글 — 설정 창이 진행 막대를 보인다
+            info["starting"] = self.worker.starting()
             # 내려간 뒤에도 워커는 마지막 모델 이름을 들고 있다 — 올라가 있을 때만 보여 준다
             if info["model_up"]:
                 info.update(self.worker.info())
@@ -991,6 +1080,107 @@ class App:
         return self._syn_job[1]
 
     #--------------------------------------------------------------
+    # [+] 로 고른 파일을 워커에 맡기기 (문서 업로드 설계서 §4)
+    #=> 파일마다 /upload 명령을 맡긴다. 모델이 내려가 있으면 올리고, 명령은 준비된 뒤 차례로 보내진다.
+    #   결과는 워커 스레드에서 오므로 메인 스레드 큐로 넘겨 패널 칩을 바꾼다.
+    #
+    # -in: conv = 대화 id / paths = 패널이 한도를 확인한 파일 경로들
+    #
+    # -out: None(맡김) 또는 안내 글(못 맡김)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _upload_files(self, conv, paths):
+        import json
+        if not self.worker:
+            return self.worker_error or "SimpleRAG 를 찾지 못했습니다"
+        if self.worker.availability() == "up" and not self.worker.knows("upload"):
+            return "이 SimpleRAG 는 문서 업로드를 모릅니다 — 새로 빌드한 simplerag 가 필요합니다"
+        self.worker.start()
+        self.worker.ensure_started()
+        for path in paths:
+            name = os.path.basename(path)
+
+            def done(res, name=name):
+                res = dict(res or {})
+                res.setdefault("name", name)
+                self.q.put(("call", lambda: self._upload_finished(res)))
+
+            self.worker.command("/upload " + json.dumps({"conv": conv, "path": path}, ensure_ascii=True), done)
+            self._up_running += 1
+            self.log.info("업로드 맡김: %s (대화 %s)", name, conv)
+        return None
+
+    #--------------------------------------------------------------
+    # 업로드·빼기 결과 (메인 스레드)
+    #
+    # -in: res = 워커 결과 dict
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _upload_finished(self, res):
+        self._up_running = max(0, self._up_running - 1)
+        self.panel.upload_done(res)
+
+    #--------------------------------------------------------------
+    # 첨부 칩 [×] — 워커에 /upload-remove (모델이 내려가 있으면 올린 뒤 처리)
+    #
+    # -in: conv = 대화 id / name = 뺄 문서 이름
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _upload_remove(self, conv, name):
+        import json
+        if not self.worker:
+            return
+        self.worker.start()
+        self.worker.ensure_started()
+        self.worker.command("/upload-remove " + json.dumps({"conv": conv, "name": name}, ensure_ascii=True),
+                            lambda res: self.q.put(("call", lambda: self._upload_finished(res or {}))))
+        self._up_running += 1
+
+    #--------------------------------------------------------------
+    # 지운 대화의 업로드 폴더 지우기 (문서 업로드 설계서 §9)
+    #=> 모델이 내려가 있어도 지워져야 하므로 폴더를 직접 지운다(평범한 파일). 못 지우면 다음 시작 때 정리한다.
+    #
+    # -in: convs = 지울 대화 id 목록, None 이면 uploads 폴더 전체
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _delete_uploads(self, convs):
+        home = self._data_home()
+        if not home:
+            return
+        root = os.path.join(home, "uploads")
+        targets = [root] if convs is None else [os.path.join(root, s) for s in map(upload_safe_id, convs) if s]
+        for d in targets:
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+                self.log.info("업로드 문서를 지웠다: %s", d)
+
+    #--------------------------------------------------------------
+    # 주인 없는 업로드 폴더 정리 — 기록에 없는 대화 id 폴더(시작할 때)
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _gc_uploads(self):
+        home = self._data_home()
+        root = os.path.join(home, "uploads") if home else None
+        if not root or not os.path.isdir(root):
+            return
+        keep = {upload_safe_id(c.get("id")) for c in self.panel.history}
+        for name in os.listdir(root):
+            d = os.path.join(root, name)
+            if os.path.isdir(d) and name not in keep:
+                shutil.rmtree(d, ignore_errors=True)
+                self.log.info("주인 없는 업로드 폴더를 지웠다: %s", name)
+
+    #--------------------------------------------------------------
     # 설정 창 [모델 다시 올리기] — 예전 트레이 "모델 다시 올리기"
     #
     # -in: 없음
@@ -1019,6 +1209,61 @@ class App:
             return "자동 시작을 껐습니다" if ok else msg
         ok, msg = autorun.enable()
         return "로그인할 때 자동으로 시작합니다" if ok else msg
+
+    #--------------------------------------------------------------
+    # 설정 창 [정밀 모드] 체크 — config.yaml 의 generation.precision 을 바꾸고 모델을 다시 올린다
+    #=> 워커는 시작할 때만 config.yaml 을 읽는다.
+    #    1) config.yaml 의 precision 줄만 바꾼다(주석 보존) — 못 바꾸면 그대로 둔다
+    #    2) 모델이 올라가 있으면 내렸다가 다시 올린다(새 설정으로 4B 또는 원래 모델)
+    #    3) 내려가 있으면 다음 질문 때 새 설정으로 올라간다
+    #
+    # -in: on = 켤지
+    #
+    # -out: 안내 글(체크 아래 줄에 보인다)
+    # -out: error = 없음 (실패는 안내 글로)
+    #--------------------------------------------------------------
+    def _act_precision(self, on):
+        self._precision_msg = self._set_flag(
+            "precision", "정밀 모드", on, "4B 는 20초 안팎 · 이 PC 에서 4B 를 처음 올리면 CPU·iGPU 측정으로 1~2분")
+        return self._precision_msg
+
+    #--------------------------------------------------------------
+    # 설정 창 [이어서 묻기] 체크 — config.yaml 의 generation.multiturn 을 바꾸고 모델을 다시 올린다
+    #
+    # -in: on = 켤지
+    #
+    # -out: 안내 글(체크 아래 줄에 보인다)
+    # -out: error = 없음 (실패는 안내 글로)
+    #--------------------------------------------------------------
+    def _act_multiturn(self, on):
+        self._multiturn_msg = self._set_flag("multiturn", "이어서 묻기", on, "10초 안팎")
+        return self._multiturn_msg
+
+    #--------------------------------------------------------------
+    # config.yaml 의 generation 참/거짓 한 줄 바꾸고 모델 다시 올리기 (정밀 모드 · 이어서 묻기 공용)
+    #=> 워커는 시작할 때만 config.yaml 을 읽는다.
+    #    1) 그 키 줄만 바꾼다(주석 보존) — 못 바꾸면 그대로 둔다
+    #    2) 모델이 올라가 있으면 내렸다가 다시 올린다
+    #    3) 내려가 있으면 다음 질문 때 새 설정으로 올라간다
+    #
+    # -in: key = precision | multiturn / label = 안내 글의 이름 / on = 켤지 / wait = 다시 올리는 데 걸리는 시간 안내
+    #
+    # -out: 안내 글
+    # -out: error = 없음 (실패는 안내 글로)
+    #--------------------------------------------------------------
+    def _set_flag(self, key, label, on, wait):
+        cfg = precision.config_path(self._data_home(), self._app_dir())
+        ok, msg = precision.save(cfg, on, key=key, label=label)
+        self.log.info("%s %s: %s", label, "켬" if on else "끔", msg)
+        if ok and self.worker:
+            if self.worker.availability() != "down":
+                self.worker.unload("{} 변경".format(label))
+                self.worker.start()
+                self.worker.ensure_started()
+                msg += " — 모델을 다시 올리는 중입니다 ({})".format(wait)
+            else:
+                msg += " — 다음 질문 때 새 설정으로 모델을 올립니다"
+        return msg
 
     #--------------------------------------------------------------
     # 인덱싱 폴더 다시 확인 (설정 창 [다시 확인] — 예전 트레이 "전체 다시 확인")
@@ -1066,7 +1311,7 @@ class App:
                 label = extra
             elif extra:
                 label += " · " + extra
-        return "RAGSearchBox — " + label
+        return "MoAI-S — " + label
 
     #--------------------------------------------------------------
     # 트레이 상태 글 갱신
@@ -1083,7 +1328,7 @@ class App:
             if self.scope.refresh() and self.scope.usable():
                 self.log.info("범위 폴더가 연결되었다: %s", self.scope.active)
 
-            text = "RAGSearchBox — " + self._status_text()
+            text = "MoAI-S — " + self._status_text()
 
             if text != self._last_tooltip:
                 self._last_tooltip = text

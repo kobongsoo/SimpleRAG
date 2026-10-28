@@ -27,6 +27,24 @@ const CMD_TIMEOUT_S: u64 = 300;
 const RESTART_WINDOW_S: u64 = 300;
 const LOCK_HINT: &str = "already accessed";
 const RERANK_DONE: &str = "리랭커 적재 완료";
+// 모델 올리기 진행률 어림(Python rag_worker.LOAD_S · PROBE_S 와 같다) — 보통 적재 약 15초, 처음 올리는 모델은
+//   CPU·iGPU 측정(4B 96초)이 먼저 돈다. 측정 시작·끝은 stderr "[backend] 이 PC 의 …" · "[backend] … 선택" 줄
+const LOAD_S: f64 = 15.0;
+const PROBE_S: f64 = 100.0;
+const PROBE_START: &str = "[backend] 이 PC 의";
+const PROBE_END: &str = "[backend]";
+
+//------------------------------------------------------------------
+// 모델 올리기 진행률 어림 (Python rag_worker.load_percent 와 같다) — 1~95%, 준비가 끝나기 전에는 95% 에서 멈춘다
+//------------------------------------------------------------------
+pub fn load_percent(sec: f64, probe_start: Option<f64>, probe_end: Option<f64>) -> i64 {
+    let total = match (probe_start, probe_end) {
+        (_, Some(e)) => e + LOAD_S,
+        (Some(s), None) => s + PROBE_S + LOAD_S,
+        _ => LOAD_S,
+    };
+    ((sec * 100.0 / total) as i64).clamp(1, 95)
+}
 const RERANK_FAIL: &str = "리랭커 적재 실패";
 const RERANK_LOADING: &str = "켬(백그라운드 적재 중)";
 
@@ -272,13 +290,17 @@ struct Inner {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     parser: ChatParser,
-    pending: Option<(String, Option<String>)>,
+    // 기다리는 질문 (질문, 범위 폴더, 같은 대화의 바로 앞 질문, 대화 id, 올린 문서가 있는 대화인가)
+    pending: Option<(String, Option<String>, Option<String>, Option<String>, bool)>,
     current: Option<String>,
     t_state: Instant,
     t_last_ask: Instant,
     restarts: Vec<Instant>,
     blocked: Option<String>,
     stderr_tail: Vec<String>,
+    // 모델 올리기 중 CPU·iGPU 측정 (시작 초, 끝 초) · 설정 창에 보인 진행률(뒤로 가지 않게)
+    probe: (Option<f64>, Option<f64>),
+    load_pct: i64,
     want_running: bool,
     cmds: VecDeque<(String, Callback)>,
     cmd: Option<(String, Callback)>,
@@ -325,7 +347,7 @@ impl Worker {
                 state: STOPPED.into(), detail: "시작 전".into(), backend: String::new(), model: String::new(), rerank_note: None,
                 embed_model: String::new(), rerank_model: String::new(), ready_line: String::new(), features: HashSet::new(),
                 child: None, stdin: None, parser: ChatParser::new(), pending: None, current: None,
-                t_state: Instant::now(), t_last_ask: Instant::now(), restarts: vec![], blocked: None, stderr_tail: vec![],
+                t_state: Instant::now(), t_last_ask: Instant::now(), restarts: vec![], blocked: None, stderr_tail: vec![], probe: (None, None), load_pct: 0,
                 want_running: false, cmds: VecDeque::new(), cmd: None, cmd_buf: String::new(), hold: None, gen: 0,
             }),
             job: crate::win::create_kill_job().map(|h| h.0 as isize),
@@ -361,12 +383,14 @@ impl Worker {
     //------------------------------------------------------------------
     // 질문 맡기기 — 기다리는 질문은 하나뿐(새 질문이 오면 갈아 끼운다)
     //------------------------------------------------------------------
-    pub fn ask(&self, question: &str, folder: Option<String>) {
+    //   prev = 같은 대화의 바로 앞 질문(멀티턴 — 워커가 ask-prev 를 알 때만 싣는다)
+    //   conv · uploads = 대화 id · 올린 문서가 있는 대화인가(문서 업로드 — 워커가 upload 를 알 때만 싣는다)
+    pub fn ask(&self, question: &str, folder: Option<String>, prev: Option<String>, conv: Option<String>, uploads: bool) {
         let state = {
             let mut g = self.inner.lock().unwrap();
             g.want_running = true;
             g.blocked = None;
-            g.pending = Some((question.to_string(), folder));
+            g.pending = Some((question.to_string(), folder, prev, conv, uploads));
             g.t_last_ask = Instant::now();
             g.state.clone()
         };
@@ -379,6 +403,16 @@ impl Worker {
     // 인덱싱 명령 맡기기
     pub fn command(&self, line: String, cb: Callback) {
         self.inner.lock().unwrap().cmds.push_back((line, cb));
+    }
+
+    // 워커가 문서 업로드를 아는가(시작 줄 "기능:" 에 upload)
+    pub fn knows(&self, feature: &str) -> bool {
+        self.inner.lock().unwrap().features.contains(feature)
+    }
+
+    // stderr 마지막 줄 — 업로드 진행("[upload] 임베딩 64/128")을 읽는다
+    pub fn last_stderr(&self) -> Option<String> {
+        self.inner.lock().unwrap().stderr_tail.last().cloned()
     }
 
     // up | starting | down
@@ -421,6 +455,22 @@ impl Worker {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         self.inner.lock().unwrap().want_running = false;
         self.terminate(true, "프로그램 종료");
+    }
+
+    //------------------------------------------------------------------
+    // 모델을 올리는 중이면 그 진행 — {"sec": 경과 초, "detail": stderr 마지막 진행 글}, 아니면 None
+    //   (설정 창 진행 막대용, Python RagWorker.starting 과 같다. 처음 올리는 4B 는 측정 때문에 1~2분)
+    //------------------------------------------------------------------
+    pub fn starting(&self) -> Option<Value> {
+        let mut g = self.inner.lock().unwrap();
+        if g.state != STARTING {
+            return None;
+        }
+        let detail = g.stderr_tail.last().cloned().unwrap_or_else(|| g.detail.clone());
+        let sec = g.t_state.elapsed().as_secs_f64();
+        // 측정이 시작되면 전체 시간이 늘어 % 가 뒤로 갈 수 있다 — 한 번 보인 값 아래로는 내리지 않는다
+        g.load_pct = g.load_pct.max(load_percent(sec, g.probe.0, g.probe.1));
+        Some(json!({"sec": sec as u64, "detail": detail, "pct": g.load_pct}))
     }
 
     //------------------------------------------------------------------
@@ -517,6 +567,8 @@ impl Worker {
             g.child = Some(child);
             g.parser = ChatParser::new();
             g.stderr_tail.clear();
+            g.probe = (None, None);
+            g.load_pct = 0;
             g.backend.clear();
             g.model.clear();
             g.rerank_note = None;
@@ -680,6 +732,15 @@ impl Worker {
             if n > 50 {
                 g.stderr_tail.drain(..n - 50);
             }
+            // CPU·iGPU 측정 시작·끝 — 진행률 어림이 전체 시간을 다시 잡는다
+            if g.state == STARTING && s.starts_with(PROBE_END) {
+                let at = g.t_state.elapsed().as_secs_f64();
+                if s.starts_with(PROBE_START) {
+                    g.probe = (Some(at), None);
+                } else if g.probe.0.is_some() && s.contains("선택") {
+                    g.probe.1 = Some(at);
+                }
+            }
             if s.contains(LOCK_HINT) {
                 g.blocked = Some("SimpleRAG chat/index 가 실행 중입니다 — 끝낸 뒤 다시 질문하세요".into());
             }
@@ -717,7 +778,7 @@ impl Worker {
         let q;
         {
             let mut g = self.inner.lock().unwrap();
-            let (qq, folder) = match g.pending.take() {
+            let (qq, folder, prev, conv, uploads) = match g.pending.take() {
                 Some(p) => p,
                 None => return false,
             };
@@ -727,8 +788,20 @@ impl Worker {
             q = qq;
             g.current = Some(q.clone());
             g.parser.begin_question();
-            let use_ask = folder.is_some() && g.features.contains("ask-folder");
-            line = if use_ask { format!("/ask {}", ascii_json(&json!({"q": q, "folder": folder}))) } else { q.clone() };
+            // 앞 질문은 그것을 아는 워커(ask-prev)에게만 싣는다
+            let prev = prev.filter(|_| g.features.contains("ask-prev"));
+            // 대화 id 는 업로드를 아는 워커에게만 — 올린 문서가 있는 대화의 질문은 그 문서에서만 찾는다
+            let conv = conv.filter(|_| g.features.contains("upload"));
+            let use_ask = (folder.is_some() || prev.is_some() || conv.is_some()) && g.features.contains("ask-folder");
+            let mut req = json!({"q": q, "folder": folder});
+            if let Some(p) = &prev {
+                req["prev"] = json!(p);
+            }
+            if let Some(c) = &conv {
+                req["conv"] = json!(c);
+                req["uploads"] = json!(uploads);
+            }
+            line = if use_ask { format!("/ask {}", ascii_json(&req)) } else { q.clone() };
             if let Err(e) = self.write_line(&mut g, &line) {
                 crate::warn!("worker", "질문 전송 실패: {}", e);
                 return false;
@@ -981,6 +1054,15 @@ pub fn ascii_json(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 모델 올리기 진행률 — Python test_precision.test_load_percent 와 같은 값
+    #[test]
+    fn load_percent_like_python() {
+        assert_eq!(load_percent(0.0, None, None), 1);
+        assert_eq!(load_percent(LOAD_S / 2.0, None, None), 50);
+        assert_eq!(load_percent(999.0, None, None), 95);
+        assert_eq!(load_percent(60.0, Some(2.0), None), (60.0 * 100.0 / (2.0 + PROBE_S + LOAD_S)) as i64);
+        assert_eq!(load_percent(100.0, Some(2.0), Some(98.0)), (100.0 * 100.0 / (98.0 + LOAD_S)) as i64);
+    }
     #[test]
     fn parse_flow() {
         let mut p = ChatParser::new();

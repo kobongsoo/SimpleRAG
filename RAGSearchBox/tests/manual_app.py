@@ -114,8 +114,8 @@ def main(seconds):
         results.append(("답변 글자가 들어왔다", len(answer) > 0))
         results.append(("소요 시간이 채워졌다", bool(w.win) and bool(w.lbl_timing.cget("text"))))
         results.append(("트레이 상태 글에 워커 상태가 보인다",
-                        "RAGSearchBox" in application._last_tooltip
-                        and application._last_tooltip != "RAGSearchBox"))
+                        "MoAI-S" in application._last_tooltip
+                        and application._last_tooltip != "MoAI-S"))
         results.append(("범위 폴더를 읽었다", application.scope.usable()))
 
         # §16 — 근거가 왔으면 "근거 파일 보기" 단추가 열려야 한다

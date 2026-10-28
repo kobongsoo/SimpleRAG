@@ -63,7 +63,7 @@ def main(seconds):
                 break
             kind = ev[0]
             if kind == "state":
-                tray.set_tooltip("RAGSearchBox — " + worker.status_text())
+                tray.set_tooltip("MoAI-S — " + worker.status_text())
                 if ev[1] == "starting":
                     win.set_status("모델 준비 중 (첫 질문)")
                 elif ev[1] == "busy":

@@ -65,8 +65,8 @@ class Tray(threading.Thread):
         self.enabled = dict(enabled or {})
         self.icon_path = icon_path
         self.log = rsb_log.get("tray")
-        self.tooltip = "RAGSearchBox"
-        self.title = "RAGSearchBox"     # 메뉴 맨 위 회색 줄("RAGSearchBox — 준비됨")
+        self.tooltip = "MoAI-S"
+        self.title = "MoAI-S"           # 메뉴 맨 위 회색 줄("MoAI-S — 준비됨")
         self._hwnd = None
         self._added = False
         self._ready = threading.Event()
@@ -139,7 +139,7 @@ class Tray(threading.Thread):
     # -out: error = 없음
     #--------------------------------------------------------------
     def set_tooltip(self, text):
-        self.tooltip = text or "RAGSearchBox"
+        self.tooltip = text or "MoAI-S"
         if self._hwnd:
             try:
                 win32gui.PostMessage(self._hwnd, WM_UPDATE, 0, 0)
@@ -156,7 +156,7 @@ class Tray(threading.Thread):
     # -out: error = 없음
     #--------------------------------------------------------------
     def set_title(self, text):
-        self.title = text or "RAGSearchBox"
+        self.title = text or "MoAI-S"
 
     #--------------------------------------------------------------
     # 알림 풍선 띄우기

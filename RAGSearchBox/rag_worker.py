@@ -50,6 +50,36 @@ MODEL_RE = re.compile(r"([^/\\\s]+\.gguf)")
 RESTART_WINDOW_S = 300
 # 인덱스를 다른 프로세스가 잡고 있을 때 SimpleRAG 가 내는 문구
 LOCK_HINT = "already accessed"
+# 모델 올리기 진행률(설정 창 진행 막대) — 걸릴 시간을 미리 알 수 없어 실측으로 어림한다.
+#   보통 적재 약 8~12초(4B 8.4초), 이 PC 에서 그 모델을 처음 올리면 CPU·iGPU 측정이 먼저 돈다(4B 96초 · 1.7B 약 30초).
+#   측정 시작·끝은 워커 stderr 의 "[backend] 이 PC 의 …" · "[backend] … 선택" 줄로 안다. 준비가 끝나기 전에는 95% 에서 멈춘다.
+LOAD_S = 15
+PROBE_S = 100
+PROBE_START = "[backend] 이 PC 의"
+PROBE_END = "[backend]"
+
+
+#------------------------------------------------------------------
+# 모델 올리기 진행률 어림 (순수 함수 — Rust worker::load_percent 와 같다)
+#=> 남은 단계로 잡은 전체 시간 대비 경과 시간. 측정이 시작되면 전체 시간을 늘리고, 끝나면 적재 시간만 더한다.
+#
+# -in: sec         = 준비 중이 된 뒤 지난 초
+# -in: probe_start = 측정이 시작된 때(초), 없으면 None
+# -in: probe_end   = 측정이 끝난 때(초), 없으면 None
+#
+# -out: 1~95 사이 정수(%)
+# -out: error = 없음
+#------------------------------------------------------------------
+def load_percent(sec, probe_start=None, probe_end=None):
+    if probe_end is not None:
+        total = probe_end + LOAD_S
+    elif probe_start is not None:
+        total = probe_start + PROBE_S + LOAD_S
+    else:
+        total = LOAD_S
+    return max(1, min(95, int(sec * 100 / total)))
+
+
 # 백그라운드 리랭커 적재가 끝나면 워커가 stderr 에 내는 줄의 머리(simplerag cli._announce_rerank)
 RERANK_DONE = "리랭커 적재 완료"
 RERANK_FAIL = "리랭커 적재 실패"
@@ -225,12 +255,16 @@ class RagWorker:
 
         self._pending = None          # 대기 중인 질문(최대 1건) — 새 질문이 오면 갈아 끼운다
         self._pending_folder = None   # 그 질문의 검색 범위 폴더(폴더 한정 검색). None = 인덱스 전체
+        self._pending_prev = None     # 같은 대화의 바로 앞 질문(멀티턴). None = 이 질문만으로
+        self._pending_conv = (None, False)  # (대화 id, 올린 문서가 있는 대화인가) — 문서 업로드
         self._current = None          # 지금 답변을 만드는 중인 질문
         self._t_state = time.monotonic()
         self._t_last_ask = time.monotonic()
         self._restarts = []           # 최근 재시작 시각들
         self._blocked = None          # 자동 재시작을 막는 이유(설정 오류·인덱스 잠금)
         self._stderr_tail = []
+        self._probe = (None, None)    # 모델 올리기 중 CPU·iGPU 측정 (시작 초, 끝 초)
+        self._load_pct = 0            # 설정 창에 보인 진행률(뒤로 가지 않게)
         self._want_running = False
 
         # 자동 인덱싱 명령 (설계서 §8) — 질문이 언제나 먼저다
@@ -282,12 +316,14 @@ class RagWorker:
     # -out: 없음 (진행 상황은 이벤트로 알린다)
     # -out: error = 없음
     #--------------------------------------------------------------
-    def ask(self, question, folder=None):
+    def ask(self, question, folder=None, prev=None, conv=None, uploads=False):
         with self._lock:
             self._want_running = True
             self._blocked = None
             self._pending = question
             self._pending_folder = folder
+            self._pending_prev = prev
+            self._pending_conv = (conv, uploads)
             self._t_last_ask = time.monotonic()
             state = self.state
         self.log.info("질문 접수: %s", question[:20])
@@ -311,6 +347,30 @@ class RagWorker:
     def command(self, line, callback):
         with self._lock:
             self._cmds.append((line, callback))
+
+    #--------------------------------------------------------------
+    # 워커가 아는 기능인가 (시작 줄 "기능:" — 예: upload)
+    #
+    # -in: feature = 기능 이름
+    #
+    # -out: True | False
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def knows(self, feature):
+        with self._lock:
+            return feature in self.features
+
+    #--------------------------------------------------------------
+    # stderr 마지막 줄 — 업로드 진행("[upload] 임베딩 64/128")을 읽는다
+    #
+    # -in: 없음
+    #
+    # -out: 글 또는 None
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def last_stderr(self):
+        with self._lock:
+            return self._stderr_tail[-1] if self._stderr_tail else None
 
     #--------------------------------------------------------------
     # 인덱싱 명령을 받을 수 있는가
@@ -435,6 +495,26 @@ class RagWorker:
                     INDEXING: "인덱싱 중"}[self.state]
 
     #--------------------------------------------------------------
+    # 모델을 올리는 중이면 그 진행 (설정 창 진행 막대용)
+    #=> 준비 중 상태가 된 뒤 지난 초와, 워커가 stderr 로 낸 마지막 진행 글
+    #   (예: 생성 백엔드 측정 중)을 돌려준다. 처음 올리는 4B 는 측정 때문에 1~2분 걸린다.
+    #
+    # -in: 없음
+    #
+    # -out: {"sec": 경과 초, "detail": 마지막 진행 글} 또는 None(준비 중 아님)
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def starting(self):
+        with self._lock:
+            if self.state != STARTING:
+                return None
+            detail = self._stderr_tail[-1] if self._stderr_tail else self.detail
+            sec = time.monotonic() - self._t_state
+            # 측정이 시작되면 전체 시간이 늘어 % 가 뒤로 갈 수 있다 — 한 번 보인 값 아래로는 내리지 않는다
+            self._load_pct = max(self._load_pct, load_percent(sec, *self._probe))
+            return {"sec": int(sec), "detail": detail, "pct": self._load_pct}
+
+    #--------------------------------------------------------------
     # 설정 창에 보여 줄 값들
     #=> 트레이 "설정" 창이 모델·리랭킹·백엔드를 한 칸씩 보여 주려고 부른다.
     #    1) 모델 파일 이름을 짧게 줄인다("Qwen3-1.7B-Q4_K_M.gguf" → "Qwen3-1.7B")
@@ -542,6 +622,8 @@ class RagWorker:
             self._proc = proc
             self._parser = ChatParser()
             self._stderr_tail = []
+            self._probe = (None, None)     # (측정 시작 초, 끝 초) — 진행률 어림용
+            self._load_pct = 0
             self.backend = ""
             self.model = ""
             self._rerank_note = None
@@ -691,6 +773,13 @@ class RagWorker:
                                          "끝낸 뒤 다시 질문하세요")
                     # 백그라운드 리랭커 적재가 끝났다 — 시작 때 받은 "적재 중" 을 결과로 바꾼다
                     # (트레이 글·설정 창이 이 값을 읽는다)
+                    # CPU·iGPU 측정 시작·끝 — 진행률 어림이 전체 시간을 다시 잡는다
+                    if self.state == STARTING and line.startswith(PROBE_END):
+                        at = time.monotonic() - self._t_state
+                        if line.startswith(PROBE_START):
+                            self._probe = (at, None)
+                        elif self._probe[0] is not None and "선택" in line:
+                            self._probe = (self._probe[0], at)
                     if line.startswith(RERANK_DONE):
                         self._rerank_note = "켬"
                         self._apply_rerank_note()
@@ -711,17 +800,31 @@ class RagWorker:
         with self._lock:
             q = self._pending
             folder = self._pending_folder
+            prev = self._pending_prev
+            conv, uploads = self._pending_conv
             proc = self._proc
             if not q or not proc:
                 return False
             self._pending = None
             self._pending_folder = None
+            self._pending_prev = None
+            self._pending_conv = (None, False)
             self._current = q
             self._parser.begin_question()
-            use_ask = bool(folder) and "ask-folder" in self.features
+            # 앞 질문은 그것을 아는 워커(ask-prev)에게만 싣는다
+            prev = prev if "ask-prev" in self.features else None
+            # 대화 id 는 업로드를 아는 워커에게만 — 올린 문서가 있는 대화의 질문은 그 문서에서만 찾는다
+            conv = conv if "upload" in self.features else None
+            use_ask = bool(folder or prev or conv) and "ask-folder" in self.features
         # 폴더 한정이면 질문 한 줄에 폴더를 함께 싣는다(폴더 한정 검색 설계서 §6).
         # ASCII JSON 이라 cp949 로 못 쓰는 글자(이모지 등)가 든 질문·경로도 깨지지 않는다.
-        line = ("/ask " + json.dumps({"q": q, "folder": folder}, ensure_ascii=True)) if use_ask else q
+        req = {"q": q, "folder": folder}
+        if prev:
+            req["prev"] = prev
+        if conv:
+            req["conv"] = conv
+            req["uploads"] = bool(uploads)
+        line = ("/ask " + json.dumps(req, ensure_ascii=True)) if use_ask else q
         if folder and not use_ask:
             self.log.info("워커가 폴더 한정을 모른다(옛 simplerag.exe) — 인덱스 전체에서 찾는다")
         try:

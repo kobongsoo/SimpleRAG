@@ -60,7 +60,7 @@ def _out(text, modal=False):
             # MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST
             t = threading.Thread(
                 target=lambda: ctypes.windll.user32.MessageBoxW(
-                    0, text, "RAGSearchBox", 0x40 | 0x10000 | 0x40000),
+                    0, text, "MoAI-S", 0x40 | 0x10000 | 0x40000),
                 daemon=True)
             t.start()
             t.join(timeout=BOX_WAIT_S)

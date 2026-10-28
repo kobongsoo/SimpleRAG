@@ -199,7 +199,7 @@ class AnswerWindow:
         s = self.s
         win = tk.Toplevel(self.root)
         win.withdraw()
-        win.title("RAGSearchBox")
+        win.title("MoAI-S")
         # 제목 표시줄 아이콘 — 없으면 tkinter 기본(깃털) 이 나온다
         ico = rsb_settings.icon_path()
         if ico:

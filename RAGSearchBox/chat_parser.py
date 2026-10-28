@@ -71,6 +71,37 @@ def setup_bits(info):
     return bits
 
 
+# 답 아래 소요 줄 앞의 안내 — AI 가 만든 답이라 출처로 확인하라는 말
+META_NOTE = "정확한 내용은 아래 출처로 확인하세요."
+
+
+#------------------------------------------------------------------
+# 답 아래 소요 줄 (대화 패널 — Rust ui/panel.html 의 metaLine 과 같은 글)
+#=> "정확한 내용은 아래 출처로 확인하세요.  0.51s/6.85s/9.64s , qwen3-4b-q4(정밀)"
+#    1) 시간은 검색/첫 글자/완료 순서로 모두 초(s) — 검색은 ms 로 오므로 나눈다
+#    2) 답을 만든 모델(setup_bits 의 첫 조각). parent 설정은 보이지 않는다
+#    3) AI 답이 있을 때만 앞에 안내를 둔다
+#
+# -in: info     = ChatParser 의 done 정보(dict)
+# -in: answered = AI 답이 있나
+#
+# -out: 소요 줄 글(아무것도 없으면 "")
+# -out: error = 없음
+#------------------------------------------------------------------
+def meta_line(info, answered):
+    times = []
+    if info.get("search_ms") is not None:
+        times.append("{:.2f}s".format(info["search_ms"] / 1000.0))
+    for key in ("ttft_s", "total_s"):
+        if info.get(key) is not None:
+            times.append("{:.2f}s".format(info[key]))
+    rest = [x for x in ("/".join(times), (setup_bits(dict(info, parent=None)) or [""])[0]) if x]
+    tail = " , ".join(rest)
+    if answered:
+        return META_NOTE + ("  " + tail if tail else "")
+    return tail
+
+
 #------------------------------------------------------------------
 # 출력 해석기
 #=> 파이프에서 읽은 덩어리를 feed() 로 넣으면 이벤트 목록을 돌려준다.

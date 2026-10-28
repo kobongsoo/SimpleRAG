@@ -12,6 +12,7 @@ mod jobs;
 mod log;
 mod monitor;
 mod panel;
+mod precision;
 mod scope;
 mod settings;
 mod synonyms;
@@ -82,11 +83,43 @@ struct InfoWin {
     syn_msg: String,
     syn_done: Arc<Mutex<Option<String>>>,
     syn_running: Arc<std::sync::atomic::AtomicBool>,
+    // 마지막 정밀 모드 바꾸기 결과(체크 아래 안내 줄)
+    prec_msg: String,
+    // 마지막 이어서 묻기(멀티턴) 바꾸기 결과
+    mt_msg: String,
 }
 
 //------------------------------------------------------------------
 // 앱 — 모든 구성요소
 //------------------------------------------------------------------
+// 문서 업로드 한도(문서 업로드 설계서 §10) · 올릴 수 있는 확장자(SimpleRAG indexer TEXT_EXTS 와 같다)
+const UPLOAD_MAX_FILES: usize = 5;
+const UPLOAD_MAX_MB: u64 = 30;
+const UPLOAD_EXTS: &[&str] = &["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "hwp", "hwpx", "txt", "md", "html", "htm", "py", "ipynb"];
+
+//------------------------------------------------------------------
+// 대화 id → 업로드 폴더 이름 (SimpleRAG uploads::safe_id 와 같은 규칙)
+//------------------------------------------------------------------
+fn upload_safe_id(conv: &str) -> Option<String> {
+    let s: String = conv.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' }).collect();
+    let s = s.trim_matches(|c| c == '.' || c == '_').to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+//------------------------------------------------------------------
+// 업로드 진행 글 → (진행률 %, 글) — "[upload] 임베딩 64/128" · "[upload] 글자 뽑는 중 — …"
+//------------------------------------------------------------------
+fn upload_progress(line: &str) -> Option<(u32, String)> {
+    let rest = line.strip_prefix("[upload] ")?;
+    if let Some(n) = rest.strip_prefix("임베딩 ") {
+        let (a, b) = n.split_once('/')?;
+        let (a, b): (f64, f64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+        // 글자 뽑기를 10% 로 치고 임베딩이 나머지 90%
+        return Some(((10.0 + 89.0 * a / b.max(1.0)) as u32, format!("임베딩 {}/{}", a, b)));
+    }
+    Some((5, rest.split(" — ").next().unwrap_or(rest).to_string()))
+}
+
 struct App {
     s: Settings,
     proxy: Proxy,
@@ -102,6 +135,9 @@ struct App {
     info: InfoWin,
     history: Vec<Value>,
     history_path: String,
+    // 업로드 명령 결과(워커 스레드가 넣고 pump 가 패널로 옮긴다) · 지금 올리는 중인 파일 수
+    up_done: Arc<Mutex<Vec<Value>>>,
+    up_running: usize,
     answer_hwnd: isize,
     state_cache: (Option<std::time::SystemTime>, Vec<String>),
     last_tooltip: String,
@@ -170,10 +206,10 @@ impl App {
             crate::warn!("app", "설정: {}", w);
         }
         if !self.s.warnings.is_empty() {
-            self.tray.notify("RAGSearchBox-rs 설정 확인", &self.s.warnings.iter().take(3).cloned().collect::<Vec<_>>().join("\n"));
+            self.tray.notify("MoAI-S 설정 확인", &self.s.warnings.iter().take(3).cloned().collect::<Vec<_>>().join("\n"));
         }
         if let Some(e) = &self.worker_error {
-            self.tray.notify("RAGSearchBox-rs", e);
+            self.tray.notify("MoAI-S", e);
         }
         if self.s.searchbox_trigger {
             crate::warn!("app", "[Trigger] SearchBox=1(검색창 ? 질문)은 Rust 판에서 지원하지 않는다 — 폴더 패널만 동작한다");
@@ -181,7 +217,7 @@ impl App {
         let usable = self.scope.lock().unwrap().usable();
         if !usable {
             crate::warn!("app", "{}", SCOPE_WARN);
-            self.tray.notify("RAGSearchBox-rs", SCOPE_WARN);
+            self.tray.notify("MoAI-S", SCOPE_WARN);
         } else if let Some(w) = &self.worker {
             w.start();
             if self.s.start_mode == "boot" {
@@ -189,6 +225,8 @@ impl App {
                 w.ensure_started();
             }
         }
+        // 기록에 없는 대화의 업로드 폴더 정리(지우다 실패했거나 기록 파일을 지운 경우)
+        self.gc_uploads();
         if let Some(fixed) = win::autorun_fix_path() {
             crate::info!("app", "자동 시작 경로를 고쳤다: {}", fixed);
         }
@@ -210,6 +248,141 @@ impl App {
         }
         if self.info.visible && self.t_info.elapsed() >= INFO_EVERY {
             self.refresh_info();
+        }
+        self.pump_uploads();
+    }
+
+    //------------------------------------------------------------------
+    // 업로드 결과·진행을 패널로 (문서 업로드 설계서 §8)
+    //=> 워커 스레드가 남긴 결과를 uploadDone 으로 넘기고, 올리는 중이면 stderr 마지막 진행 글을 % 로 바꿔 보인다
+    //------------------------------------------------------------------
+    fn pump_uploads(&mut self) {
+        let done: Vec<Value> = std::mem::take(&mut *self.up_done.lock().unwrap());
+        for r in done {
+            self.up_running = self.up_running.saturating_sub(1);
+            self.panel.call("uploadDone", r);
+        }
+        if self.up_running > 0 {
+            if let Some((pct, text)) = self.worker.as_ref().and_then(|w| w.last_stderr()).and_then(|l| upload_progress(&l)) {
+                self.panel.call("uploadProgress", json!({"pct": pct, "text": text}));
+            }
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 워커 데이터 폴더의 uploads 폴더
+    //------------------------------------------------------------------
+    fn upload_root(&self) -> Option<std::path::PathBuf> {
+        Some(std::path::Path::new(&self.data_home()?).join("uploads"))
+    }
+
+    //------------------------------------------------------------------
+    // 대화의 업로드 폴더 지우기 — 모델이 내려가 있어도 지워진다(평범한 파일). 못 지우면 다음 시작 때 정리
+    //------------------------------------------------------------------
+    fn delete_uploads(&self, conv: &str) {
+        if let (Some(root), Some(sid)) = (self.upload_root(), upload_safe_id(conv)) {
+            let d = root.join(sid);
+            if d.is_dir() {
+                match std::fs::remove_dir_all(&d) {
+                    Ok(_) => crate::info!("panel", "업로드 문서를 지웠다: {}", d.display()),
+                    Err(e) => crate::warn!("panel", "업로드 폴더를 지우지 못했다(다음 시작 때 다시): {} ({})", d.display(), e),
+                }
+            }
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 주인 없는 업로드 폴더 정리 — 기록에 없는 대화 id 폴더(시작할 때 · 기록이 바뀔 때)
+    //------------------------------------------------------------------
+    fn gc_uploads(&self) {
+        let root = match self.upload_root() {
+            Some(r) if r.is_dir() => r,
+            _ => return,
+        };
+        let keep: std::collections::HashSet<String> = self.history.iter()
+            .filter_map(|c| c["id"].as_str().and_then(upload_safe_id)).collect();
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if e.path().is_dir() && !keep.contains(&name) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                    crate::info!("panel", "주인 없는 업로드 폴더를 지웠다: {}", name);
+                }
+            }
+        }
+    }
+
+    //------------------------------------------------------------------
+    // [+] — 파일 고르기 · 한도 확인 · 워커에 /upload 맡기기 (문서 업로드 설계서 §4·§10)
+    //   conv = 패널이 정한 대화 id · have = 이미 올린 문서 수
+    //------------------------------------------------------------------
+    fn upload_pick(&mut self, conv: &str, have: usize) {
+        let w = match &self.worker {
+            Some(w) => w.clone(),
+            None => {
+                self.panel.call("uploadQueued", json!([]));
+                self.panel.show_error(&self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into()));
+                return;
+            }
+        };
+        if w.availability() == "up" && !w.knows("upload") {
+            self.panel.call("uploadQueued", json!([]));
+            self.panel.set_state("이 SimpleRAG 는 문서 업로드를 모릅니다 — 새로 빌드한 simplerag 가 필요합니다");
+            return;
+        }
+        let picked = rfd::FileDialog::new().set_title("질문할 문서 고르기 (여러 개 가능)")
+            .add_filter("문서", UPLOAD_EXTS).pick_files().unwrap_or_default();
+        let mut list = vec![];
+        let mut n = have;
+        for p in picked {
+            let path = p.to_string_lossy().into_owned();
+            let name = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let ext = p.extension().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            let why = if !UPLOAD_EXTS.contains(&ext.as_str()) {
+                Some("지원하지 않는 형식입니다".to_string())
+            } else if size > UPLOAD_MAX_MB * 1024 * 1024 {
+                Some(format!("{}MB 를 넘습니다 — 인덱싱 폴더에 넣어 쓰세요", UPLOAD_MAX_MB))
+            } else if n >= UPLOAD_MAX_FILES {
+                Some(format!("대화 하나에 {}개까지 올릴 수 있습니다", UPLOAD_MAX_FILES))
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                list.push(json!({"name": name, "ok": false, "why": why}));
+                continue;
+            }
+            n += 1;
+            list.push(json!({"name": name, "ok": true}));
+            // 워커가 내려가 있으면 올린다 — 명령은 준비된 뒤 차례로 보내진다(질문이 언제나 먼저)
+            w.start();
+            w.ensure_started();
+            let done = self.up_done.clone();
+            let nm = name.clone();
+            // ASCII JSON — cp949 로 못 쓰는 글자가 든 파일 이름도 깨지지 않게
+            w.command(format!("/upload {}", worker::ascii_json(&json!({"conv": conv, "path": path}))),
+                Box::new(move |mut r: Value| {
+                    if r.get("name").is_none() {
+                        r["name"] = json!(nm);
+                    }
+                    done.lock().unwrap().push(r);
+                }));
+            self.up_running += 1;
+            crate::info!("panel", "업로드 맡김: {} (대화 {})", name, conv);
+        }
+        self.panel.call("uploadQueued", Value::Array(list));
+    }
+
+    //------------------------------------------------------------------
+    // 첨부 칩 [×] — 워커에 /upload-remove (모델이 내려가 있으면 올린 뒤 처리)
+    //------------------------------------------------------------------
+    fn upload_remove(&mut self, conv: &str, name: &str) {
+        if let Some(w) = &self.worker {
+            w.start();
+            w.ensure_started();
+            let done = self.up_done.clone();
+            w.command(format!("/upload-remove {}", worker::ascii_json(&json!({"conv": conv, "name": name}))), Box::new(move |r: Value| done.lock().unwrap().push(r)));
+            self.up_running += 1;
         }
     }
 
@@ -264,7 +437,7 @@ impl App {
         if self.panel.visible {
             self.panel.show_error(msg);
         } else {
-            self.tray.notify("RAGSearchBox-rs", msg);
+            self.tray.notify("MoAI-S", msg);
         }
     }
 
@@ -280,7 +453,7 @@ impl App {
             }
             _ => {
                 crate::warn!("app", "감시 알림({}): {}", kind, msg);
-                self.tray.notify("RAGSearchBox-rs", msg);
+                self.tray.notify("MoAI-S", msg);
             }
         }
     }
@@ -340,8 +513,42 @@ impl App {
     fn data_home(&self) -> Option<String> {
         match std::env::var("SIMPLERAG_HOME") {
             Ok(h) if !h.is_empty() => Some(h),
-            _ => Some(std::path::Path::new(self.cmd.last()?).parent()?.to_string_lossy().into_owned()),
+            _ => self.app_dir(),
         }
+    }
+
+    //------------------------------------------------------------------
+    // 워커 프로그램 폴더(config.yaml · models 가 있는 곳) — 워커 exe 옆
+    //------------------------------------------------------------------
+    fn app_dir(&self) -> Option<String> {
+        Some(std::path::Path::new(self.cmd.last()?).parent()?.to_string_lossy().into_owned())
+    }
+
+    //------------------------------------------------------------------
+    // 설정 창 [정밀 모드]·[이어서 묻기] 체크 — config.yaml 의 generation 한 줄을 바꾸고 모델을 다시 올린다
+    //   (Python _set_flag 와 같다). 워커는 시작할 때만 config.yaml 을 읽는다.
+    //   올라가 있으면 내렸다 다시 올리고, 내려가 있으면 다음 질문 때 새 설정으로 올라간다
+    //   key = precision | multiturn · label = 안내 글의 이름 · wait = 다시 올리는 데 걸리는 시간 안내
+    //------------------------------------------------------------------
+    fn set_flag(&mut self, key: &str, label: &str, on: bool, wait: &str) -> String {
+        let (home, app) = (self.data_home(), self.app_dir());
+        let cfgp = precision::config_path(home.as_deref(), app.as_deref());
+        let mut msg = match precision::save(cfgp.as_deref(), on, key, label) {
+            Ok(m) => m,
+            Err(e) => return e,
+        };
+        crate::info!("app", "{} {}: {}", label, if on { "켬" } else { "끔" }, msg);
+        if let Some(w) = &self.worker {
+            if w.availability() != "down" {
+                w.unload(&format!("{} 변경", label));
+                w.start();
+                w.ensure_started();
+                msg += &format!(" — 모델을 다시 올리는 중입니다 ({})", wait);
+            } else {
+                msg += " — 다음 질문 때 새 설정으로 모델을 올립니다";
+            }
+        }
+        msg
     }
 
     //------------------------------------------------------------------
@@ -414,18 +621,47 @@ impl App {
                     None => return,
                 };
                 let folder = self.search_folder(self.panel.folder.clone().as_deref());
-                crate::info!("app", "패널 질문: {:?} (범위 {:?})", q.chars().take(40).collect::<String>(), folder);
+                // 같은 대화의 바로 앞 질문(멀티턴) — 워커 설정(generation.multiturn)이 켜져 있으면 검색에 이어 붙인다
+                let prev = m["prev"].as_str().and_then(one_line);
+                // 대화 id · 올린 문서가 있는 대화인가 — 있으면 워커는 그 문서에서만 찾는다(문서 업로드)
+                let conv = m["conv"].as_str().map(|s| s.to_string());
+                let uploads = m["uploads"].as_bool().unwrap_or(false);
+                crate::info!("app", "패널 질문: {:?} (범위 {:?}{})", q.chars().take(40).collect::<String>(), folder,
+                             if uploads { " · 업로드 문서" } else { "" });
                 match &self.worker {
-                    Some(w) => w.ask(&q, folder),
+                    Some(w) => w.ask(&q, folder, prev, conv, uploads),
                     None => {
                         let e = self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into());
                         self.panel.show_error(&e);
                     }
                 }
             }
+            "upload_pick" => {
+                let conv = m["conv"].as_str().unwrap_or("").to_string();
+                self.upload_pick(&conv, m["have"].as_u64().unwrap_or(0) as usize);
+            }
+            "upload_remove" => {
+                let (conv, name) = (m["conv"].as_str().unwrap_or("").to_string(), m["name"].as_str().unwrap_or("").to_string());
+                self.upload_remove(&conv, &name);
+            }
+            "delete_conv" => {
+                // 대화 한 건 지우기 — 기록에서 빼고 업로드 폴더도 지운다(문서 업로드 설계서 §9)
+                let id = m["id"].as_str().unwrap_or("").to_string();
+                self.history.retain(|c| c["id"].as_str() != Some(id.as_str()));
+                history::save(&self.history_path, &self.history);
+                self.delete_uploads(&id);
+                let h = self.history_list();
+                self.panel.call("setHistory", h);
+                crate::info!("panel", "대화 한 건을 지웠다: {}", id);
+            }
             "save" => {
                 let mut conv = m["conv"].clone();
+                let before: Vec<String> = self.history.iter().filter_map(|c| c["id"].as_str().map(String::from)).collect();
                 history::touch(&mut self.history, &mut conv);
+                // 10개 한도로 밀려난 대화의 업로드 폴더도 지운다
+                for id in before.iter().filter(|id| !self.history.iter().any(|c| c["id"].as_str() == Some(id.as_str()))) {
+                    self.delete_uploads(id);
+                }
                 if !history::save(&self.history_path, &self.history) {
                     crate::warn!("panel", "대화 기록을 저장하지 못했다: {}", self.history_path);
                 }
@@ -435,6 +671,10 @@ impl App {
             "clear_history" => {
                 self.history.clear();
                 history::save(&self.history_path, &self.history);
+                // 올린 문서도 모두 지운다
+                if let Some(root) = self.upload_root() {
+                    let _ = std::fs::remove_dir_all(root);
+                }
                 self.panel.call("setHistory", json!([]));
                 crate::info!("panel", "대화 기록을 모두 지웠다");
             }
@@ -478,7 +718,7 @@ impl App {
             "unload" => {
                 if let Some(w) = &self.worker {
                     w.unload("트레이 메뉴");
-                    self.tray.notify("RAGSearchBox-rs", "모델을 내렸습니다 — 이제 index 를 실행할 수 있습니다");
+                    self.tray.notify("MoAI-S", "모델을 내렸습니다 — 이제 index 를 실행할 수 있습니다");
                 }
             }
             "reload" => {
@@ -508,11 +748,11 @@ impl App {
         }
         let first = self.scope.lock().unwrap().active.first().cloned();
         match first {
-            None => self.tray.notify("RAGSearchBox-rs", SCOPE_WARN),
+            None => self.tray.notify("MoAI-S", SCOPE_WARN),
             Some(t) => {
                 crate::info!("app", "화면 열기: 범위 폴더를 탐색기로 연다 — {}", t);
                 if win::open_explorer(&t).is_err() {
-                    self.tray.notify("RAGSearchBox-rs", &format!("탐색기를 열지 못했습니다: {}", t));
+                    self.tray.notify("MoAI-S", &format!("탐색기를 열지 못했습니다: {}", t));
                 }
             }
         }
@@ -547,18 +787,18 @@ impl App {
             return;
         }
         crate::info!("app", "자동 인덱싱 알림({}): {}", kind, msg);
-        self.tray.notify("RAGSearchBox-rs", msg);
+        self.tray.notify("MoAI-S", msg);
         self.update_tooltip();
     }
 
     fn on_tray_autoindex(&mut self, name: &str) {
         if self.jobs.is_none() {
-            self.tray.notify("RAGSearchBox-rs", "자동 인덱싱할 폴더가 없습니다 — [Scope] Folders 를 지정하세요");
+            self.tray.notify("MoAI-S", "자동 인덱싱할 폴더가 없습니다 — [Scope] Folders 를 지정하세요");
             return;
         }
         if name == "index_now" {
             let n = self.jobs.as_mut().unwrap().run_now();
-            self.tray.notify("RAGSearchBox-rs", &format!("폴더 {}개를 인덱싱합니다", n));
+            self.tray.notify("MoAI-S", &format!("폴더 {}개를 인덱싱합니다", n));
         } else {
             let on = !self.jobs.as_ref().unwrap().enabled;
             self.jobs.as_mut().unwrap().set_enabled(on);
@@ -570,7 +810,7 @@ impl App {
             if let Err(e) = settings::save_ini_value(&self.s.ini_path, "AutoIndex", "Enabled", if on { "1" } else { "0" }) {
                 crate::warn!("app", "자동 인덱싱 설정을 저장하지 못했다: {}", e);
             }
-            self.tray.notify("RAGSearchBox-rs", &format!("자동 인덱싱을 {}", if on { "켰습니다" } else { "껐습니다" }));
+            self.tray.notify("MoAI-S", &format!("자동 인덱싱을 {}", if on { "켰습니다" } else { "껐습니다" }));
         }
         self.update_tooltip();
     }
@@ -613,7 +853,7 @@ impl App {
                 text = format!("{} · {}", text, extra);
             }
         }
-        let tip = format!("RAGSearchBox-rs — {}", text);
+        let tip = format!("MoAI-S — {}", text);
         if tip != self.last_tooltip {
             self.last_tooltip = tip.clone();
             self.tray.set_tooltip(&tip);
@@ -635,7 +875,7 @@ impl App {
                 }
             }
         };
-        self.tray.set_title(&format!("RAGSearchBox-rs — {}", label));
+        self.tray.set_title(&format!("MoAI-S — {}", label));
         let (ai, now) = match &self.jobs {
             Some(j) => (j.enabled, j.has_waiting()),
             None => (false, false),
@@ -668,6 +908,8 @@ impl App {
         if let Some(w) = &self.worker {
             let up = w.availability() != "down";
             info["model_up"] = json!(up);
+            // 올리는 중이면 경과 초·진행 글 — 설정 창이 진행 막대를 보인다
+            info["starting"] = w.starting().unwrap_or(Value::Null);
             if up {
                 for (k, v) in w.info().as_object().unwrap() {
                     info[k] = v.clone();
@@ -675,6 +917,16 @@ impl App {
             }
         }
         info["autorun"] = json!(win::autorun_value().is_some());
+        // 정밀 모드 — config.yaml 을 못 찾으면 null(체크를 잠근다)
+        let (home, app) = (self.data_home(), self.app_dir());
+        let cfgp = precision::config_path(home.as_deref(), app.as_deref());
+        info["precision"] = cfgp.as_deref().map(|p| json!(precision::read(p, "precision"))).unwrap_or(Value::Null);
+        // 멀티턴 — 줄이 없으면 기본 켬
+        info["multiturn"] = cfgp.as_deref().map(|p| json!(precision::read(p, "multiturn"))).unwrap_or(Value::Null);
+        info["multiturn_note"] = json!([precision::MULTITURN_NOTE, self.info.mt_msg.as_str()].iter()
+            .filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n"));
+        info["precision_note"] = json!(precision::note(precision::model_present(home.as_deref(), app.as_deref()),
+                                                       cfgp.is_some(), &self.info.prec_msg));
         let folders = match &self.jobs {
             Some(j) => j.roots.clone(),
             None => {
@@ -816,6 +1068,9 @@ impl App {
                     match win::autorun_enable() { Ok(_) => "로그인할 때 자동으로 시작합니다".into(), Err(e) => e }
                 };
             }
+            "precision" => self.info.prec_msg = self.set_flag("precision", "정밀 모드", m["on"].as_bool().unwrap_or(false),
+                "4B 는 20초 안팎 · 이 PC 에서 4B 를 처음 올리면 CPU·iGPU 측정으로 1~2분"),
+            "multiturn" => self.info.mt_msg = self.set_flag("multiturn", "이어서 묻기", m["on"].as_bool().unwrap_or(true), "10초 안팎"),
             "add_folder" => {
                 if let Some(p) = rfd::FileDialog::new().set_title("인덱싱할 폴더 고르기").pick_folder() {
                     let p = p.to_string_lossy().into_owned();
@@ -969,7 +1224,7 @@ fn autorun_cli(action: &str) -> i32 {
                 let _ = writeln!(f, "{}", text);
             }
         } else if modal {
-            rfd::MessageDialog::new().set_title("RAGSearchBox-rs").set_description(text).show();
+            rfd::MessageDialog::new().set_title("MoAI-S").set_description(text).show();
         }
     };
     match action.to_lowercase().as_str() {
@@ -1035,7 +1290,7 @@ fn main() {
     let ctx: &'static mut WebContext = Box::leak(Box::new(WebContext::new(Some(data))));
 
     // 패널 창
-    let pwin = WindowBuilder::new().with_title("RAGSearchBox-rs").with_visible(false).with_window_icon(icon.clone())
+    let pwin = WindowBuilder::new().with_title("MoAI-S").with_visible(false).with_window_icon(icon.clone())
         .with_inner_size(tao::dpi::PhysicalSize::new(s.win_width as u32, 700)).build(&event_loop).expect("패널 창");
     let font = font_px(s.font_size);
     let moai = {
@@ -1049,11 +1304,11 @@ fn main() {
         .build(&pwin).expect("패널 화면");
 
     // 설정 창
-    let iwin = WindowBuilder::new().with_title("RAGSearchBox-rs 설정").with_visible(false).with_window_icon(icon)
-        .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(600.0, 640.0)).build(&event_loop).expect("설정 창");
+    let iwin = WindowBuilder::new().with_title("MoAI-S 설정").with_visible(false).with_window_icon(icon)
+        .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(760.0, 800.0)).build(&event_loop).expect("설정 창");
     let p2 = proxy.clone();
     let iview = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
-        .with_html(INFO_HTML.replace("__FONT_PX__", &font))
+        .with_html(INFO_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai))
         .with_ipc_handler(move |req| post(&p2, UserEvent::InfoIpc(req.into_body())))
         .build(&iwin).expect("설정 화면");
 
@@ -1081,7 +1336,8 @@ fn main() {
     let mut app = App {
         panel: Panel::new(pwin, pview, &s),
         info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
-                       syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)) },
+                       syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                       prec_msg: String::new(), mt_msg: String::new() },
         history: history::load(&history_path),
         history_path,
         s,
@@ -1101,6 +1357,8 @@ fn main() {
         t_info: Instant::now(),
         quitting: false,
         selftest_done: false,
+        up_done: Arc::new(Mutex::new(vec![])),
+        up_running: 0,
     };
     app.jobs = app.make_jobs();
     app.start();
