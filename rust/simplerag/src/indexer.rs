@@ -226,7 +226,7 @@ fn val_eq(a: Option<&Value>, b: Option<&Value>) -> bool {
         (x, y) => x == y,
     }
 }
-fn params_eq(a: &Value, b: &Value) -> bool {
+pub fn params_eq(a: &Value, b: &Value) -> bool {
     match (a.as_object(), b.as_object()) {
         (Some(x), Some(y)) => x.len() == y.len() && x.iter().all(|(k, v)| val_eq(Some(v), y.get(k))),
         _ => a == b,
@@ -323,6 +323,24 @@ pub struct SyncResult {
 }
 
 // blocks 엔진으로 한 문서 추출·청킹 → (전체 글자, 표 행 수, 청크 메타)
+//------------------------------------------------------------------
+// 파일 하나를 청크로 (sync_doc 과 같은 추출·청킹) — 업로드 문서(uploads.rs)가 쓴다
+//   돌려줌: [(청크 글, section_id)] — 비면 빈 목록
+//------------------------------------------------------------------
+pub fn extract_chunks(path: &str, name: &str, tok: &crate::tok::Tok) -> Result<Vec<(String, Option<i64>)>, String> {
+    if cfg().extract_engine == "blocks" {
+        let (_text, _rows, metas) = extract_blocks(path, name, tok)?;
+        return Ok(metas.into_iter().filter(|m| !m.text.is_empty()).map(|m| (m.text, m.section_id)).collect());
+    }
+    let (text, _rows) = crate::extract::extract_text(path, true)?;
+    let chunks = if cfg().chunk_mode == "structured" {
+        split_structured(&text, tok, Some(pyutil::splitext(name).0), None, None)
+    } else {
+        split_text(&text, tok, None, None)
+    };
+    Ok(chunks.into_iter().filter(|c| !c.is_empty()).map(|c| (c, None)).collect())
+}
+
 fn extract_blocks(path: &str, name: &str, tok: &crate::tok::Tok) -> Result<(String, usize, Vec<crate::chunk::ChunkMeta>), String> {
     let title = pyutil::splitext(name).0.to_string();
     let mut doc = crate::docmodel::extract_document(path, Some(&title))?;

@@ -27,5 +27,6 @@ pub mod structure;
 pub mod synonym_suggest;
 pub mod synonyms;
 pub mod tok;
+pub mod uploads;
 pub mod xlsdate;
 pub mod xmldom;

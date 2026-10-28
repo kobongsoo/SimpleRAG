@@ -115,6 +115,57 @@ def synonym_extra(picked, first, timing, top_k):
     return first
 
 
+# 청크 글 앞의 "[문서 > 절]" 머리 한 줄 — 이웃을 이어 붙일 때 머리가 겹쳐 찍히지 않게 뗀다
+_HEAD = re.compile(r"^\[[^\]\n]*\]\n")
+
+
+#------------------------------------------------------------------
+# 정밀 모드 — 근거에 이웃 청크 이어 붙이기 (코드수정 설계서 §7 ③ C4)
+#=> 답이 다음 청크로 잘려 넘어간 근거를 채운다. 근거마다 같은 문서의 바로 앞·뒤 청크(±1) 가운데
+#   리랭커 후보(pool) 안에 든 것만 붙인다 — 질문과 상관있다고 이미 뽑힌 것만 붙여 근거가 덜 길어진다
+#   (C1~C5 다섯 조건 중 토큰당 가장 나음: 정답 발췌 63 → 73, 근거 340 → 458 토큰).
+#    1) 설정(generation.precision)이 꺼졌으면 그대로 돌려준다
+#    2) 근거마다 (문서, 청크 번호 ±1) 를 후보에서 찾는다. 이미 근거로 든 청크는 붙이지 않는다
+#    3) 앞 이웃은 머리 줄 뒤·본문 앞에, 뒤 이웃은 본문 뒤에 머리 줄을 떼고 잇는다
+#
+# -in: picked = 고른 근거 목록 [{text, doc_path, chunk_idx, ...}]
+# -in: pool   = 리랭커 후보 전체(같은 모양)
+#
+# -out: (새 근거 목록, 붙인 이웃 수) — 원래 dict 는 바꾸지 않고 text 만 바꾼 사본을 쓴다
+# -out: error = 없음
+#------------------------------------------------------------------
+def attach_neighbors(picked, pool):
+    if not config.PRECISION:
+        return picked, 0
+    by = {(c.get("doc_path"), c.get("chunk_idx")): c for c in pool}
+    out, n = [], 0
+    for c in picked:
+        idx, path = c.get("chunk_idx"), c.get("doc_path")
+        if idx is None or not path:
+            out.append(c)
+            continue
+        # 같은 문서에서 이미 근거로 든 청크는 다시 넣으면 같은 글이 두 번 들어간다
+        used = {x.get("chunk_idx") for x in picked if x.get("doc_path") == path}
+        before, after = [], []
+        for j in (idx - 1, idx + 1):
+            p = by.get((path, j))
+            if p is None or j in used:
+                continue
+            (before if j < idx else after).append(_HEAD.sub("", p.get("text", ""), count=1))
+        if not before and not after:
+            out.append(c)
+            continue
+        text = c["text"]
+        if before:
+            head = _HEAD.match(text)
+            text = (head.group(0) if head else "") + "\n".join(before) + "\n" + _HEAD.sub("", text, count=1)
+        if after:
+            text = text + "\n" + "\n".join(after)
+        n += len(before) + len(after)
+        out.append(dict(c, text=text))
+    return out, n
+
+
 #------------------------------------------------------------------
 # RRF 융합
 #=> 여러 순위 목록을 순위 기반 점수로 합친다.
@@ -264,17 +315,22 @@ class HybridRetriever:
     # -in: top_k       = 최종 반환 개수(None 이면 설정값)
     # -in: first_stage = 각 검색기 1차 후보 수(None 이면 설정값)
     # -in: folder      = 이 폴더(하위 포함) 문서의 청크만 근거로 쓴다. None 이면 인덱스 전체
+    # -in: corpus      = 업로드 코퍼스(index/uploads.UploadCorpus). 주면 인덱싱 폴더 인덱스는 보지 않고
+    #                    그 대화에 올린 문서에서만 찾는다(문서 업로드 설계서 §6). None 이면 지금과 같다
     #
     # -out: (chunks, timing) — timing 에 rerank_ms(리랭킹 시) 또는 rerank_error 추가.
     #        폴더를 주면 scope_docs(그 폴더의 인덱싱된 문서 수)·scope_via 도 담는다
     # -out: error = 검색 구성요소 예외는 전파, 리랭커 예외는 삼키고 RRF 순서로 폴백
     #------------------------------------------------------------------
-    def search(self, query, top_k=None, first_stage=None, folder=None):
+    def search(self, query, top_k=None, first_stage=None, folder=None, corpus=None):
         import time
 
         top_k = top_k or config.TOP_K
         # 폴더가 없으면 예전과 똑같이 부른다(기존 시험의 가짜 _search 가 folder 를 모른다)
         extra = {"folder": folder} if folder else {}
+        if corpus is not None:
+            # 업로드 문서만 — 폴더 한정은 의미가 없다
+            extra = {"corpus": corpus}
         if self.reranker is None:
             return self._search(query, top_k, first_stage, **extra)
 
@@ -319,6 +375,10 @@ class HybridRetriever:
         if extra is not None:
             picked = picked + [extra]
             timing["synonym_extra"] = True
+        # 정밀 모드면 근거마다 후보 안의 앞뒤 이웃 청크를 잇는다(4B 와 함께 골든 100문항 50 → 59)
+        picked, n_nb = attach_neighbors(picked, chunks)
+        if n_nb:
+            timing["neighbors"] = n_nb
         return picked, timing
 
     #------------------------------------------------------------------
@@ -329,13 +389,15 @@ class HybridRetriever:
     # -in: query       = 사용자 질문
     # -in: top_k       = 최종 반환 개수(None 이면 설정값)
     # -in: first_stage = 두 검색기 공통 1차 후보 수(None 이면 설정값 DENSE_TOP_K / BM25_TOP_K)
+    # -in: folder      = 폴더 한정 검색 폴더(None 이면 전체)
+    # -in: corpus      = 업로드 코퍼스 — 주면 Qdrant·BM25 캐시 대신 그 대화의 청크로 찾는다(전수 내적 + 메모리 BM25)
     #
     # -out: (chunks, timing)
     #        chunks = [{id, text, doc_name, doc_path, chunk_idx}, ...] 순위 순
     #        timing = {embed_ms, dense_ms, bm25_ms, fuse_ms, total_ms}
-    #                 (+ 폴더를 주면 scope_docs, scope_via)
+    #                 (+ 폴더를 주면 scope_docs, scope_via · 업로드면 uploads=올린 문서 수)
     #------------------------------------------------------------------
-    def _search(self, query, top_k=None, first_stage=None, folder=None):
+    def _search(self, query, top_k=None, first_stage=None, folder=None, corpus=None):
         import time
 
         top_k = top_k or config.TOP_K
@@ -345,7 +407,7 @@ class HybridRetriever:
 
         t0 = time.perf_counter()
         # 폴더 한정이면 먼저 그 폴더에 문서가 있는지 본다 — 없으면 임베딩도 하지 않는다
-        scope = self._scope(folder) if folder else None
+        scope = self._scope(folder) if (folder and corpus is None) else None
         if scope is not None and scope["n_docs"] == 0:
             ms = round((time.perf_counter() - t0) * 1000, 1)
             return [], {"embed_ms": 0.0, "dense_ms": 0.0, "bm25_ms": 0.0, "fuse_ms": 0.0,
@@ -353,7 +415,10 @@ class HybridRetriever:
         qv = self.embedder.embed_query(query)
         t1 = time.perf_counter()
 
-        if scope is None:
+        if corpus is not None:
+            # 업로드 문서 — 대화의 청크 벡터 전부와 내적(수백 청크라 1ms 안팎)
+            dense = corpus.search(qv, dense_k)
+        elif scope is None:
             dense = self.store.search(qv, dense_k)
         elif scope["via"] == "matrix":
             # 벡터 한 벌 + 폴더 표시 — 본문은 아래에서 후보 것만 가져온다
@@ -368,7 +433,8 @@ class HybridRetriever:
         bm_extra = {"allow_ids": scope["allow_ids"]} if scope else {}
         # 동의어 사전으로 BM25 질의만 넓힌다 — 일상어("할아버지")에 문서 용어("조부모")를 덧붙인다
         bm_query, syn_pairs = synonyms.expand(query)
-        bm_ids = (self.bm25.search(bm_query, self.embedder.tokenizer, bm25_k, **bm_extra)
+        bm25 = corpus.bm25 if corpus is not None else self.bm25
+        bm_ids = (bm25.search(bm_query, self.embedder.tokenizer, bm25_k, **bm_extra)
                   if bm25_k > 0 else [])
         t3 = time.perf_counter()
 
@@ -377,7 +443,9 @@ class HybridRetriever:
 
         # 융합 목록 전체의 payload 를 한 번에 묶어 가져온다(왕복을 늘리지 않게).
         missing = [pid for pid in fused if pid not in payloads]
-        if missing:
+        if missing and corpus is not None:
+            payloads.update({pid: corpus.payloads.get(pid) for pid in missing})
+        elif missing:
             payloads.update(self._fetch_payloads(missing))
         # ⚠️ payload 가 없는 id 는 버린다. 문서를 지우거나 바꾼 뒤 BM25 를 아직 다시
         #    만들지 않았으면 BM25 가 이미 없는 점을 돌려준다 — 그대로 두면 본문 없는
@@ -415,6 +483,8 @@ class HybridRetriever:
         if scope is not None:
             timing["scope_docs"] = scope["n_docs"]
             timing["scope_via"] = scope["via"]
+        if corpus is not None:
+            timing["uploads"] = corpus.n_files
         return chunks, timing
 
     #------------------------------------------------------------------

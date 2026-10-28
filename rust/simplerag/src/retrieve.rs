@@ -75,6 +75,58 @@ pub fn synonym_extra(picked: &[Chunk], first: &Chunk, timing: &Timing, top_k: us
     if dup { None } else { Some(first.clone()) }
 }
 
+// 청크 글 앞의 "[문서 > 절]" 머리 한 줄 — 이웃을 이어 붙일 때 머리가 겹쳐 찍히지 않게 뗀다
+static HEAD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[[^\]\n]*\]\n").unwrap());
+
+//------------------------------------------------------------------
+// 정밀 모드 — 근거에 이웃 청크 이어 붙이기 (Python hybrid.attach_neighbors 와 같다)
+//=> 근거마다 같은 문서의 바로 앞·뒤 청크(±1) 가운데 리랭커 후보(pool) 안에 든 것만 붙인다
+//   — 답이 다음 청크로 잘린 근거를 채운다(코드수정 설계서 §7 ③ C4: 정답 발췌 63 → 73).
+//    1) 설정(generation.precision)이 꺼졌으면 그대로 · 2) 이미 근거로 든 청크는 붙이지 않는다
+//    3) 앞 이웃은 머리 줄 뒤·본문 앞에, 뒤 이웃은 본문 뒤에 머리 줄을 떼고 잇는다
+//   돌려줌: (새 근거 목록, 붙인 이웃 수)
+//------------------------------------------------------------------
+pub fn attach_neighbors(picked: Vec<Chunk>, pool: &[Chunk]) -> (Vec<Chunk>, usize) {
+    if !cfg().precision {
+        return (picked, 0);
+    }
+    let by: HashMap<(&str, i64), &Chunk> = pool.iter().map(|c| ((c.doc_path.as_str(), c.chunk_idx), c)).collect();
+    let mut n = 0;
+    let mut out = Vec::with_capacity(picked.len());
+    for c in &picked {
+        if c.doc_path.is_empty() {
+            out.push(c.clone());
+            continue;
+        }
+        // 같은 문서에서 이미 근거로 든 청크는 다시 넣으면 같은 글이 두 번 들어간다
+        let used: HashSet<i64> = picked.iter().filter(|x| x.doc_path == c.doc_path).map(|x| x.chunk_idx).collect();
+        let (mut before, mut after) = (vec![], vec![]);
+        for j in [c.chunk_idx - 1, c.chunk_idx + 1] {
+            let Some(p) = by.get(&(c.doc_path.as_str(), j)) else { continue };
+            if used.contains(&j) {
+                continue;
+            }
+            let body = HEAD.replacen(&p.text, 1, "").into_owned();
+            if j < c.chunk_idx { before.push(body) } else { after.push(body) }
+        }
+        if before.is_empty() && after.is_empty() {
+            out.push(c.clone());
+            continue;
+        }
+        let mut text = c.text.clone();
+        if !before.is_empty() {
+            let head = HEAD.find(&text).map(|m| m.as_str().to_string()).unwrap_or_default();
+            text = format!("{}{}\n{}", head, before.join("\n"), HEAD.replacen(&text, 1, ""));
+        }
+        if !after.is_empty() {
+            text = format!("{}\n{}", text, after.join("\n"));
+        }
+        n += before.len() + after.len();
+        out.push(Chunk { text, ..c.clone() });
+    }
+    (out, n)
+}
+
 //------------------------------------------------------------------
 // 순서대로 고유한 것 top_k 개(모자라면 사본으로 채움)
 //------------------------------------------------------------------
@@ -201,14 +253,25 @@ impl Retriever {
     // 검색 (핵심) — 1단계 RRF + (켜져 있으면) 리랭킹 + 관련도 판정
     //------------------------------------------------------------------
     pub fn search(&self, query: &str, top_k: Option<usize>, folder: Option<&str>) -> Result<(Vec<Chunk>, Timing), String> {
+        self.search_with(query, top_k, folder, None)
+    }
+
+    //------------------------------------------------------------------
+    // 검색 — corpus 를 주면 인덱싱 폴더 인덱스는 보지 않고 그 대화에 올린 문서에서만 찾는다
+    //   (Python HybridRetriever.search 의 corpus 와 같다 · 문서 업로드 설계서 §6)
+    //------------------------------------------------------------------
+    pub fn search_with(&self, query: &str, top_k: Option<usize>, folder: Option<&str>,
+                       corpus: Option<&crate::uploads::UploadCorpus>) -> Result<(Vec<Chunk>, Timing), String> {
         let top_k = top_k.filter(|k| *k > 0).unwrap_or(cfg().top_k as usize);
+        // 업로드 문서만 — 폴더 한정은 의미가 없다
+        let folder = if corpus.is_some() { None } else { folder };
         let rr = self.reranker.lock().unwrap().clone();
         let rr = match rr {
-            None => return self.search_rrf(query, top_k, folder),
+            None => return self.search_rrf_with(query, top_k, folder, corpus),
             Some(r) => r,
         };
         let pool = top_k.max(cfg().rerank_pool as usize);
-        let (chunks, mut timing) = self.search_rrf(query, pool, folder)?;
+        let (chunks, mut timing) = self.search_rrf_with(query, pool, folder, corpus)?;
         let gate = relevance_min();
         if chunks.is_empty() || (chunks.len() <= top_k && gate.is_none()) {
             return Ok((chunks, timing));
@@ -248,6 +311,11 @@ impl Retriever {
             picked.push(extra);
             timing.insert("synonym_extra".into(), json!(true));
         }
+        // 정밀 모드면 근거마다 후보 안의 앞뒤 이웃 청크를 잇는다(4B 와 함께 골든 100문항 50 → 59)
+        let (picked, n_nb) = attach_neighbors(picked, &chunks);
+        if n_nb > 0 {
+            timing.insert("neighbors".into(), json!(n_nb));
+        }
         Ok((picked, timing))
     }
 
@@ -255,6 +323,14 @@ impl Retriever {
     // 1단계 — 질의 임베딩 → dense·BM25 후보 → RRF → 사본 거르기 → top_k
     //------------------------------------------------------------------
     pub fn search_rrf(&self, query: &str, top_k: usize, folder: Option<&str>) -> Result<(Vec<Chunk>, Timing), String> {
+        self.search_rrf_with(query, top_k, folder, None)
+    }
+
+    //------------------------------------------------------------------
+    // 1단계 — corpus 를 주면 sqlite 벡터·BM25 캐시 대신 그 대화의 청크로(전수 내적 + 메모리 BM25)
+    //------------------------------------------------------------------
+    pub fn search_rrf_with(&self, query: &str, top_k: usize, folder: Option<&str>,
+                           corpus: Option<&crate::uploads::UploadCorpus>) -> Result<(Vec<Chunk>, Timing), String> {
         let dense_k = cfg().dense_top_k as usize;
         let bm25_k = cfg().bm25_top_k as usize;
         let t0 = Instant::now();
@@ -277,14 +353,19 @@ impl Retriever {
         let qv = self.embedder.embed_query(query)?;
         let t1 = Instant::now();
         let allow = scope.as_ref().map(|s| &s.1);
-        let dense = self.store.search(&qv, dense_k, allow)?;
+        // 업로드 문서면 대화의 청크 벡터 전부와 내적(수백 청크라 1ms 안팎)
+        let dense = match corpus {
+            Some(c) => c.search(&qv, dense_k),
+            None => self.store.search(&qv, dense_k, allow)?,
+        };
         let dense_ids: Vec<i64> = dense.iter().map(|d| d.0).collect();
         let mut payloads: HashMap<i64, Payload> = dense.into_iter().map(|(i, _, p)| (i, p)).collect();
         let t2 = Instant::now();
         let tok = self.embedder.tokenizer()?;
         // 동의어 사전으로 BM25 질의만 넓힌다 — 일상어("할아버지")에 문서 용어("조부모")를 덧붙인다
         let (bm_query, syn_pairs) = crate::synonyms::expand(query);
-        let bm_ids = if bm25_k > 0 { self.bm25.search(&bm_query, &tok, bm25_k, allow) } else { vec![] };
+        let bm25 = corpus.map(|c| &c.bm25).unwrap_or(&self.bm25);
+        let bm_ids = if bm25_k > 0 { bm25.search(&bm_query, &tok, bm25_k, allow) } else { vec![] };
         let t3 = Instant::now();
         let mut lists = vec![dense_ids];
         if !bm_ids.is_empty() {
@@ -293,7 +374,10 @@ impl Retriever {
         let fused: Vec<i64> = rrf(&lists).into_iter().map(|(i, _)| i).collect();
         let missing: Vec<i64> = fused.iter().copied().filter(|i| !payloads.contains_key(i)).collect();
         if !missing.is_empty() {
-            payloads.extend(self.store.payloads(&missing)?);
+            match corpus {
+                Some(c) => payloads.extend(missing.iter().filter_map(|i| c.payloads.get(i).map(|p| (*i, p.clone())))),
+                None => payloads.extend(self.store.payloads(&missing)?),
+            }
         }
         // payload 가 없는 id(이미 지운 점을 BM25 가 돌려준 것)는 버린다
         let fused: Vec<i64> = fused.into_iter().filter(|i| payloads.get(i).map(|p| !p.is_empty()).unwrap_or(false)).collect();
@@ -325,6 +409,9 @@ impl Retriever {
         if let Some((n, _)) = scope {
             timing.insert("scope_docs".into(), json!(n));
             timing.insert("scope_via".into(), json!("matrix"));
+        }
+        if let Some(c) = corpus {
+            timing.insert("uploads".into(), json!(c.n_files));
         }
         Ok((chunks, timing))
     }

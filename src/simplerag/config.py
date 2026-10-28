@@ -319,6 +319,8 @@ GEN_MODELS = {
     # 계획서 2-3 — 한국어 특화 후보(측정용). 파일이 없으면 그 모델을 고를 때만 실패한다.
     "midm-2.0-mini-q4": "Midm-2.0-Mini-Instruct-Q4_K_M.gguf",     # KT, MIT, 2.3B
     "kanana-1.5-2.1b-q4": "kanana-1.5-2.1b-instruct-Q4_K_M.gguf",  # 카카오, Apache-2.0, 2.1B
+    # 정밀 모드(generation.precision) 전용 — 골든 100문항 이웃 청크와 함께 정답 50 → 59, 답 완료 약 2배
+    "qwen3-4b-q4": "Qwen3-4B-Q4_K_M.gguf",
 }
 # 모델별 채팅 형식(generate/chatformat.py). 적지 않은 별칭은 qwen3 로 본다 —
 #   형식이 틀리면 학습 때 본 적 없는 입력이 들어가 품질 비교가 무의미해진다.
@@ -327,6 +329,7 @@ GEN_MODEL_FORMATS = {
     "qwen3-1.7b-q4": "qwen3",
     "midm-2.0-mini-q4": "midm",
     "kanana-1.5-2.1b-q4": "kanana",
+    "qwen3-4b-q4": "qwen3",
 }
 # 정밀 모드(계획서 D8 ③ / REPORT §44): 1.7B 는 506문항 정답 377 → 399(p=0.007),
 #   골든셋 v2 must 57 → 80 이라 기본으로 쓴다. 대신 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).
@@ -344,6 +347,26 @@ if DEFAULT_GEN_MODEL not in GEN_MODELS:
     from .settings import ConfigError as _ConfigError
     raise _ConfigError("SIMPLERAG_GEN_MODEL={!r} — {} 중 하나여야 합니다".format(
         DEFAULT_GEN_MODEL, " | ".join(GEN_MODELS)))
+
+# 정밀 모드(코드수정 설계서 §7 ④) — 켜면 생성 모델을 Qwen3-4B 로 바꾸고, 근거마다 리랭커 후보 안에 있는
+#   앞뒤 이웃 청크를 이어 붙인다(retrieve/hybrid.attach_neighbors). 골든 100문항 정답 50 → 59.
+#   ⚠️ 첫 글자(TTFT) 중앙 2.2 → 7.1초, 답 완료 7.6 → 14.7초 — 기본 끔. 켜면 generation.model 보다 앞선다.
+#   4B 모델 파일이 없으면 경고만 내고 원래 모델로 돈다(이웃 청크는 그대로 붙인다).
+# 멀티턴(코드수정 설계서 §9 · bench/multiturn) — RAGSearchBox 가 /ask 에 앞 질문(prev)을 실어 보내면
+#   검색어에만 앞 질문을 붙이고, 모델에는 "이전 질문 / 지금 질문" 으로 나눠 준다.
+#   따라 묻기 24문항 정답 11 → 15 · 주제 바꿈 8문항 5 → 6, 체감 TTFT 약 +0.2초(1.7B).
+#   1.7B 에게 질문을 다시 쓰게 하는 방식은 지어낸 답·앞 질문 되풀이로 오히려 나빠서 쓰지 않는다. 끄려면 SIMPLERAG_MULTITURN=0.
+MULTITURN = ((os.environ["SIMPLERAG_MULTITURN"] != "0") if os.environ.get("SIMPLERAG_MULTITURN")
+             else bool(_YAML.get("generation.multiturn", True)))
+PRECISION_GEN_MODEL = "qwen3-4b-q4"
+PRECISION = ((os.environ["SIMPLERAG_PRECISION"] != "0") if os.environ.get("SIMPLERAG_PRECISION")
+             else bool(_YAML.get("generation.precision", False)))
+if PRECISION:
+    if os.path.isfile(os.path.join(MODELS_DIR, GEN_MODELS[PRECISION_GEN_MODEL])):
+        DEFAULT_GEN_MODEL = PRECISION_GEN_MODEL
+    else:
+        CONFIG_WARNINGS.append("정밀 모드: {} 가 models 폴더에 없어 {} 로 답합니다".format(
+            GEN_MODELS[PRECISION_GEN_MODEL], DEFAULT_GEN_MODEL))
 
 GEN_THREADS = 8             # prefill 이 8스레드에서 가장 빠름(REPORT §6)
 GEN_N_CTX = 2048            # top-3 x 128토큰이면 충분. 크게 잡을수록 손해

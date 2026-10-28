@@ -14,6 +14,8 @@ qdrant_data/
 bm25_index.npz
 index_state.json
 gen_backend.json
+# 문서 업로드 — 대화별 업로드 인덱스(올린 문서 사본 포함, 문서 업로드 설계서 §5)
+uploads/
 backup_index_*/
 index_backup_fixed/
 

@@ -25,6 +25,25 @@ static CITE_NUM: once_cell::sync::Lazy<regex::Regex> =
     once_cell::sync::Lazy::new(|| regex::Regex::new(r"\[(\d+)\]").unwrap());
 
 pub const NO_DOCS_IN_FOLDER: &str = "이 폴더(하위 포함)에는 인덱싱된 문서가 없습니다. 범위를 '지정 폴더 전체' 로 넓히거나, 문서가 인덱싱될 때까지 기다려 주세요.";
+// 멀티턴 — 모델에 주는 질문 꼴. 앞 질문은 맥락으로만 쓰게 한다(Python pipeline.TURN_FORMAT 과 같은 글)
+pub const TURN_FORMAT: &str = "이전 질문(맥락 참고용 — 이것에는 답하지 마세요): {prev}\n지금 질문: {q}";
+
+//------------------------------------------------------------------
+// 멀티턴 질문 나누기 (Python pipeline.turn_queries 와 같다)
+//=> 설정이 꺼졌거나 앞 질문이 없으면 그대로. 아니면 검색어 = 앞 질문 + 지금 질문,
+//   모델 질문 = "이전 질문(참고용) / 지금 질문". 돌려줌: (검색어, 모델 질문, 이어 붙였나)
+//------------------------------------------------------------------
+pub fn turn_queries(query: &str, prev: Option<&str>) -> (String, String, bool) {
+    let prev = prev.map(|p| p.trim()).unwrap_or("");
+    if !cfg().multiturn || prev.is_empty() {
+        return (query.to_string(), query.to_string(), false);
+    }
+    (format!("{} {}", prev, query), TURN_FORMAT.replace("{prev}", prev).replace("{q}", query), true)
+}
+
+// 올린 문서가 있던 대화인데 업로드 폴더가 사라졌을 때 — 인덱싱 폴더로 넘어가지 않는다(Python UPLOAD_MISSING 과 같다)
+pub const UPLOAD_MISSING: &str = "올린 문서를 찾지 못했습니다 — 문서를 다시 올려 주세요.";
+
 pub const NO_RELEVANT: &str = "질문에 대한 내용이 문서에 없습니다. 답변할 수 없습니다.";
 
 //------------------------------------------------------------------
@@ -175,18 +194,44 @@ impl App {
 
     //------------------------------------------------------------------
     // 질의 응답 — 사건을 차례로 on_event 에 넘긴다
+    //   prev = 같은 대화의 바로 앞 질문(멀티턴 — turn_queries). None 이면 이 질문만으로
+    //   conv = RAGSearchBox 대화 id — 그 대화에 올린 문서가 있으면 그것만 찾는다(문서 업로드 설계서)
+    //   uploads = 올린 문서가 있던 대화인가 — 업로드 폴더가 사라졌으면 UPLOAD_MISSING 으로 답한다
     //------------------------------------------------------------------
     pub fn answer(&self, query: &str, top_k: Option<usize>, max_tokens: Option<usize>, folder: Option<&str>,
-                  on_event: &mut dyn FnMut(Event)) -> Result<(), String> {
+                  prev: Option<&str>, conv: Option<&str>, uploads: bool, on_event: &mut dyn FnMut(Event)) -> Result<(), String> {
         let t0 = Instant::now();
-        let (chunks, timing) = if cfg().parent_mode == "section" {
-            self.search_parents(query, top_k, folder)?
+        // 따라 묻는 질문이면 검색에는 앞 질문을 붙이고, 모델에는 나눠 준다(멀티턴)
+        let (search_q, gen_q, joined) = turn_queries(query, prev);
+        // 이 대화에 올린 문서가 있으면 그것만 찾는다 — 절(Parent) 묶기는 인덱싱 폴더 인덱스 전용이라 쓰지 않는다
+        let corpus = conv.and_then(|c| crate::uploads::corpus(c, &self.embedder));
+        if corpus.is_none() && uploads {
+            let mut t = Timing::new();
+            t.insert("total_ms".into(), serde_json::json!(0.0));
+            t.insert("upload_missing".into(), serde_json::json!(true));
+            on_event(Event::Evidence(vec![], t.clone()));
+            on_event(Event::Done(Done {
+                answer: UPLOAD_MISSING.into(), answer_stream: UPLOAD_MISSING.into(), cited: vec![], cite_fixes: vec![],
+                note: None, ttft_s: 0.0, llm_ttft_s: None, total_s: pyutil::round_to(t0.elapsed().as_secs_f64(), 2), timing: t,
+            }));
+            return Ok(());
+        }
+        let (chunks, mut timing) = if let Some(c) = &corpus {
+            self.retriever.search_with(&search_q, top_k, None, Some(c))?
+        } else if cfg().parent_mode == "section" {
+            self.search_parents(&search_q, top_k, folder)?
         } else {
-            self.retriever.search(query, top_k, folder)?
+            self.retriever.search(&search_q, top_k, folder)?
         };
+        if joined {
+            timing.insert("multiturn".into(), serde_json::json!(true));
+        }
         on_event(Event::Evidence(chunks.clone(), timing.clone()));
         // 근거를 못 찾았거나 리랭커가 확신하지 못한 질문은 동의어 후보 제안용으로 남긴다(동의어 설계서 3단계)
-        crate::synonym_suggest::log_miss(query, &timing);
+        //   업로드 문서 질문은 남기지 않는다 — 사용자 문서 낱말이 사전 후보에 섞이지 않게
+        if corpus.is_none() {
+            crate::synonym_suggest::log_miss(query, &timing);
+        }
         let done_simple = |answer: &str| Done {
             answer: answer.to_string(), answer_stream: answer.to_string(), cited: vec![], cite_fixes: vec![],
             note: None, ttft_s: 0.0, llm_ttft_s: None,
@@ -206,7 +251,7 @@ impl App {
         let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         let t_gen0 = Instant::now();
         let mut t_first: Option<Instant> = None;
-        let out = self.generator.stream(query, &texts, max_tokens, None, &mut |piece| {
+        let out = self.generator.stream(&gen_q, &texts, max_tokens, None, &mut |piece| {
             if t_first.is_none() {
                 t_first = Some(Instant::now());
             }

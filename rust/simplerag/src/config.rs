@@ -46,10 +46,13 @@ pub const GEN_MODELS: &[(&str, &str, &str)] = &[
     ("qwen3-1.7b-q4", "Qwen3-1.7B-Q4_K_M.gguf", "qwen3"),
     ("midm-2.0-mini-q4", "Midm-2.0-Mini-Instruct-Q4_K_M.gguf", "midm"),
     ("kanana-1.5-2.1b-q4", "kanana-1.5-2.1b-instruct-Q4_K_M.gguf", "kanana"),
+    // 정밀 모드(generation.precision) 전용 — 골든 100문항 이웃 청크와 함께 정답 50 → 59, 답 완료 약 2배
+    ("qwen3-4b-q4", "Qwen3-4B-Q4_K_M.gguf", "qwen3"),
 ];
 pub const FAST_GEN_MODEL: &str = "qwen3-0.6b-q4";
 pub const PRECISE_GEN_MODEL: &str = "qwen3-1.7b-q4";
 pub const KOREAN_GEN_MODEL: &str = "midm-2.0-mini-q4";
+pub const PRECISION_GEN_MODEL: &str = "qwen3-4b-q4";
 pub const USER_GEN_MODELS: &[&str] = &[FAST_GEN_MODEL, PRECISE_GEN_MODEL, KOREAN_GEN_MODEL];
 
 // 고정 상수(Python config.py 와 같은 값 — 실측 근거는 원본 주석 참고)
@@ -119,6 +122,10 @@ pub struct Config {
     pub rerank_dir: String,
     pub rerank_defer_load: bool,
     pub default_gen_model: String,
+    // 정밀 모드(generation.precision, 기본 끔) — 4B 모델 + 근거에 이웃 청크(retrieve::attach_neighbors)
+    pub precision: bool,
+    // 멀티턴(generation.multiturn, 기본 켬) — /ask 의 앞 질문을 검색어에 이어 붙인다(app::turn_queries)
+    pub multiturn: bool,
     pub gen_max_tokens: i64,
     pub prompt: String,
     pub system_prompt_text: String,
@@ -301,14 +308,33 @@ fn build() -> Result<Config, ConfigError> {
     let rerank_dir = env("SIMPLERAG_RERANK_DIR").unwrap_or_else(|| pyutil::join(&models_dir, "bge-reranker-base-int8"));
     let rerank_defer_load = std::env::var("SIMPLERAG_RERANK_DEFER").map(|v| v != "0").unwrap_or(true);
 
-    let warnings = check_resolved(chunk_tokens, chunk_overlap, min_chunk_tokens, table_header_max_tokens,
+    let mut warnings = check_resolved(chunk_tokens, chunk_overlap, min_chunk_tokens, table_header_max_tokens,
                                   top_k, rerank_pool, dense_top_k, bm25_top_k)?;
 
-    let default_gen_model = pick_str(&y, "generation.model", PRECISE_GEN_MODEL, Some("SIMPLERAG_GEN_MODEL")).trim().to_lowercase();
+    let mut default_gen_model = pick_str(&y, "generation.model", PRECISE_GEN_MODEL, Some("SIMPLERAG_GEN_MODEL")).trim().to_lowercase();
     if gen_file(&default_gen_model).is_none() {
         return Err(ConfigError(format!(
             "SIMPLERAG_GEN_MODEL={:?} — {} 중 하나여야 합니다", default_gen_model,
             GEN_MODELS.iter().map(|m| m.0).collect::<Vec<_>>().join(" | "))));
+    }
+    // 정밀 모드 — 켜면 generation.model 보다 앞서 4B 로 답한다(Python config.PRECISION 과 같다).
+    //   ⚠️ 첫 글자 중앙 2.2 → 7.1초 · 답 완료 7.6 → 14.7초. 4B 파일이 없으면 경고만 내고 원래 모델로
+    let precision = match env("SIMPLERAG_PRECISION") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "generation.precision", false),
+    };
+    // 멀티턴 — 끄려면 SIMPLERAG_MULTITURN=0 (Python config.MULTITURN 과 같다)
+    let multiturn = match env("SIMPLERAG_MULTITURN") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "generation.multiturn", true),
+    };
+    if precision {
+        let file = gen_file(PRECISION_GEN_MODEL).unwrap_or(PRECISION_GEN_MODEL);
+        if find_model_file(&models_dir, &app_dir, file).is_some() {
+            default_gen_model = PRECISION_GEN_MODEL.to_string();
+        } else {
+            warnings.push(format!("정밀 모드: {} 가 models 폴더에 없어 {} 로 답합니다", file, default_gen_model));
+        }
     }
     let gen_max_tokens = pick_int(&y, "generation.max_tokens", 200, Some("SIMPLERAG_GEN_MAX_TOKENS"))?;
     let prompt = pick_str(&y, "generation.prompt", "v0", Some("SIMPLERAG_PROMPT")).trim().to_lowercase();
@@ -382,6 +408,8 @@ fn build() -> Result<Config, ConfigError> {
         rerank_dir,
         rerank_defer_load,
         default_gen_model,
+        precision,
+        multiturn,
         gen_max_tokens,
         prompt,
         system_prompt_text,
@@ -429,19 +457,24 @@ pub fn gen_format(alias: &str) -> &'static str {
 pub fn gen_model_path(alias: &str) -> String {
     let c = cfg();
     let file = gen_file(alias).unwrap_or(alias);
-    let main = pyutil::join(&c.models_dir, file);
-    if std::path::Path::new(&main).is_file() {
-        return main;
-    }
-    for d in [pyutil::join(&c.app_dir, "models"),
-              pyutil::join(&pyutil::join(&pyutil::dirname(&c.app_dir), "simplerag"), "models"),
-              pyutil::join(&pyutil::join(&pyutil::join(&pyutil::dirname(&c.app_dir), "dist"), "simplerag"), "models")] {
+    find_model_file(&c.models_dir, &c.app_dir, file).unwrap_or_else(|| pyutil::join(&c.models_dir, file))
+}
+
+//------------------------------------------------------------------
+// 모델 파일 찾기 — <models_dir> → 프로그램 폴더 models → 옆 Python 배포본 순서. 없으면 None
+//   (설정을 읽는 중에도 쓰므로 cfg() 대신 폴더를 받는다)
+//------------------------------------------------------------------
+fn find_model_file(models_dir: &str, app_dir: &str, file: &str) -> Option<String> {
+    for d in [models_dir.to_string(),
+              pyutil::join(app_dir, "models"),
+              pyutil::join(&pyutil::join(&pyutil::dirname(app_dir), "simplerag"), "models"),
+              pyutil::join(&pyutil::join(&pyutil::join(&pyutil::dirname(app_dir), "dist"), "simplerag"), "models")] {
         let p = pyutil::join(&d, file);
         if std::path::Path::new(&p).is_file() {
-            return p;
+            return Some(p);
         }
     }
-    main
+    None
 }
 
 // ── config.yaml 스키마 검사 (settings.py) ─────────────────
@@ -499,6 +532,8 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("model", Check::Choice(&["qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"])),
             ("flatten_tables", Check::Bool),
             ("echo_filter", Check::Bool),
+            ("precision", Check::Bool),
+            ("multiturn", Check::Bool),
             ("parent", Check::ParentMode),
             ("parent_max_tokens", Check::Int(64, 1500)),
         ]),

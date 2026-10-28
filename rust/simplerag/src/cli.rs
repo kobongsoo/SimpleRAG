@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use serde_json::{json, Map, Value};
 
-use crate::app::{App, Event, NO_DOCS_IN_FOLDER, NO_RELEVANT};
+use crate::app::{App, Event, NO_DOCS_IN_FOLDER, NO_RELEVANT, UPLOAD_MISSING};
 use crate::commands;
 use crate::config::{self, cfg};
 use crate::generate::backend;
@@ -73,8 +73,9 @@ pub struct Args {
 fn model_mode(alias: &str) -> String {
     match alias {
         config::FAST_GEN_MODEL => "빠름".into(),
-        config::PRECISE_GEN_MODEL => "정밀".into(),
+        config::PRECISE_GEN_MODEL => "기본".into(),
         config::KOREAN_GEN_MODEL => "한국어".into(),
+        config::PRECISION_GEN_MODEL => "정밀".into(),
         a => a.into(),
     }
 }
@@ -348,13 +349,46 @@ fn no_space(s: &str) -> String {
 fn answer_setup_line(app: &App) -> String {
     let alias = app.generator.alias.clone();
     let parent = if cfg().parent_mode == "section" { format!("section(상한 {}토큰)", cfg().parent_max_tokens) } else { cfg().parent_mode.clone() };
+    // 기본 모델(1.7B)은 모드 이름을 달지 않는다 — 정밀 모드(4B)·빠름·한국어처럼 바꾼 때만 보인다
+    if alias == config::PRECISE_GEN_MODEL {
+        return format!("답변모델 {} · parent {}", alias, parent);
+    }
     format!("답변모델 {} ({}) · parent {}", alias, model_mode(&alias), parent)
+}
+
+//------------------------------------------------------------------
+// 업로드 명령 처리 (/upload · /upload-remove · /upload-forget — Python cli._upload_command 와 같다)
+//   인자는 ASCII JSON — {"conv", "path"} / {"conv", "name"} / {"conv"} 또는 {"all": true}.
+//   /upload 진행은 stderr 에 "[upload] …" 줄로 낸다(RAGSearchBox 진행 막대용)
+//------------------------------------------------------------------
+fn upload_command(app: &App, cmd: &str, arg: &str) -> Value {
+    let op = cmd.trim_start_matches('/');
+    let req: Value = match serde_json::from_str(if arg.trim().is_empty() { "{}" } else { arg.trim() }) {
+        Ok(v @ Value::Object(_)) => v,
+        _ => return json!({"op": op, "ok": false, "why": format!("형식이 잘못됐습니다: {} {{\"conv\": …}}", cmd)}),
+    };
+    let conv = req.get("conv").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let mut r = if cmd == "/upload-forget" {
+        // 메모리 캐시만 비운다(폴더는 RAGSearchBox 가 지운다)
+        let all = req.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+        crate::uploads::forget(if all || conv.is_empty() { None } else { Some(&conv) });
+        json!({"ok": true, "conv": conv})
+    } else if conv.is_empty() {
+        json!({"ok": false, "why": "대화 id(conv)가 없습니다"})
+    } else if cmd == "/upload-remove" {
+        crate::uploads::remove(&conv, req.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+    } else {
+        crate::uploads::add(&conv, req.get("path").and_then(|v| v.as_str()).unwrap_or(""), &app.embedder)
+    };
+    r["op"] = json!(op);
+    r
 }
 
 //------------------------------------------------------------------
 // 질의 1건 화면 출력 (ask·chat 공용) — true = 정상, false = 사용자 중단
 //------------------------------------------------------------------
-pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: Option<usize>, stream: bool, folder: Option<&str>) -> bool {
+pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: Option<usize>, stream: bool, folder: Option<&str>,
+                     prev: Option<&str>, conv: Option<&str>, uploads: bool) -> bool {
     // 되뱉기 거르기는 설정을 따른다(기본 끔 — 켜면 첫 문장을 붙들어 화면 첫 글자가 약 2초 늦어진다)
     let mut writer = StreamWriter::with_echo(cfg().echo_filter);
     let mut parts = String::new();
@@ -362,7 +396,7 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
     let mut early = false;
     let mut interrupted = false;
     INTERRUPT.store(false, Ordering::SeqCst);
-    let r = app.answer(query, top_k, max_tokens, folder, &mut |ev| {
+    let r = app.answer(query, top_k, max_tokens, folder, prev, conv, uploads, &mut |ev| {
         if early {
             return;
         }
@@ -377,19 +411,28 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                     early = true;
                     return;
                 }
+                if timing.get("upload_missing").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    // 올린 문서가 있던 대화인데 업로드 폴더가 없다 — 인덱싱 폴더로 넘어가지 않는다
+                    outln(&format!("\n{}\n", UPLOAD_MISSING));
+                    early = true;
+                    return;
+                }
                 if timing.get("no_relevant").and_then(|v| v.as_bool()).unwrap_or(false) {
                     outln(&format!("\n{}\n", NO_RELEVANT));
                     early = true;
                     return;
                 }
-                let scope = match folder {
+                let scope = if let Some(n) = timing.get("uploads") {
+                    // 올린 문서에서 찾은 답 — 범위를 업로드 문서로 적는다
+                    format!(" · 범위 업로드 문서(문서 {}건)", n)
+                } else { match folder {
                     Some(f) => {
                         let base = pyutil::basename(pyutil::rstrip_chars(f, "\\/"));
                         format!(" · 범위 {}(문서 {}건)", if base.is_empty() { f } else { base },
                                 timing.get("scope_docs").map(|v| v.to_string()).unwrap_or("?".into()))
                     }
                     None => String::new(),
-                };
+                } };
                 outln(&format!("\n── 근거 {}건 ({:.0}ms){} ─────────────────────", chunks.len(), tget(&timing, "total_ms"), scope));
                 let full = std::env::var("SIMPLERAG_EVIDENCE_FULL").map(|v| v == "1").unwrap_or(false);
                 for (i, c) in chunks.iter().enumerate() {
@@ -441,6 +484,10 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                     // 동의어 사전으로 키워드 검색을 넓혔으면 무엇을 넓혔는지(동의어 설계서 §5)
                     outln(&format!("  검색어 넓힘: {}", s.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")));
                 }
+                if t.get("multiturn").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    // 앞 질문을 검색어에 이어 붙였다(멀티턴)
+                    outln("  앞 질문 이어 붙임");
+                }
                 outln(&format!("  {}", answer_setup_line(app)));
                 if !d.cited.is_empty() {
                     // 바로잡은 번호가 있으면 무엇을 바꿨는지 함께 — 본문에 이미 나간 문장 앞 번호는 못 고쳤을 수 있다
@@ -478,7 +525,7 @@ pub fn cmd_ask(a: &Args) -> i32 {
     let app = App::new(model.as_deref());
     app.warmup(false, &mut |m| log(m), None);
     app.wait_rerank();
-    let ok = render_answer(&app, a.query.as_deref().unwrap(), a.top_k, a.max_tokens, !a.no_stream, a.folder.as_deref());
+    let ok = render_answer(&app, a.query.as_deref().unwrap(), a.top_k, a.max_tokens, !a.no_stream, a.folder.as_deref(), None, None, false);
     app.close();
     if ok { 0 } else { 130 }
 }
@@ -536,7 +583,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
     }
     outln(&format!("모델: 임베딩 {} / 리랭커 {}", pyutil::basename(pyutil::rstrip_chars(&cfg().model_dir, "\\/")),
         pyutil::basename(pyutil::rstrip_chars(&cfg().rerank_dir, "\\/"))));
-    outln("기능: ask-folder index-commands");
+    outln("기능: ask-folder index-commands ask-prev upload");
     outln("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n");
     loop {
         out("질문> ");
@@ -555,6 +602,11 @@ pub fn cmd_chat(a: &Args) -> i32 {
             break;
         }
         let mut ask_folder = chat_folder.clone();
+        // /ask 의 prev — 같은 대화의 바로 앞 질문(멀티턴이 검색에 이어 붙인다)
+        let mut ask_prev: Option<String> = None;
+        // /ask 의 conv · uploads — RAGSearchBox 대화 id 와 올린 문서가 있던 대화인가(업로드 문서에서만 찾기)
+        let mut ask_conv: Option<String> = None;
+        let mut ask_uploads = false;
         if query.starts_with("/ask ") || query == "/ask" {
             let raw = pyutil::strip(&query[4..]).to_string();
             let raw = if raw.is_empty() { "{}".to_string() } else { raw };
@@ -562,6 +614,9 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 Ok(Value::Object(req)) => {
                     query = pyutil::strip(&req.get("q").map(|v| v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string())).unwrap_or_default()).to_string();
                     ask_folder = req.get("folder").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                    ask_prev = req.get("prev").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    ask_conv = req.get("conv").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    ask_uploads = req.get("uploads").and_then(|v| v.as_bool()).unwrap_or(false);
                 }
                 _ => {
                     outln("  /ask 형식이 잘못됐습니다: /ask {\"q\": \"질문\", \"folder\": \"폴더\"}\n");
@@ -595,6 +650,9 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 let arg = pyutil::strip_chars(&rest, "\"").to_string();
                 chat_folder = if arg.is_empty() { None } else { Some(arg) };
                 outln(&format!("  검색 범위: {}\n", chat_folder.as_deref().unwrap_or("인덱스 전체")));
+            } else if cmd == "/upload" || cmd == "/upload-remove" || cmd == "/upload-forget" {
+                // 문서 업로드(업로드 설계서 §7) — 대화별 업로드 인덱스. 결과는 "@index {json}" 한 줄
+                outln(&commands::format_result(upload_command(&app, &cmd, &rest).as_object().unwrap(), commands::PREFIX));
             } else if cmd == "/suggest-synonyms" {
                 // 동의어 후보 만들기(동의어 설계서 4단계) — 인덱스를 쥔 이 워커가 올려 둔 모델로 직접 한다.
                 //   명령 시간 제한(RAGSearchBox 300초) 안에 끝나게 최근 질문 WORKER_RECENT 개만 본다
@@ -611,7 +669,8 @@ pub fn cmd_chat(a: &Args) -> i32 {
             }
             continue;
         }
-        render_answer(&app, &query, top_k, a.max_tokens, !a.no_stream, ask_folder.as_deref());
+        render_answer(&app, &query, top_k, a.max_tokens, !a.no_stream, ask_folder.as_deref(), ask_prev.as_deref(),
+                      ask_conv.as_deref(), ask_uploads);
         outln("");
         if let Some(Err(e)) = app.rerank_load.lock().unwrap().clone() {
             if !rr_warned {

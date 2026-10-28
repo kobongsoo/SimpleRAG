@@ -224,6 +224,8 @@ SCHEMA = {
         "flatten_tables": _bool,
         # 지시문 되뱉기 거르기 — 켜면 화면 첫 글자가 약 2초 늦어진다(기본 끔)
         "echo_filter": _bool,
+        "precision": _bool,
+        "multiturn": _bool,
         # Parent-Child 실험 A — sLLM 에 청크 대신 그 청크의 절(부모)을 넣는다(재설계서 §12)
         "parent": _parent_mode,                     # off | section — YAML 의 off(=false)도 받는다
         "parent_max_tokens": _int(64, 1500),

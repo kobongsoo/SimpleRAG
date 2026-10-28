@@ -423,7 +423,7 @@ def _chars(s):
 #
 # -in: app = 실행 중인 App (pipeline.generator.alias 를 읽는다)
 #
-# -out: str = 예) "답변모델 qwen3-1.7b-q4 (정밀) · parent off"
+# -out: str = 예) "답변모델 qwen3-1.7b-q4 · parent off" / 정밀 모드면 "답변모델 qwen3-4b-q4 (정밀) · parent off"
 # -out: error = 없음 (생성기 별칭을 못 읽으면 설정 기본 모델로 적는다)
 #------------------------------------------------------------------
 def _answer_setup_line(app):
@@ -433,6 +433,9 @@ def _answer_setup_line(app):
     parent = config.PARENT_MODE
     if parent == "section":
         parent = "section(상한 {}토큰)".format(config.PARENT_MAX_TOKENS)
+    # 기본 모델(1.7B)은 모드 이름을 달지 않는다 — 정밀 모드(4B)·빠름·한국어처럼 바꾼 때만 보인다
+    if alias == config.PRECISE_GEN_MODEL:
+        return "답변모델 {} · parent {}".format(alias, parent)
     return "답변모델 {} ({}) · parent {}".format(alias, _model_mode(alias), parent)
 
 
@@ -443,12 +446,15 @@ def _answer_setup_line(app):
 #
 # -in: app, query, top_k, max_tokens, show_timing
 # -in: stream = False 면 답변을 다 만든 뒤 한 번에 출력(콘솔 렌더링 문제 회피용)
+# -in: folder = 폴더 한정 검색 폴더(None 이면 전체)
+# -in: prev   = 같은 대화의 바로 앞 질문(멀티턴, None 이면 이 질문만으로)
+# -in: conv, uploads = RAGSearchBox 대화 id · 올린 문서가 있던 대화인가(업로드 문서에서만 찾기)
 #
 # -out: True = 정상 완료, False = 사용자가 중단
 #------------------------------------------------------------------
 def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
-                  stream=True, folder=None):
-    from simplerag.pipeline import NO_DOCS_IN_FOLDER, NO_RELEVANT
+                  stream=True, folder=None, prev=None, conv=None, uploads=False):
+    from simplerag.pipeline import NO_DOCS_IN_FOLDER, NO_RELEVANT, UPLOAD_MISSING
     parts = []
     # 근거 개수. evidence 이벤트에서 정해지고, 마무리 정리 때 쓰인다 —
     # 없는 번호를 인용으로 찍는 결함을 막는다(prompts.drop_invalid_cites).
@@ -474,7 +480,7 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
 
     try:
         for event in app.pipeline.answer(query, top_k=top_k, max_tokens=max_tokens,
-                                         folder=folder):
+                                         folder=folder, prev=prev, conv=conv, uploads=uploads):
             kind = event[0]
 
             if kind == "evidence":
@@ -487,13 +493,20 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                     # (RAGSearchBox 는 근거 머리가 없는 출력을 그대로 패널에 보여 준다)
                     print("\n" + NO_DOCS_IN_FOLDER + "\n")
                     return True
+                if timing.get("upload_missing"):
+                    # 올린 문서가 있던 대화인데 업로드 폴더가 없다 — 인덱싱 폴더로 넘어가지 않는다
+                    print("\n" + UPLOAD_MISSING + "\n")
+                    return True
                 if timing.get("no_relevant"):
                     # 관련 근거가 없다 — 근거도 보이지 않고 답할 수 없다고만 알린다
                     print("\n" + NO_RELEVANT + "\n")
                     return True
                 # 폴더 한정이면 머리에 범위를 덧붙인다 — 나중에 보아도 어느 범위의 답인지 안다
                 scope = ""
-                if folder:
+                if timing.get("uploads"):
+                    # 올린 문서에서 찾은 답 — 범위를 업로드 문서로 적는다
+                    scope = " · 범위 업로드 문서(문서 {}건)".format(timing["uploads"])
+                elif folder:
                     scope = " · 범위 {}(문서 {}건)".format(
                         os.path.basename(folder.rstrip("\\/")) or folder, timing.get("scope_docs", "?"))
                 print("\n── 근거 {}건 ({:.0f}ms){} ─────────────────────".format(
@@ -546,6 +559,9 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                     if t.get("synonyms"):
                         # 동의어 사전으로 키워드 검색을 넓혔으면 무엇을 넓혔는지(동의어 설계서 §5)
                         print("  검색어 넓힘: {}".format(", ".join(t["synonyms"])))
+                    if t.get("multiturn"):
+                        # 앞 질문을 검색어에 이어 붙였다(멀티턴)
+                        print("  앞 질문 이어 붙임")
                     # 어떤 모델·근거 방식으로 만든 답인지 함께 남긴다(RAGSearchBox chat_parser 가 읽는다)
                     print("  " + _answer_setup_line(app))
                     if d["cited"]:
@@ -605,7 +621,7 @@ def cmd_chat(args):
             os.path.basename(config.EMBED.model_dir.rstrip("\\/")),
             os.path.basename(config.RERANK_DIR.rstrip("\\/"))))
         # RAGSearchBox 가 이 줄로 워커가 아는 명령을 알아본다(옛 워커와 구분)
-        print("기능: ask-folder index-commands")
+        print("기능: ask-folder index-commands ask-prev upload")
         print("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n")
 
         while True:
@@ -620,14 +636,21 @@ def cmd_chat(args):
             if query.lower() in ("exit", "quit", "종료", "/exit", "/quit"):
                 break
 
-            # /ask {"q": …, "folder": …} — 폴더 한정 질문 한 줄(RAGSearchBox 폴더 패널).
+            # /ask {"q": …, "folder": …, "prev": …} — 폴더 한정 질문 한 줄(RAGSearchBox 폴더 패널).
             # 질문을 ASCII JSON 으로 받으므로 cp949 로 못 쓰는 글자도 깨지지 않는다.
+            # prev 는 같은 대화의 바로 앞 질문 — 멀티턴(generation.multiturn)이 검색에 이어 붙인다
             ask_folder = chat_folder
+            ask_prev = None
+            ask_conv = None        # RAGSearchBox 대화 id — 그 대화에 올린 문서가 있으면 그것만 찾는다(업로드 설계서)
+            ask_uploads = False    # 올린 문서가 있던 대화인가(폴더가 사라졌으면 인덱싱 폴더로 넘어가지 않고 알린다)
             if query.startswith("/ask ") or query == "/ask":
                 try:
                     req = json.loads(query[4:].strip() or "{}")
                     query = str(req.get("q", "")).strip()
                     ask_folder = req.get("folder") or None
+                    ask_prev = str(req.get("prev") or "").strip() or None
+                    ask_conv = str(req.get("conv") or "").strip() or None
+                    ask_uploads = bool(req.get("uploads"))
                 except (ValueError, AttributeError):
                     print("  /ask 형식이 잘못됐습니다: /ask {\"q\": \"질문\", \"folder\": \"폴더\"}\n")
                     continue
@@ -659,6 +682,10 @@ def cmd_chat(args):
                     arg = query[len(parts[0]):].strip().strip('"')
                     chat_folder = arg or None
                     print("  검색 범위: {}\n".format(chat_folder or "인덱스 전체"))
+                elif cmd in ("/upload", "/upload-remove", "/upload-forget"):
+                    # 문서 업로드(업로드 설계서 §7) — 대화별 업로드 인덱스. 결과는 "@index {json}" 한 줄
+                    print(index_commands.format_result(_upload_command(app, cmd, query[len(parts[0]):].strip())),
+                          flush=True)
                 elif cmd == "/suggest-synonyms":
                     # 동의어 후보 만들기(동의어 설계서 4단계) — 인덱스를 쥔 이 워커가 올려 둔 모델로 직접 한다.
                     #   명령 시간 제한(RAGSearchBox 300초) 안에 끝나게 최근 질문 WORKER_RECENT 개만 본다
@@ -678,7 +705,8 @@ def cmd_chat(args):
                 continue
 
             render_answer(app, query, top_k=top_k, max_tokens=args.max_tokens,
-                          stream=not args.no_stream, folder=ask_folder)
+                          stream=not args.no_stream, folder=ask_folder, prev=ask_prev,
+                          conv=ask_conv, uploads=ask_uploads)
             print()
             # 백그라운드 리랭커 적재가 실패했으면 한 번만 알린다(이후 질의는 RRF 순서)
             if isinstance(app.rerank_load, str) and not rr_warned:
@@ -1052,16 +1080,50 @@ def cmd_clear(args):
 
 #------------------------------------------------------------------
 # 모델 별칭 → 사람이 읽는 모드 이름
-#=> 화면에 "빠름/정밀/한국어" 로 보여 준다. 측정용 모델 등 그 밖의 것은 별칭을 그대로 쓴다.
+#=> 화면에 "빠름/기본/한국어/정밀(4B)" 로 보여 준다. 측정용 모델 등 그 밖의 것은 별칭을 그대로 쓴다.
 #
 # -in: alias = 생성 모델 별칭
 #
-# -out: "빠름" | "정밀" | "한국어" | 별칭 그대로
+# -out: "빠름" | "기본" | "한국어" | "정밀" | 별칭 그대로
 # -out: error = 없음
 #------------------------------------------------------------------
 def _model_mode(alias):
-    return {config.FAST_GEN_MODEL: "빠름", config.PRECISE_GEN_MODEL: "정밀",
-            config.KOREAN_GEN_MODEL: "한국어"}.get(alias, alias)
+    return {config.FAST_GEN_MODEL: "빠름", config.PRECISE_GEN_MODEL: "기본",
+            config.KOREAN_GEN_MODEL: "한국어",
+            config.PRECISION_GEN_MODEL: "정밀"}.get(alias, alias)
+
+
+#------------------------------------------------------------------
+# 업로드 명령 처리 (/upload · /upload-remove · /upload-forget — 업로드 설계서 §7)
+#=> 인자는 ASCII JSON — {"conv": 대화 id, "path": 파일} / {"conv", "name"} / {"conv"} 또는 {"all": true}.
+#   /upload 진행은 stderr 에 "[upload] …" 줄로 낸다(RAGSearchBox 가 진행 막대에 쓴다).
+#
+# -in: app = 예열된 App / cmd = 명령 / arg = 명령 뒤 글
+#
+# -out: 결과 dict(op 포함) — format_result 로 "@index {json}" 한 줄이 된다
+# -out: error = 없음 (실패는 ok False · why)
+#------------------------------------------------------------------
+def _upload_command(app, cmd, arg):
+    from simplerag.index import uploads
+
+    op = cmd.lstrip("/")
+    try:
+        req = json.loads(arg or "{}")
+        if not isinstance(req, dict):
+            raise ValueError
+    except ValueError:
+        return {"op": op, "ok": False, "why": "형식이 잘못됐습니다: " + cmd + ' {"conv": …}'}
+    conv = str(req.get("conv") or "").strip()
+    if cmd == "/upload-forget":
+        # 메모리 캐시만 비운다(폴더는 RAGSearchBox 가 지운다)
+        uploads.forget(None if req.get("all") else (conv or None))
+        return {"op": op, "ok": True, "conv": conv}
+    if not conv:
+        return {"op": op, "ok": False, "why": "대화 id(conv)가 없습니다"}
+    if cmd == "/upload-remove":
+        return dict(uploads.remove(conv, str(req.get("name") or "")), op=op)
+    app.embedder.ensure_loaded()
+    return dict(uploads.add(conv, str(req.get("path") or ""), app.embedder, on_progress=_log), op=op)
 
 
 #------------------------------------------------------------------

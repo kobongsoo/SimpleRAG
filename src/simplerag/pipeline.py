@@ -19,6 +19,7 @@ import time
 
 from . import config
 from .generate.prompts import parse_answer, recite
+from .index import uploads as upload_store
 from .retrieve import synonym_suggest
 
 # 폴더 한정 검색에서 그 폴더에 인덱싱된 문서가 없을 때 알리는 글
@@ -26,6 +27,32 @@ NO_DOCS_IN_FOLDER = ("이 폴더(하위 포함)에는 인덱싱된 문서가 없
                      "범위를 '지정 폴더 전체' 로 넓히거나, 문서가 인덱싱될 때까지 기다려 주세요.")
 # 문서에서 질문과 관련된 내용을 찾지 못했을 때(리랭커 관련도 문턱 아래) 알리는 글
 NO_RELEVANT = "질문에 대한 내용이 문서에 없습니다. 답변할 수 없습니다."
+# 올린 문서가 있던 대화인데 업로드 폴더가 사라졌을 때 — 인덱싱 폴더 문서로 슬쩍 넘어가지 않는다(업로드 설계서 R3)
+UPLOAD_MISSING = "올린 문서를 찾지 못했습니다 — 문서를 다시 올려 주세요."
+
+
+# 멀티턴 — 모델에 주는 질문 꼴. 앞 질문은 맥락으로만 쓰게 한다(1.7B 가 앞 질문에도 답하는 일이 잦았다)
+TURN_FORMAT = "이전 질문(맥락 참고용 — 이것에는 답하지 마세요): {prev}\n지금 질문: {q}"
+
+
+#------------------------------------------------------------------
+# 멀티턴 질문 나누기 — 검색어와 모델 질문
+#=> 따라 묻는 질문("침구류는?")은 주제가 빠져 있어 그대로 찾으면 엉뚱한 근거가 온다.
+#    1) 설정(generation.multiturn)이 꺼졌거나 앞 질문이 없으면 그대로
+#    2) 검색어 = 앞 질문 + 지금 질문 — 빠진 주제(문서·제도 이름)를 앞 질문에서 얻는다
+#    3) 모델 질문 = "이전 질문(참고용) / 지금 질문" — 지금 질문에만 답하게
+#   측정(bench/multiturn, 1.7B): 따라 묻기 24 정답 11 → 15 · 주제 바꿈 8 5 → 6, 체감 TTFT +0.2초.
+#
+# -in: query = 지금 질문 / prev = 같은 대화의 바로 앞 질문(없으면 None)
+#
+# -out: (검색어, 모델 질문, 이어 붙였나)
+# -out: error = 없음
+#------------------------------------------------------------------
+def turn_queries(query, prev):
+    prev = (prev or "").strip()
+    if not config.MULTITURN or not prev:
+        return query, query, False
+    return prev + " " + query, TURN_FORMAT.format(prev=prev, q=query), True
 
 
 #------------------------------------------------------------------
@@ -60,21 +87,40 @@ class RagPipeline:
     # -in: top_k      = 근거 개수(None 이면 설정값=3)
     # -in: max_tokens = 답변 토큰 상한
     # -in: folder     = 이 폴더(하위 포함) 문서만 근거로 쓴다(폴더 한정 검색). None 이면 전체
+    # -in: prev       = 같은 대화의 바로 앞 질문(멀티턴 — turn_queries). None 이면 이 질문만으로
+    # -in: conv       = RAGSearchBox 대화 id. 그 대화에 올린 문서가 있으면 그 문서에서만 찾는다
+    #                   (문서 업로드 설계서 — 인덱싱 폴더 문서는 보지 않는다). None 이면 지금과 같다
+    # -in: uploads    = True 면 이 대화에 올린 문서가 있어야 한다 — 없으면(폴더가 사라짐) UPLOAD_MISSING 으로 답한다
     #
     # -out: Iterator[tuple] = ("evidence"|"token"|"done", ...)
     #       폴더에 인덱싱된 문서가 없으면 모델을 부르지 않고 done 의 answer 로 알린다
     #       (timing["scope_docs"] == 0) — 전체로 슬쩍 넓히지 않는다(설계서 §7)
     #------------------------------------------------------------------
-    def answer(self, query, top_k=None, max_tokens=None, folder=None):
+    def answer(self, query, top_k=None, max_tokens=None, folder=None, prev=None, conv=None, uploads=False):
         t0 = time.perf_counter()
 
-        if config.PARENT_MODE == "section":
-            chunks, timing = self._search_parents(query, top_k, folder)
+        # 따라 묻는 질문이면 검색에는 앞 질문을 붙이고, 모델에는 나눠 준다(멀티턴)
+        search_q, gen_q, joined = turn_queries(query, prev)
+        # 이 대화에 올린 문서가 있으면 그것만 찾는다 — 절(Parent) 묶기는 인덱싱 폴더 인덱스 전용이라 쓰지 않는다
+        corpus = upload_store.corpus(conv, self.retriever.embedder) if conv else None
+        if corpus is None and uploads:
+            yield ("evidence", [], {"total_ms": 0.0, "upload_missing": True})
+            yield ("done", {"answer": UPLOAD_MISSING, "cited": [], "ttft_s": 0.0,
+                            "total_s": round(time.perf_counter() - t0, 2), "timing": {}})
+            return
+        if corpus is not None:
+            chunks, timing = self.retriever.search(search_q, top_k=top_k, corpus=corpus)
+        elif config.PARENT_MODE == "section":
+            chunks, timing = self._search_parents(search_q, top_k, folder)
         else:
-            chunks, timing = self.retriever.search(query, top_k=top_k, folder=folder)
+            chunks, timing = self.retriever.search(search_q, top_k=top_k, folder=folder)
+        if joined:
+            timing = dict(timing, multiturn=True)
         yield ("evidence", chunks, timing)
         # 근거를 못 찾았거나 리랭커가 확신하지 못한 질문은 동의어 후보 제안용으로 남긴다(동의어 설계서 3단계)
-        synonym_suggest.log_miss(query, timing)
+        #   업로드 문서 질문은 남기지 않는다 — 사용자 문서 낱말이 사전 후보에 섞이지 않게(업로드 설계서 §6)
+        if corpus is None:
+            synonym_suggest.log_miss(query, timing)
 
         if not chunks and timing.get("no_relevant"):
             # 가장 가까운 근거도 질문과 동떨어졌다 — 모델을 부르지 않는다(지어낸 답을 막으려고)
@@ -98,7 +144,7 @@ class RagPipeline:
         t_first = None
         parts = []
 
-        for piece in self.generator.stream(query, texts, max_tokens=max_tokens):
+        for piece in self.generator.stream(gen_q, texts, max_tokens=max_tokens):
             if t_first is None:
                 t_first = time.perf_counter()
             parts.append(piece)
