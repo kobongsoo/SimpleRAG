@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>문서 업로드 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+.gap { color: var(--bad); font-weight: 600; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.prio { font-family: var(--mono); font-weight: 600; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+
+
+td.num, th.num { text-align: right; white-space: nowrap; }
+.ok { color: var(--good); font-weight: 600; }
+.ng { color: var(--bad); font-weight: 600; }
+.mock { background: var(--sunken); border-radius: 12px; padding: 18px; margin: 16px 0; }
+.mock .win { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; max-width: 640px; margin: 0 auto; font-size: 14px; }
+.mock .bar { display: flex; gap: 8px; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--rule); font-weight: 600; }
+.mock .bar span { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 13px; }
+.mock .bar b { color: var(--accent); }
+.mock .body { padding: 12px 14px; }
+.mock .row { border: 1px solid var(--rule); border-radius: 8px; padding: 9px 12px; margin-bottom: 8px; }
+.mock .pair { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 600; }
+.mock .pair .to { color: var(--accent); }
+.mock .btns { margin-left: auto; display: flex; gap: 6px; }
+.mock .btn { border: 1px solid var(--rule); border-radius: 6px; padding: 2px 10px; font-weight: 400; font-size: 13px; background: var(--surface); }
+.mock .why { color: var(--muted); font-size: 12.5px; margin: 5px 0 0; }
+.mock .add { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 4px; }
+.mock .in { flex: 1; border: 1px solid var(--rule); border-radius: 6px; padding: 4px 8px; color: var(--muted); font-size: 13px; }
+.steps { counter-reset: st; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: st; position: relative; padding-left: 40px; margin: 14px 0; }
+.steps > li::before { content: counter(st); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+
+.mock .composer { border: 1px solid var(--rule); border-radius: 16px; padding: 10px 12px; background: var(--surface); }
+.mock .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.mock .chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; background: var(--sunken); }
+.mock .chip.up { background: #fdecef; border-color: #f3b9c4; color: #b8102f; }
+.mock .chip .x { color: var(--muted); }
+.mock .ph { color: var(--muted); font-size: 13.5px; padding: 6px 2px 10px; }
+.mock .tools { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.mock .plus { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--rule); display: grid; place-items: center; font-weight: 700; }
+.mock .send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: #e5163f; color: #fff; display: grid; place-items: center; font-weight: 700; }
+.mock .prog { height: 5px; border-radius: 3px; background: var(--sunken); overflow: hidden; margin-top: 4px; }
+.mock .prog i { display: block; height: 100%; width: 60%; background: #e5163f; }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (SimpleRAG) · 설계서 · 2026-10-28</div>
+  <h1>문서 업로드 설계서 — 올린 문서에서만 찾아 답하기</h1>
+  <p class="lede">입력란의 <b>[+]</b> 로 문서 파일을 올리면, 그 대화의 질문은 <b>올린 문서에서만</b> 찾아 답한다.
+  올린 문서의 인덱스는 인덱싱 폴더의 인덱스(Qdrant · BM25 · 상태 파일)와 섞지 않고 <b>대화마다 따로</b> 두며,
+  대화 기록에서 그 대화를 지우면 인덱스와 올린 파일도 함께 지운다. 지금 구조를 살펴 어디에 무엇을 두는지, 두 판(Python · Rust)을
+  어떻게 맞추는지, 무엇을 재고 시험하는지를 정한다.</p>
+  <div class="meta">대상: SimpleRAG Python 판 · Rust 판 · RAGSearchBox(Python · Rust) — 두 판 같은 규칙 · 관련: plan/폴더한정검색_설계서.html · plan/자동인덱싱_설계서.html</div>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">결론</a></li>
+  <li><a href="#s2">요구사항 정리</a></li>
+  <li><a href="#s3">왜 별도 인덱스인가 — 지금 구조와 부딪히는 곳</a></li>
+  <li><a href="#s4">전체 흐름</a></li>
+  <li><a href="#s5">저장 위치와 파일 형식</a></li>
+  <li><a href="#s6">업로드 문서 검색</a></li>
+  <li><a href="#s7">워커 명령(프로토콜)</a></li>
+  <li><a href="#s8">화면 — [+] 버튼 · 첨부 칩 · 범위 표시</a></li>
+  <li><a href="#s9">대화 기록과 지우기</a></li>
+  <li><a href="#s10">한도 · 시간 · 용량 어림</a></li>
+  <li><a href="#s11">실패와 예외 처리</a></li>
+  <li><a href="#s12">시험 · 측정 계획</a></li>
+  <li><a href="#s13">구현 단계</a></li>
+  <li><a href="#s14">결정이 필요한 것</a></li>
+  <li><a href="#s15">구현 결과</a></li>
+</ol></nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="verdict"><strong>대화마다 작은 "업로드 인덱스" 폴더(<code>&lt;데이터 폴더&gt;/uploads/&lt;대화 id&gt;/</code>)를 따로 만든다.</strong>
+    Qdrant · BM25 · <code>index_state.json</code> 은 건드리지 않는다. 올린 문서는 수백 청크 안팎이라 벡터는 파일 하나(<code>vectors.f32</code>)로 두고
+    검색할 때 전수 내적(수 ms), 키워드 검색(BM25)은 그때그때 메모리에서 만든다. 리랭커 · 관련도 문턱 · 동의어 · 이어서 묻기 · 정밀 모드는
+    지금 검색 함수를 그대로 쓴다. 대화에 올린 문서가 하나라도 있으면 그 대화의 질문은 업로드 인덱스만 찾는다.
+    대화를 지우면(한 건 · 모두 · 10개 한도에서 밀려남) 폴더째 지우고, 시작할 때 주인 없는 폴더를 정리한다.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>정한 것</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>인덱스 위치</td><td>대화별 폴더 <code>uploads/&lt;conv_id&gt;/</code> — 원본 사본 · 청크 · 벡터 · 메타</td><td>폴더째 지우면 끝 — 기존 인덱스에 흔적이 남지 않는다</td></tr>
+      <tr><td>벡터 검색</td><td>파일 하나 + 전수 내적(Qdrant 안 씀)</td><td>Qdrant 로컬은 한 프로세스만 열 수 있고(§3) 수백 청크에는 전수 계산이 더 빠르고 단순하다</td></tr>
+      <tr><td>키워드 검색</td><td>질문 때 메모리에서 BM25 만들기(디스크 캐시 없음)</td><td>수백 청크는 수 ms — 지금 BM25 캐시(<code>bm25_index.npz</code>)를 다시 만들 일이 없다</td></tr>
+      <tr><td>검색 범위</td><td>업로드가 있는 대화 = 업로드 문서만</td><td>요청 그대로. 섞이면 "올린 문서에 없다" 를 판단할 수 없다</td></tr>
+      <tr><td>누가 쓰고 지우나</td><td>쓰기는 워커(<code>/upload</code>), 지우기는 RAGSearchBox 가 폴더를 직접(워커가 떠 있으면 알림)</td><td>임베딩은 모델이 올라간 워커만 할 수 있고, 지우기는 모델이 내려가 있어도 되어야 한다</td></tr>
+      <tr><td>두 판</td><td>같은 폴더 모양 · 같은 파일 형식 · 같은 명령</td><td>지금까지처럼 근거가 두 판 같게(§12)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>요구사항 정리</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>요청</th><th>설계에서의 규칙</th></tr></thead>
+    <tbody>
+      <tr><td>R1</td><td>입력란에 [+] — 누르면 문서 파일을 올린다</td><td>파일 고르기 창(여러 개 가능). 지원 확장자는 인덱싱과 같음(<code>indexer.TEXT_EXTS</code>: pdf · docx · pptx · xlsx · hwp(x) · txt …)</td></tr>
+      <tr><td>R2</td><td>질문하면 올린 문서에서 찾아 답한다</td><td>그 대화의 <code>/ask</code> 에 대화 id 를 싣고, 워커는 업로드 인덱스로 찾는다</td></tr>
+      <tr><td>R3</td><td>인덱싱 폴더 문서는 검색하지 않는다</td><td>업로드가 있는 대화는 Qdrant · BM25 · 폴더 한정 검색을 부르지 않는다</td></tr>
+      <tr><td>R4</td><td>업로드 인덱스는 기존 인덱싱에 추가하지 않고 따로</td><td><code>uploads/</code> 아래 대화별 폴더. <code>index_state.json</code> · 자동 인덱싱 · 폴더 감시는 이 폴더를 모른다</td></tr>
+      <tr><td>R5</td><td>히스토리에서 지우면 업로드 인덱스도 지운다</td><td>한 건 지우기(새 메뉴) · 모두 지우기 · 10개 한도로 밀려난 대화 · 주인 없는 폴더 — 모두 폴더째 삭제(§9)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>왜 별도 인덱스인가 — 지금 구조와 부딪히는 곳</h2>
+  <p>올린 문서를 지금 인덱스에 "표시만 해서" 넣는 방법도 있지만, 지금 구조와 네 곳에서 부딪힌다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>지금 구조</th><th>업로드를 같은 인덱스에 넣으면</th></tr></thead>
+    <tbody>
+      <tr><td><b>상태 파일</b> <code>index_state.json</code> — 문서 경로 → 청크 id 범위 · 지문</td><td>자동 인덱싱 순찰(10분)과 <code>/index-outside</code> 가 "인덱싱 폴더 밖 문서" 로 보고 지운다. 예외 규칙을 곳곳에 넣어야 한다</td></tr>
+      <tr><td><b>BM25 캐시</b> <code>bm25_index.npz</code> — 전체 청크로 한 번에 만듦</td><td>올리고 지울 때마다 전체 BM25 를 다시 만들어야 한다(5만 청크면 수십 초) — 아니면 키워드 검색에 안 잡힌다</td></tr>
+      <tr><td><b>Qdrant 로컬</b> — 한 프로세스만 열 수 있음(<code>already accessed</code>)</td><td>모델이 내려가 있을 때 지우려면 CLI 를 따로 띄워야 하고, 그동안 워커를 막아야 한다(<code>worker.hold</code>)</td></tr>
+      <tr><td><b>폴더 한정 검색</b> — 벡터 한 벌(<code>VectorMatrix</code>) + 폴더 마스크</td><td>업로드 문서가 "지정 폴더 전체" 검색에 섞여 나온다. 반대로 업로드만 찾으려면 마스크를 대화별로 또 만들어야 한다</td></tr>
+    </tbody>
+  </table></div>
+  <p>따로 두면 넷 다 사라진다. 대신 검색 함수가 "어느 코퍼스에서 찾나" 를 받도록 한 단계 넓히면 된다(§6). 올린 문서는 많아야 수백 청크라 Qdrant 같은 색인이 필요 없다.</p>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>전체 흐름</h2>
+  <h3>올리기</h3>
+  <div class="pipe"><span>[+] 누름</span><b>→</b><span>파일 고르기(여러 개)</span><b>→</b><span>RAGSearchBox: 한도 확인 · 대화 id 정함</span><b>→</b>
+    <span class="hl">워커 <code>/upload</code></span><b>→</b><span>원본 복사 → 추출 → 청킹 → 임베딩</span><b>→</b><span><code>uploads/&lt;conv&gt;/</code> 에 저장</span><b>→</b><span>첨부 칩 "완료 · 128청크"</span></div>
+  <h3>질문</h3>
+  <div class="pipe"><span>질문 보냄</span><b>→</b><span><code>/ask {q, prev, conv}</code></span><b>→</b><span class="hl">업로드 인덱스 읽기(캐시)</span><b>→</b>
+    <span>전수 내적 + BM25 → RRF → 리랭커 → 문턱</span><b>→</b><span>근거 3건 → 1.7B 답</span></div>
+  <h3>지우기</h3>
+  <div class="pipe"><span>기록에서 대화 지움</span><b>→</b><span>RAGSearchBox: <code>uploads/&lt;conv&gt;/</code> 폴더째 삭제</span><b>→</b><span>워커가 떠 있으면 <code>/upload-forget</code>(캐시 비움)</span></div>
+  <div class="flow">
+    <div class="card"><h3>새 대화에서 올리면</h3><ol>
+      <li>아직 대화가 없으면 이때 대화를 만든다(제목: 첫 파일 이름 · 첫 질문이 오면 질문으로 바꿈)</li>
+      <li>올리는 동안 보내기 단추는 잠근다 — 반쯤 올라간 인덱스로 묻지 않게</li>
+      <li>올린 뒤 첫 질문부터 업로드 문서만 찾는다</li>
+    </ol></div>
+    <div class="card"><h3>이미 질문한 대화에서 올리면</h3><ol>
+      <li>같은 대화에 이어 붙는다. 그 뒤 질문은 업로드 문서만 찾는다</li>
+      <li>앞 질문(이어서 묻기)은 그대로 쓴다 — 폴더 문서 대화에서 업로드로 넘어가도 주제가 이어질 수 있다</li>
+      <li>앞서 폴더 문서로 받은 답·출처는 기록에 그대로 남는다</li>
+    </ol></div>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>저장 위치와 파일 형식</h2>
+  <p>워커 데이터 폴더(<code>SIMPLERAG_HOME</code>, 없으면 실행 파일 옆) 아래. 대화 id 는 RAGSearchBox 대화 기록의 <code>conv.id</code> 그대로(예: <code>1793171456.529000</code>).</p>
+<pre>&lt;데이터 폴더&gt;/uploads/
+  &lt;conv_id&gt;/
+    meta.json        { "version": 1, "conv": "…", "embed_model": "multilingual-e5-small", "dim": 384,
+                       "chunk": {chunk_params()}, "files": [ { "name": "계약서.pdf", "stored": "files/1_계약서.pdf",
+                       "size": 1234567, "sha1": "…", "chunks": [0, 128], "pages": 31, "added": "2026-10-28T16:20:00" } ] }
+    files/           올린 원본의 사본(원본이 옮겨지거나 지워져도 기록을 다시 열면 출처를 열 수 있게)
+    chunks.jsonl     청크 한 줄씩 { "id": 0, "file": 0, "text": "[계약서 &gt; 제3조]\n…", "doc_name", "chunk_idx", "section_id" }
+    vectors.f32      청크 수 × 384 float32 리틀엔디언, L2 정규화(지금 임베더 출력 그대로)</pre>
+  <ul>
+    <li><b>두 판 같은 형식</b> — JSON · JSONL · 생 float32 라 Python(numpy) · Rust 모두 그대로 읽는다. 같은 데이터 폴더를 쓰면 판을 바꿔도 다시 임베딩하지 않는다.</li>
+    <li><b>호환 확인</b> — 읽을 때 <code>embed_model</code> · <code>dim</code> · <code>chunk</code> 가 지금 설정과 다르면 그 대화의 업로드를 다시 만든다(사본이 있으므로 가능).</li>
+    <li><b>원자적 쓰기</b> — <code>*.tmp</code> 에 쓰고 이름 바꾸기. 파일을 더하면 <code>chunks.jsonl</code> · <code>vectors.f32</code> 를 덧붙인 새 파일로 바꾸고 마지막에 <code>meta.json</code> 을 바꾼다(meta 가 기준).</li>
+    <li><b>파일 이름</b> — 사본은 <code>&lt;순번&gt;_&lt;원래 이름&gt;</code>(같은 이름 두 번 올려도 겹치지 않게). 화면에는 원래 이름.</li>
+  </ul>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>업로드 문서 검색</h2>
+  <p>지금 검색(<code>HybridRetriever.search</code> / <code>retrieve.rs search</code>)은 "1차 후보 뽑기(<code>_search</code>)" 와 "리랭크 · 문턱 · 동의어 덧붙임 · 이웃 청크" 로 나뉜다.
+    <b>1차 후보 뽑기만 업로드용으로 하나 더 만들고</b>, 그 뒤는 그대로 쓴다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>폴더 문서(지금)</th><th>업로드 문서(새로)</th></tr></thead>
+    <tbody>
+      <tr><td>의미 검색</td><td>Qdrant / VectorMatrix</td><td><code>vectors.f32</code> 전수 내적(수백 × 384 — 1ms 안팎)</td></tr>
+      <tr><td>키워드 검색</td><td>BM25 캐시(동의어로 넓힌 질의)</td><td>업로드 청크로 메모리 BM25(처음 한 번 만들고 대화별 캐시) · 동의어 넓힘 그대로</td></tr>
+      <tr><td>합치기</td><td colspan="2">RRF(<code>rrf_k</code> 같음) → 후보 <code>rerank.pool</code>(10) — 청크가 그보다 적으면 전부</td></tr>
+      <tr><td>리랭크 · 관련도 문턱</td><td colspan="2">같음 — 올린 문서에 없는 질문이면 "질문에 대한 내용이 문서에 없습니다" (지어낸 답을 막는다)</td></tr>
+      <tr><td>이어서 묻기 · 정밀 모드(이웃 청크)</td><td colspan="2">같음 — 이웃 청크는 업로드 청크의 <code>chunk_idx</code> 로 찾는다</td></tr>
+      <tr><td>동의어 덧붙임(RRF 1위 4번째 근거)</td><td colspan="2">같음</td></tr>
+      <tr><td>놓친 질문 기록</td><td>synonym_misses.jsonl</td><td><b>남기지 않는다</b> — 올린 문서는 사전 후보 재료가 아니다(사용자 문서 낱말이 사전에 섞이지 않게)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>캐시</b> — 워커는 대화 id → (청크, 벡터 행렬, BM25) 를 메모리에 둔다(최근 3개). <code>meta.json</code> 수정 시각이 바뀌거나 폴더가 없어지면 다시 읽는다/버린다.</li>
+    <li><b>근거 표시</b> — 출처 문서 이름은 원래 파일 이름, 경로는 사본 경로(<code>files/…</code>) — [문서 이름] 을 누르면 사본이 열린다.</li>
+    <li><b>소요 줄</b> — 모델 뒤에 "업로드 문서" 를 덧붙여 어느 쪽에서 찾았는지 남긴다. 예) <code>0.05s/2.10s/6.30s , qwen3-1.7b-q4 , 업로드 문서</code></li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>워커 명령(프로토콜)</h2>
+  <p>지금처럼 stdin 한 줄 · ASCII JSON. 결과는 기존 <code>@index {json}</code> 처럼 한 줄(<code>@upload {json}</code>)로 돌려준다. 시작 줄 "기능:" 에 <code>upload</code> 를 더해 옛 워커와 섞여도 안전하게 한다(없으면 [+] 를 잠근다).</p>
+  <div class="tbl"><table>
+    <thead><tr><th>명령</th><th>보냄</th><th>돌려받음 / 하는 일</th></tr></thead>
+    <tbody>
+      <tr><td><code>/upload</code></td><td><code>{"conv": "…", "path": "D:\\…\\계약서.pdf"}</code> — 파일 하나씩</td><td>사본 · 추출 · 청킹 · 임베딩 · 저장. 진행은 stderr <code>[upload] 추출 … / 임베딩 64/128</code>(진행 막대용),
+        끝에 <code>@upload {"ok": true, "conv", "name", "chunks": 128, "pages": 31, "ms": 4210}</code> 또는 <code>{"ok": false, "why": "…"}</code></td></tr>
+      <tr><td><code>/ask</code> (넓힘)</td><td><code>{"q", "folder", "prev", "conv"}</code></td><td><code>conv</code> 의 업로드 폴더에 <code>meta.json</code> 이 있으면 업로드만 찾는다. 없으면 지금과 같다(폴더 문서)</td></tr>
+      <tr><td><code>/upload-remove</code></td><td><code>{"conv": "…", "name": "계약서.pdf"}</code></td><td>첨부 칩의 [×] — 그 파일만 빼고 청크 · 벡터를 다시 쓴다(남은 파일이 없으면 폴더째 지움)</td></tr>
+      <tr><td><code>/upload-forget</code></td><td><code>{"conv": "…"}</code> 또는 <code>{"all": true}</code></td><td>메모리 캐시만 비운다(폴더는 RAGSearchBox 가 이미 지움)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">질문 중에 <code>/upload</code> 가 오면 지금 명령 대기열(자동 인덱싱 명령과 같은 줄)에 넣는다 — 질문이 언제나 먼저(자동인덱싱 설계서 §8).
+    대신 올리는 동안 그 대화의 보내기는 화면에서 잠근다.</div>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>화면 — [+] 버튼 · 첨부 칩 · 범위 표시</h2>
+  <div class="mock">
+    <div class="win" style="max-width:560px">
+      <div class="body">
+        <div class="composer">
+          <div class="chips">
+            <span class="chip up">📎 업로드 문서 2건에서 찾기</span>
+            <span class="chip">📄 용역계약서.pdf · 128청크 <span class="x">×</span></span>
+            <span class="chip">📄 과업지시서.docx · 올리는 중 64% <span class="x">×</span></span>
+          </div>
+          <div class="prog"><i></i></div>
+          <div class="ph">올린 문서에 대해 물어보세요 (Enter 전송)</div>
+          <div class="tools"><span class="plus">+</span><span style="color:var(--muted)">이 폴더 ▾ (업로드가 있으면 잠김)</span><span class="send">↑</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <ul>
+    <li><b>[+]</b> — 입력 카드 왼쪽 아래, 범위 단추 앞. 누르면 파일 고르기(여러 개). 끌어다 놓기(drag &amp; drop)도 같은 길로(2단계).</li>
+    <li><b>첨부 칩</b> — 파일마다 이름 · 상태(올리는 중 n% / 128청크 / 실패: 사유) · [×]. 올리는 중에는 칩 아래 진행 막대.</li>
+    <li><b>범위 칩</b> — 업로드가 있으면 "📁 sample_pdf · 문서 30건" 대신 <b>"📎 업로드 문서 N건에서 찾기"</b>(브랜드색). 범위 단추(이 폴더 ▾)는 잠근다.</li>
+    <li><b>답 · 출처</b> — 출처 카드 머리의 범위 글도 "업로드 문서 2건". [탐색기에서 보기] 는 사본 폴더를 연다.</li>
+    <li><b>빈 화면</b> — 예시 질문 칩 아래에 "또는 [+] 로 문서를 올려 그 문서에 대해 물어보세요" 한 줄.</li>
+    <li><b>Python 판</b> — 같은 동작을 Tk 로(파일 고르기: <code>filedialog.askopenfilenames</code>). 모양은 칩 대신 한 줄 목록이어도 된다(데모는 Rust 판).</li>
+  </ul>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>대화 기록과 지우기</h2>
+  <p>대화 기록(<code>history.json</code>, 최대 10개)에 업로드 정보를 함께 남긴다: <code>conv.uploads = [{"name", "chunks", "pages"}]</code>. 기록을 다시 열면 첨부 칩이 그대로 보이고, 이어서 물으면 업로드 문서에서 찾는다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>언제</th><th>지금</th><th>바꾼 뒤</th></tr></thead>
+    <tbody>
+      <tr><td>대화 한 건 지우기</td><td>없음(모두 지우기만)</td><td><b>새로</b> — 기록 메뉴의 대화 줄 오른쪽 [🗑] 또는 머리 ⋯ 의 "이 대화 지우기". 기록에서 빼고 <code>uploads/&lt;conv&gt;/</code> 폴더째 삭제</td></tr>
+      <tr><td>기록 모두 지우기</td><td>history.json 비움</td><td>+ <code>uploads/</code> 아래 모든 대화 폴더 삭제(확인 창 문구에 "올린 문서 n건도 지웁니다")</td></tr>
+      <tr><td>10개 한도로 밀려남</td><td>조용히 빠짐</td><td>저장할 때 빠진 대화의 업로드 폴더도 삭제(<code>history.touch</code> 가 빠진 id 를 돌려준다)</td></tr>
+      <tr><td>업로드 칩 [×]</td><td>—</td><td>워커 <code>/upload-remove</code> — 그 파일만. 모델이 내려가 있으면 RAGSearchBox 가 meta 에서 빼고 남은 청크로 다시 쓴다(임베딩 불필요)</td></tr>
+      <tr><td>RAGSearchBox 시작</td><td>—</td><td><b>고아 정리</b> — 기록에 없는 대화 id 폴더, 반쯤 쓰다 끊긴 <code>*.tmp</code> 를 지운다</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">지우기는 RAGSearchBox 가 폴더를 직접 지운다 — 모델이 내려가 있어도 지워져야 하고(R5), 업로드 폴더는 Qdrant 처럼 잠기지 않는 평범한 파일이라 가능하다.
+    워커가 그 대화를 캐시에 들고 있으면 <code>/upload-forget</code> 으로 비운다(안 보내도 다음 질문 때 폴더가 없으면 버린다).
+    파일이 열려 있어 못 지우면(사본을 다른 프로그램이 연 경우) 다음 시작 때 고아 정리가 다시 지운다.</div>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>한도 · 시간 · 용량 어림</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th class="num">값</th><th>근거 · 설정</th></tr></thead>
+    <tbody>
+      <tr><td>대화당 파일 수</td><td class="num">5</td><td>RAGSearchBox.ini <code>[Upload] MaxFiles</code></td></tr>
+      <tr><td>파일 크기</td><td class="num">30MB</td><td><code>[Upload] MaxMB</code> — 더 크면 "인덱싱 폴더에 넣어 쓰세요" 안내</td></tr>
+      <tr><td>대화당 청크</td><td class="num">3,000</td><td>넘으면 그 파일은 실패 처리(전수 내적·메모리 BM25 가 가벼운 범위 — 약 4.6MB 벡터)</td></tr>
+      <tr><td>30쪽 PDF 올리기</td><td class="num">약 4~6초</td><td>추출 1~2초 + 임베딩 약 130청크 ÷ 약 40청크/초(5만 청크 21분 실측, 설계서 결정10) — 실측으로 바꿀 것</td></tr>
+      <tr><td>업로드 검색 1차 후보</td><td class="num">수 ms</td><td>130 × 384 내적 + BM25 — 지금 폴더 검색(0.3~0.5초)보다 빠르다</td></tr>
+      <tr><td>대화 하나 디스크</td><td class="num">원본 + 약 1MB</td><td>130청크 벡터 200KB · 청크 글 수백 KB. 대화 10개 한도라 전체도 작다</td></tr>
+      <tr><td>워커 메모리 캐시</td><td class="num">최근 3대화</td><td>대화당 수 MB 이하</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s11">
+  <h2><span class="no">11</span>실패와 예외 처리</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>상황</th><th>처리</th></tr></thead>
+    <tbody>
+      <tr><td>지원하지 않는 확장자 · 임시 파일(~$ 등)</td><td>고를 때 걸러 칩에 "지원하지 않는 형식" — 워커에 보내지 않는다</td></tr>
+      <tr><td>글자가 없는 PDF(스캔본)</td><td>추출 결과가 비면 실패 "글자를 뽑지 못했습니다(스캔 문서는 아직 지원하지 않습니다)"</td></tr>
+      <tr><td>모델이 내려가 있음</td><td>[+] 를 누르면 모델을 올리고(진행 막대) 다 올라오면 이어서 올린다</td></tr>
+      <tr><td>올리는 중 창 닫기 · 워커 재시작</td><td>meta.json 이 기준이라 반쯤 쓴 파일은 무시되고 다음 시작 때 <code>*.tmp</code> 정리. 칩은 "실패: 중단됨 — 다시 올리기"</td></tr>
+      <tr><td>업로드 폴더가 사라짐(사용자가 지움)</td><td>질문 때 "올린 문서를 찾지 못했습니다 — 다시 올려 주세요" · 칩에 경고 표시</td></tr>
+      <tr><td>임베딩 모델 · 청킹 설정이 바뀜</td><td>사본으로 다시 만든다(§5 호환 확인) — 질문 전에 진행 막대</td></tr>
+      <tr><td>올린 문서에 없는 질문</td><td>관련도 문턱 — "질문에 대한 내용이 문서에 없습니다" (폴더 문서로 넘어가지 않는다, R3)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s12">
+  <h2><span class="no">12</span>시험 · 측정 계획</h2>
+  <ul class="steps">
+    <li><b>단위 시험(두 판)</b> — 업로드 저장소 쓰기/읽기/파일 빼기/폴더 지우기, meta 호환 확인, 같은 이름 두 번, 원자적 쓰기(중간 끊김 흉내).</li>
+    <li><b>두 판 같은 결과</b> — 같은 PDF 3개를 두 판에서 올리고 골든 질문 중 그 문서 문항으로 근거 비교(지금 Rust ↔ Python 비교 스크립트 방식). 목표 근거 100% 같음.</li>
+    <li><b>범위 지키기(R3)</b> — 업로드 대화에서 인덱싱 폴더에만 있는 내용을 물으면 "내용이 문서에 없습니다" 가 나오는지(폴더 문서가 근거에 0건).</li>
+    <li><b>정답</b> — sample_pdf 문서 3~5개를 올려 그 문서의 골든 문항으로 정답 수를 폴더 검색과 비교(업로드 쪽이 같거나 높아야 — 후보가 그 문서뿐이라 오히려 쉬워진다).</li>
+    <li><b>시간</b> — 10 · 30 · 100쪽 PDF 올리기 시간, 업로드 질문 체감 TTFT(폴더 검색 대비).</li>
+    <li><b>지우기(R5)</b> — 한 건 · 모두 · 10개 한도 밀려남 · 고아 정리 후 <code>uploads/</code> 에 남는 것이 없는지, 그리고 <code>index_state.json</code> · BM25 · Qdrant 가 업로드 전과 같은지(바이트 비교).</li>
+  </ul>
+</section>
+
+<section id="s13">
+  <h2><span class="no">13</span>구현 단계</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>내용</th><th>파일(Python / Rust)</th><th>크기</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>업로드 저장소 — 추출·청킹은 인덱서 함수 재사용(<code>_extract_blocks</code>), 쓰기/읽기/빼기/지우기</td><td><code>index/uploads.py</code> / <code>uploads.rs</code></td><td><span class="tag t-good">완료</span></td></tr>
+      <tr><td>2</td><td>검색 — 1차 후보를 "코퍼스" 로 받게 넓히고 업로드 코퍼스(전수 내적 + 메모리 BM25), 캐시</td><td><code>retrieve/hybrid.py</code> · <code>pipeline.py</code> / <code>retrieve.rs</code> · <code>app.rs</code></td><td><span class="tag t-good">완료</span></td></tr>
+      <tr><td>3</td><td>워커 명령 <code>/upload</code> · <code>/upload-remove</code> · <code>/upload-forget</code> · <code>/ask</code> 의 conv, "기능: upload"</td><td><code>cli.py</code> / <code>cli.rs</code></td><td><span class="tag t-good">완료</span> 결과는 <code>@index</code> 한 줄(기존 명령과 같은 모양)</td></tr>
+      <tr><td>4</td><td>RAGSearchBox — [+] · 첨부 칩 · 진행 · 범위 칩 · 보내기 잠금, 워커에 명령 보내기</td><td><code>ui/panel.html</code> · <code>main.rs</code> · <code>worker.rs</code> / <code>chat_panel.py</code> · <code>app.py</code> · <code>rag_worker.py</code></td><td><span class="tag t-good">완료</span> 실제 창 확인 전</td></tr>
+      <tr><td>5</td><td>대화 기록 — 한 건 지우기 메뉴, 모두 지우기·한도 밀려남·고아 정리 때 폴더 삭제</td><td><code>main.rs</code> · <code>ui/panel.html</code> / <code>chat_panel.py</code> · <code>app.py</code></td><td><span class="tag t-good">완료</span> 한 건 지우기는 ⋯ 메뉴 "이 대화 지우기"</td></tr>
+      <tr><td>6</td><td>시험 · 측정(§12) · 설계서 결과 반영</td><td><code>bench/test_uploads.py</code> · <code>RAGSearchBox/tests/test_uploads.py</code></td><td><span class="tag t-warn">일부</span> §15</td></tr>
+    </tbody>
+  </table></div>
+  <p>1~3은 CLI 만으로 시험할 수 있다(<code>chat</code> 에 <code>/upload</code> 를 직접 넣기) — 화면(4) 전에 두 판 근거가 같은지 먼저 맞춘다. 데모는 Rust 판이므로 4는 Rust 판을 먼저 한다.</p>
+</section>
+
+<section id="s14">
+  <h2><span class="no">14</span>결정이 필요한 것</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>질문</th><th>제안(기본값)</th><th>다른 길</th></tr></thead>
+    <tbody>
+      <tr><td>업로드가 있는 대화에서 폴더 문서로 다시 찾게 할 수 있나?</td><td>못 하게 — 요청(R3) 그대로. 폴더 문서로 물으려면 새 대화</td><td>범위 단추에 "업로드 + 폴더" 를 두는 것(나중)</td></tr>
+      <tr><td>원본 사본을 남기나?</td><td>남긴다 — 기록을 다시 열 때 출처를 열 수 있게, 설정이 바뀌면 다시 만들 수 있게</td><td>경로만 기억(원본이 옮겨지면 출처가 깨진다)</td></tr>
+      <tr><td>한도</td><td>5개 · 30MB · 3,000청크</td><td>데모 문서 크기에 맞춰 조정</td></tr>
+      <tr><td>올린 문서 질문도 놓친 질문 기록(동의어 후보)에 넣나?</td><td>넣지 않는다</td><td>넣되 업로드 문서 낱말은 후보에서 뺀다</td></tr>
+      <tr><td>스캔 PDF(OCR)</td><td>이번 범위 밖 — 실패 안내만</td><td>OCR 엔진을 따로 붙이는 별도 과제</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s15">
+  <h2><span class="no">15</span>구현 결과 (2026-10-28)</h2>
+  <div class="verdict"><strong>1~5단계 구현 · 두 판 같은 결과.</strong> sample_pdf 문서 3개(원격지 비품 6청크 · 출장여비 99청크 · 경조사 6청크)를 한 대화에 올려 CLI 로 확인했다.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>확인</th><th>Python</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr><td>올리기 시간(6청크 · 99청크 · 6청크)</td><td class="num">0.29 · 2.31 · 0.24초</td><td class="num">1.29 · 2.66 · 0.16초</td></tr>
+      <tr><td>근거 12건(질문 4개 × 3) 본문 · 사본 경로</td><td colspan="2">12/12 같음</td></tr>
+      <tr><td>답 — 침구류 한도 · 공휴일 겹친 경조휴가</td><td colspan="2">두 판 같은 답("25만원" · "공휴일을 제외하여 계산")</td></tr>
+      <tr><td>범위 지키기(R3) — 올리지 않은 이사회 규정 질문</td><td colspan="2">두 판 "질문에 대한 내용이 문서에 없습니다" — 인덱싱 폴더 문서로 넘어가지 않음</td></tr>
+      <tr><td>문서 빼기 → 남은 2개로만 검색 · 마지막 문서를 빼면 폴더째 삭제</td><td colspan="2">확인 · 폴더가 사라진 대화는 "올린 문서를 찾지 못했습니다"</td></tr>
+      <tr><td>단위 시험</td><td>bench/test_uploads.py 10건 · RAGSearchBox test_uploads 4건</td><td>빌드 · 기존 시험 통과</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>설계와 다르게 한 것</b> — 한도(5개 · 30MB)는 RAGSearchBox.ini <code>[Upload]</code> 대신 코드 상수로 두었다(<code>UPLOAD_MAX_FILES</code> · <code>UPLOAD_MAX_MB</code>). 대화 한 건 지우기는 기록 메뉴 줄의 [🗑] 대신 ⋯ 메뉴의 "이 대화 지우기"(지금 연 대화).</li>
+    <li><b>알아 둘 것</b> — 업로드 검색도 관련도 문턱(리랭커 점수 -6)을 그대로 쓴다. "침구류는 얼마까지 살 수 있어?" 처럼 짧은 구어 질문은 인덱싱 폴더 검색에서도 문턱 아래(-6.29)라 "문서에 없습니다" 가 나온다 — 업로드 문제는 아니다.</li>
+    <li><b>남은 것</b> — 실제 창(두 판 RAGSearchBox)에서 [+] · 칩 · 진행 · 지우기 확인, 10 · 30 · 100쪽 PDF 시간, 골든 문항 정답 비교(§12 ④⑤), 끌어다 놓기(2단계).</li>
+  </ul>
+</section>
+
+<footer>작성 2026-10-28 · 구현 반영 2026-10-28 · 지금 구조 검토: index/indexer.py · index/commands.py · retrieve/hybrid.py · RAGSearchBox history.py / history.rs · 관련: plan/폴더한정검색_설계서.html · plan/자동인덱싱_설계서.html</footer>
+</div>
+</body>
+</html>

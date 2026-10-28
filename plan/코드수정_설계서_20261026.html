@@ -124,7 +124,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
       <tr><td>④</td><td>test_watcher 실시간 시험이 부하 중 가끔 실패</td><td><span class="tag t-good">권장</span></td><td>RAGSearchBox 시험</td><td>작음</td><td>부하 중 10회 연속 통과</td></tr>
       <tr><td>⑤</td><td>답은 맞는데 인용 번호가 엉뚱한 근거를 가리킴</td><td><span class="tag t-warn">실험</span></td><td>후처리(두 판)</td><td>중간</td><td>인용 정확도 측정 → 개선 확인</td></tr>
       <tr><td>⑥</td><td>"할아버지" ↔ "조부모" 처럼 표현이 다르면 검색이 놓침</td><td><span class="tag t-warn">실험</span></td><td>검색(두 판) · config.yaml</td><td>중간</td><td>바꿔 말한 질문 세트에서 문서 적중 개선 · 골든셋 퇴보 없음</td></tr>
-      <tr><td>⑦</td><td>멀티홉·추론 문항의 Faithfulness 0.47~0.65</td><td><span class="tag t-warn">실험</span></td><td>모델·지시문·근거 수</td><td>큼</td><td>57문항(멀티홉+추론) RAGAS·핵심어 개선 — <b>검토 결과(10-28): 손잡이 넷 모두 보류·버림, 4B 측정 남음</b></td></tr>
+      <tr><td>⑦</td><td>멀티홉·추론 문항의 Faithfulness 0.47~0.65</td><td><span class="tag t-warn">실험</span></td><td>모델·지시문·근거 수</td><td>큼</td><td>57문항(멀티홉+추론) RAGAS·핵심어 개선 — <b>검토 결과(10-28): 1.7B 손잡이 넷 보류·버림 · 4B+이웃 청크 정답 50 → 59(대신 답 완료 약 2배) — 정밀 모드 옵션으로 넣음(기본 끔)</b></td></tr>
     </tbody>
   </table></div>
 </section>
@@ -292,7 +292,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
   <div class="item">
     <h4>검토 결과 (2026-10-28) — 멀티홉은 검색, 추론은 1.7B 의 계산이 원인. 지금 손잡이로는 답이 안 오른다</h4>
     <div class="verdict"><strong>결론: 근거 늘리기 · 생각 모드 · 계산기 보조 · 이웃 청크 넷 다 기본값으로 넣지 않는다.</strong>
-      근거는 채울 수 있지만(정답 발췌 63 → 73) 1.7B 의 답은 잡음 수준(50 → 51)만 오른다. 남은 손잡이는 더 큰 모델(4B) — 측정 전.</div>
+      근거는 채울 수 있지만(정답 발췌 63 → 73) 1.7B 의 답은 잡음 수준(50 → 51)만 오른다. 더 큰 모델(4B)에 이웃 청크를 함께 쓰면 <b>50 → 59</b> — 대신 첫 글자 약 3배·답 완료 약 2배 느려 기본값이 아닌 정밀 모드 옵션 후보(④).</div>
     <p>자료: 골든 100문항, Python chat 워커 최신 결과(⑤ 반영 뒤, <code>results/rust_vs_py/chat_python.json</code>). 정답 = 핵심어(must) 전부 포함, 정답 발췌 = 골든 발췌가 근거에 모두 듦.
       규칙 지표만 썼다(RAGAS 판정 없음).</p>
 
@@ -338,10 +338,32 @@ td.num, th.num { text-align: right; white-space: nowrap; }
     <ul>
       <li>조건 비교(검색만, 정답 발췌 모두 찾음 합계 / 근거 토큰): C0 지금 63/340 · C1 모두+다음 72/539 · C2 모두+앞뒤 76/737 · C3 끊긴 근거만 71/468 · <b>C4 후보 안의 이웃만 73/458</b> · C5 1위만 68/407 · (참고) top_k 4 68/453.</li>
       <li>모델 바꾸기는 이미 재 봤다 — Mi:dm 2.0 Mini · Kanana 1.5 는 Faithfulness 는 올랐지만 506문항 정답은 1.7B 보다 11 적고 더 느리다(REPORT §47).</li>
-      <li>남은 손잡이: <b>Qwen3-4B 정밀 모드</b> — Newploy 측정에서 4B 가 추론 Faithfulness 0.56 → 0.75 (대신 2.5배 느림). 4B 에서는 이웃 청크가 채운 근거를 제대로 쓸 수 있는지 함께 본다.
-        2차 검색(멀티쿼리)은 동의어 설계서 5단계(조건부 멀티쿼리)와 같은 일이라 함께 미룬다.</li>
+      <li>2차 검색(멀티쿼리)은 동의어 설계서 5단계(조건부 멀티쿼리)와 같은 일이라 함께 미룬다.</li>
     </ul>
-    <p class="note">실험 스크립트는 저장소 밖(스크래치)에 두었다. 이웃 청크 답변 비교 결과: <code>results/neighbor_c4.json</code>(저장소 밖, .gitignore).</p>
+
+    <h4>④ Qwen3-4B 정밀 모드 — 큰 모델은 이웃 청크가 채운 근거를 쓴다</h4>
+    <p>골든 100문항, 같은 근거로 모델만 바꿔 조건마다 따로 한 바퀴(KV 재사용 없음). 4B = <code>Qwen3-4B-Q4_K_M.gguf</code>(2.5GB, unsloth), 지시문·근거 3건·생성 설정은 1.7B 와 같다.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>모델 · 근거</th><th class="num">정답</th><th class="num">싱글홉 43</th><th class="num">멀티홉 32</th><th class="num">추론 25</th><th class="num">발췌 다 있을 때</th><th class="num">TTFT p50 / p90</th><th class="num">답 완료 p50</th></tr></thead>
+      <tbody>
+        <tr><td>1.7B · C0 (지금)</td><td class="num">50</td><td class="num">32</td><td class="num">12</td><td class="num">6</td><td class="num">45 / 63</td><td class="num">2.2 / 2.9초</td><td class="num">7.6초</td></tr>
+        <tr><td>1.7B · C4 (③ 측정)</td><td class="num">51</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+        <tr><td>4B · C0</td><td class="num">54</td><td class="num">35</td><td class="num">12</td><td class="num">7</td><td class="num">48 / 63</td><td class="num">5.6 / 7.4초</td><td class="num">13.8초</td></tr>
+        <tr><td><b>4B · C4</b></td><td class="num ok"><b>59</b></td><td class="num">38</td><td class="num">12</td><td class="num ok">9</td><td class="num">55 / 73</td><td class="num">7.1 / 10.1초</td><td class="num">14.7초</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><b>모델만 키우면 +4</b> (1.7B → 4B, C0) — 얻음 9(q003 · q004 · q008 · q022 · q024 · q035 · q057 · q092 · q096) · 잃음 5(q014 · q023 · q039 · q047 · q087).
+        추론 계산 오류로 꼽았던 q004 · q022 · q096 이 풀렸다.</li>
+      <li><b>4B 에서는 이웃 청크가 듣는다 +5</b> (얻음 6: q020 · q030 · q058 · q070 · q077 · q087, 잃음 1: q057) — 1.7B 에서는 +1 이었다.
+        1.7B 는 길어진 프롬프트에 흔들렸고 4B 는 채운 근거를 쓴다.</li>
+      <li><b>멀티홉은 셋 다 12</b> — 모델로는 안 오른다. ① 의 결론(멀티홉은 검색이 원인)과 같다. 추론은 6 → 9 로 조금.</li>
+      <li><b>대가</b> — 첫 글자 2.2 → 7.1초(약 3배), 답 완료 7.6 → 14.7초(약 2배), 모델 파일 +2.5GB · 메모리 더 씀.</li>
+      <li><b>판단: 기본값은 1.7B 그대로, "정밀 모드"(4B + 이웃 청크 C4) 를 설정 옵션으로 두는 것을 다음 후보로.</b> 넣을 때는 두 판 모두 · 근거 표시는 지금처럼 먼저 띄워 기다림을 가린다.
+        <span class="tag t-good">구현 (10-28)</span> — <code>config.yaml</code> <code>generation.precision</code>(기본 false · 환경변수 SIMPLERAG_PRECISION) ·
+        RAGSearchBox 설정 창 기본 탭 [정밀 모드] 체크(바꾸면 그 줄만 고치고 모델을 다시 올림, 느려진다는 주의 글 표시). 두 판 근거 골든 100문항 100/100 같음.</li>
+    </ul>
+    <p class="note">실험 스크립트는 저장소 밖(스크래치)에 두었다. 결과: <code>results/neighbor_c4.json</code> · <code>results/model_4b.json</code> · <code>results/model_17b.json</code>(저장소 밖, .gitignore). 정답은 규칙 지표(핵심어)만, RAGAS 판정 없음.</p>
   </div>
 </section>
 
@@ -354,7 +376,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
     <li><b>⑤</b> 측정부터 — 인용 정확도가 생각보다 높으면 여기서 멈춘다.</li>
     <li><b>⑥</b> 질문 세트를 만든 뒤 — 세트 없이 사전부터 만들지 않는다.</li>
     <li><b>⑦</b> 마지막 — 가장 크고 결과가 불확실하다. Rust·Python 중 주력 판을 정한 뒤 한 판에서 먼저 실험해도 된다.
-      <i>(10-28 검토: 근거 수 · 생각 모드 · 계산기 · 이웃 청크 모두 답을 못 올림 — 다음은 Qwen3-4B 정밀 모드 측정)</i></li>
+      <i>(10-28 검토: 1.7B 에서는 근거 수 · 생각 모드 · 계산기 · 이웃 청크 모두 답을 못 올림. 4B + 이웃 청크는 50 → 59 · 약 2배 느림 — 정밀 모드 옵션(generation.precision, 기본 끔)으로 넣음)</i></li>
   </ol>
   <div class="note">공통: 출력·검색 동작을 바꾸는 수정(②③⑤⑥)은 두 판이 같은 결과를 내는지 <code>bench/rust_vs_py/perf.py chat</code> + <code>analyze.py</code> 로 확인한다(지금 기준 두 판 답 일치 99/100).</div>
 </section>
