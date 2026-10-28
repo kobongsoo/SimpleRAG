@@ -82,6 +82,8 @@ footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px
 .item h4 { font-size: 14.5px; margin: 16px 0 4px; color: var(--ink-2); }
 .item ul, .item ol { margin: 4px 0; padding-left: 22px; font-size: 14.5px; }
 .item li { margin: 3px 0; }
+.ok { color: var(--good); font-weight: 600; }
+.ng { color: var(--bad); font-weight: 600; }
 .meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
 td.num, th.num { text-align: right; white-space: nowrap; }
 </style>
@@ -122,7 +124,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
       <tr><td>④</td><td>test_watcher 실시간 시험이 부하 중 가끔 실패</td><td><span class="tag t-good">권장</span></td><td>RAGSearchBox 시험</td><td>작음</td><td>부하 중 10회 연속 통과</td></tr>
       <tr><td>⑤</td><td>답은 맞는데 인용 번호가 엉뚱한 근거를 가리킴</td><td><span class="tag t-warn">실험</span></td><td>후처리(두 판)</td><td>중간</td><td>인용 정확도 측정 → 개선 확인</td></tr>
       <tr><td>⑥</td><td>"할아버지" ↔ "조부모" 처럼 표현이 다르면 검색이 놓침</td><td><span class="tag t-warn">실험</span></td><td>검색(두 판) · config.yaml</td><td>중간</td><td>바꿔 말한 질문 세트에서 문서 적중 개선 · 골든셋 퇴보 없음</td></tr>
-      <tr><td>⑦</td><td>멀티홉·추론 문항의 Faithfulness 0.47~0.65</td><td><span class="tag t-warn">실험</span></td><td>모델·지시문·근거 수</td><td>큼</td><td>57문항(멀티홉+추론) RAGAS·핵심어 개선</td></tr>
+      <tr><td>⑦</td><td>멀티홉·추론 문항의 Faithfulness 0.47~0.65</td><td><span class="tag t-warn">실험</span></td><td>모델·지시문·근거 수</td><td>큼</td><td>57문항(멀티홉+추론) RAGAS·핵심어 개선 — <b>검토 결과(10-28): 손잡이 넷 모두 보류·버림, 4B 측정 남음</b></td></tr>
     </tbody>
   </table></div>
 </section>
@@ -286,6 +288,61 @@ td.num, th.num { text-align: right; white-space: nowrap; }
     <h4>검증</h4>
     <ul><li>57문항 핵심어 포함률과 RAGAS(Claude 판정, 같은 방식) 비교, 싱글홉 43문항 퇴보 없음, TTFT 중앙값 변화 기록.</li></ul>
   </div>
+
+  <div class="item">
+    <h4>검토 결과 (2026-10-28) — 멀티홉은 검색, 추론은 1.7B 의 계산이 원인. 지금 손잡이로는 답이 안 오른다</h4>
+    <div class="verdict"><strong>결론: 근거 늘리기 · 생각 모드 · 계산기 보조 · 이웃 청크 넷 다 기본값으로 넣지 않는다.</strong>
+      근거는 채울 수 있지만(정답 발췌 63 → 73) 1.7B 의 답은 잡음 수준(50 → 51)만 오른다. 남은 손잡이는 더 큰 모델(4B) — 측정 전.</div>
+    <p>자료: 골든 100문항, Python chat 워커 최신 결과(⑤ 반영 뒤, <code>results/rust_vs_py/chat_python.json</code>). 정답 = 핵심어(must) 전부 포함, 정답 발췌 = 골든 발췌가 근거에 모두 듦.
+      규칙 지표만 썼다(RAGAS 판정 없음).</p>
+
+    <h4>① 실패를 둘로 나눔 — 검색이냐 답이냐</h4>
+    <div class="tbl"><table>
+      <thead><tr><th>유형</th><th class="num">발췌 모두 찾음</th><th class="num">→ 그중 정답</th><th class="num">일부만 찾음</th><th class="num">→ 그중 정답</th><th class="num">못 찾음</th></tr></thead>
+      <tbody>
+        <tr><td>싱글홉 43</td><td class="num">35</td><td class="num">29 (83%)</td><td class="num">2</td><td class="num">2</td><td class="num">6</td></tr>
+        <tr><td>멀티홉 32</td><td class="num">14</td><td class="num ok">11 (79%)</td><td class="num">14</td><td class="num ng">1</td><td class="num">4</td></tr>
+        <tr><td>추론 25</td><td class="num">14</td><td class="num ng">5 (36%)</td><td class="num">6</td><td class="num">0</td><td class="num">5</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><b>멀티홉은 검색이 원인</b> — 근거를 다 찾으면 1.7B 도 79% 맞힌다. 필요한 발췌(평균 2.4개)의 일부만 근거 3건에 드는 문항이 14개.</li>
+      <li><b>추론은 답(1.7B)이 원인</b> — 근거를 다 찾고도 14 중 9 틀린다. 계산을 끝까지 안 함(q004 14×1만원 · q022 ×22일),
+        산술 오류(q017 3천만÷60 을 1/5 · q083 108,068÷17,940 을 10.8배 · q096 987.5÷146.8 을 9.8배 · q049 합 대신 최댓값),
+        규칙 적용·표 읽기 오류(q029 "20일은 15일 미만" · q041 연차 가산 미적용 · q009 한도 표를 잘못 읽음).</li>
+    </ul>
+
+    <h4>② 빠진 발췌는 어디에 있나 (멀티홉·추론, 일부만 찾은 문항의 빠진 발췌 24개)</h4>
+    <div class="tbl"><table>
+      <thead><tr><th>위치</th><th class="num">개수</th><th>맞는 처방</th></tr></thead>
+      <tbody>
+        <tr><td>질문으로는 1차 후보(RRF) 50위 안에도 없음</td><td class="num">13</td><td>첫 근거를 보고 다시 찾는 2차 검색(LLM 질문 재작성) — 질문마다 +3~5초</td></tr>
+        <tr><td>찾은 근거와 같은 문서의 이웃 청크(±2)</td><td class="num">5</td><td>이웃 청크 붙이기</td></tr>
+        <tr><td>같은 문서 먼 곳 · 다른 문서 — 후보 상위에 있는데 근거 3건에서 잘림</td><td class="num">6</td><td>근거 수 늘리기</td></tr>
+      </tbody>
+    </table></div>
+
+    <h4>③ 해 본 것 — 넷 다 답을 못 올렸다</h4>
+    <div class="tbl"><table>
+      <thead><tr><th>실험</th><th>검색 (정답 발췌 모두 찾음)</th><th>답</th><th>시간</th><th>판단</th></tr></thead>
+      <tbody>
+        <tr><td><b>근거 수</b> top_k 3 → 4 · 5 · 6 (리랭커 후보 10 · 20)</td><td>멀티홉 14 → 17 → 17 → 17, 추론 14 → 15 → 16 → 16. 후보 20 도 같음 — 4 에서 멈춘다</td>
+          <td>추정 +2~3 / 100 (멀티홉 +3 × 79%)</td><td>근거 340 → 453 토큰, 모든 질문 TTFT 약 +1초</td><td><span class="tag t-warn">보류</span></td></tr>
+        <tr><td><b>생각 모드</b>(Qwen3 thinking) — 추론 25, 같은 근거</td><td>—</td><td>정답 6 → <b>5</b>. 6문항은 1,500토큰을 생각에만 쓰고 답 못 냄</td><td>답 완료 중앙 11.7 → <b>75초</b>(최대 182초)</td><td><span class="tag t-bad">버림</span></td></tr>
+        <tr><td><b>계산기 보조</b> — 1.7B 는 "식:" 만, 셈은 코드</td><td>—</td><td>맞는 식 약 4/25(q004 · q083 · q096 · q077), 식부터 틀림(q017 · q022 · q041), 식 대신 낱말 다수</td><td>+5~10초(한 번 더 생성)</td><td><span class="tag t-bad">버림</span></td></tr>
+        <tr><td><b>이웃 청크</b> C4 — 근거마다 ±1 청크 중 리랭커 후보 10건 안의 것만 이어 붙임 (C1~C5 다섯 조건 중 토큰당 가장 나음)</td><td>63 → <b>73</b> (싱글홉 35 → 38 · 멀티홉 14 → 17 · 추론 14 → 18), 근거 340 → 458 토큰</td>
+          <td>골든 100 답변 생성: 정답 50 → <b>51</b>. 발췌가 채워진 10문항 중 정답으로 바뀐 것 3(q020 이사회 · q030 보고 순서 · q058),
+            발췌가 그대로인 90문항에서 프롬프트가 길어져 답이 흔들림 +3 −5(q091 목표 셋 중 하나만 · q011 계산을 빼먹음)</td><td>약 +1초(이번 측정값은 앞 실행의 KV 재사용으로 쓸 수 없음)</td><td><span class="tag t-warn">보류</span></td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>조건 비교(검색만, 정답 발췌 모두 찾음 합계 / 근거 토큰): C0 지금 63/340 · C1 모두+다음 72/539 · C2 모두+앞뒤 76/737 · C3 끊긴 근거만 71/468 · <b>C4 후보 안의 이웃만 73/458</b> · C5 1위만 68/407 · (참고) top_k 4 68/453.</li>
+      <li>모델 바꾸기는 이미 재 봤다 — Mi:dm 2.0 Mini · Kanana 1.5 는 Faithfulness 는 올랐지만 506문항 정답은 1.7B 보다 11 적고 더 느리다(REPORT §47).</li>
+      <li>남은 손잡이: <b>Qwen3-4B 정밀 모드</b> — Newploy 측정에서 4B 가 추론 Faithfulness 0.56 → 0.75 (대신 2.5배 느림). 4B 에서는 이웃 청크가 채운 근거를 제대로 쓸 수 있는지 함께 본다.
+        2차 검색(멀티쿼리)은 동의어 설계서 5단계(조건부 멀티쿼리)와 같은 일이라 함께 미룬다.</li>
+    </ul>
+    <p class="note">실험 스크립트는 저장소 밖(스크래치)에 두었다. 이웃 청크 답변 비교 결과: <code>results/neighbor_c4.json</code>(저장소 밖, .gitignore).</p>
+  </div>
 </section>
 
 <section id="order">
@@ -296,7 +353,8 @@ td.num, th.num { text-align: right; white-space: nowrap; }
     <li><b>④</b> 짬날 때 — ②③ 시험 돌릴 때 함께.</li>
     <li><b>⑤</b> 측정부터 — 인용 정확도가 생각보다 높으면 여기서 멈춘다.</li>
     <li><b>⑥</b> 질문 세트를 만든 뒤 — 세트 없이 사전부터 만들지 않는다.</li>
-    <li><b>⑦</b> 마지막 — 가장 크고 결과가 불확실하다. Rust·Python 중 주력 판을 정한 뒤 한 판에서 먼저 실험해도 된다.</li>
+    <li><b>⑦</b> 마지막 — 가장 크고 결과가 불확실하다. Rust·Python 중 주력 판을 정한 뒤 한 판에서 먼저 실험해도 된다.
+      <i>(10-28 검토: 근거 수 · 생각 모드 · 계산기 · 이웃 청크 모두 답을 못 올림 — 다음은 Qwen3-4B 정밀 모드 측정)</i></li>
   </ol>
   <div class="note">공통: 출력·검색 동작을 바꾸는 수정(②③⑤⑥)은 두 판이 같은 결과를 내는지 <code>bench/rust_vs_py/perf.py chat</code> + <code>analyze.py</code> 로 확인한다(지금 기준 두 판 답 일치 99/100).</div>
 </section>
