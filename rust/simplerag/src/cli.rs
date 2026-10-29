@@ -68,6 +68,7 @@ pub struct Args {
     pub from: Option<String>,
     pub out: Option<String>,
     pub no_llm: bool,
+    pub group: bool,
 }
 
 fn model_mode(alias: &str) -> String {
@@ -583,7 +584,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
     }
     outln(&format!("모델: 임베딩 {} / 리랭커 {}", pyutil::basename(pyutil::rstrip_chars(&cfg().model_dir, "\\/")),
         pyutil::basename(pyutil::rstrip_chars(&cfg().rerank_dir, "\\/"))));
-    outln("기능: ask-folder index-commands ask-prev upload");
+    outln("기능: ask-folder index-commands ask-prev upload find");
     outln("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n");
     loop {
         out("질문> ");
@@ -639,6 +640,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 outln("  /bm25                키워드 색인 다시 만들기");
                 outln("  /index-plan <폴더>   폴더와 인덱스 비교(바꾸지 않음)");
                 outln("  /suggest-synonyms    놓친 질문으로 동의어 사전 후보 뽑기");
+                outln("  /find {\"q\": 검색어, \"folder\": 폴더}  탐색기 모드 찾기 — 문서 ▸ 쪽 (@find 줄)");
                 outln("  exit        종료\n");
             } else if cmd == "/topk" && parts.len() > 1 && parts[1].chars().all(|c| c.is_ascii_digit()) && !parts[1].is_empty() {
                 top_k = parts[1].parse().ok();
@@ -653,6 +655,25 @@ pub fn cmd_chat(a: &Args) -> i32 {
             } else if cmd == "/upload" || cmd == "/upload-remove" || cmd == "/upload-forget" {
                 // 문서 업로드(업로드 설계서 §7) — 대화별 업로드 인덱스. 결과는 "@index {json}" 한 줄
                 outln(&commands::format_result(upload_command(&app, &cmd, &rest).as_object().unwrap(), commands::PREFIX));
+            } else if cmd == "/find" {
+                // 탐색기 모드 찾기(탐색기 모드 설계서 §15) — 답 없이 문서 ▸ 쪽 목록을 "@find" 줄로
+                let raw = if rest.is_empty() { "{}".to_string() } else { rest.clone() };
+                match serde_json::from_str::<Value>(&raw) {
+                    Ok(Value::Object(req)) => {
+                        let q = pyutil::strip(req.get("q").and_then(|v| v.as_str()).unwrap_or("")).to_string();
+                        let folder = req.get("folder").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+                        let limit = req.get("limit").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                        if q.is_empty() {
+                            outln(&crate::find::error_line("검색어가 비었습니다"));
+                        } else {
+                            match crate::find::find(&app.retriever, &q, folder.as_deref(), limit) {
+                                Ok((lines, done)) => crate::find::print_lines(&lines, &done, &mut |s| outln(s)),
+                                Err(e) => outln(&crate::find::error_line(&e)),
+                            }
+                        }
+                    }
+                    _ => outln(&crate::find::error_line("/find 형식이 잘못됐습니다: /find {\"q\": \"검색어\"}")),
+                }
             } else if cmd == "/suggest-synonyms" {
                 // 동의어 후보 만들기(동의어 설계서 4단계) — 인덱스를 쥔 이 워커가 올려 둔 모델로 직접 한다.
                 //   명령 시간 제한(RAGSearchBox 300초) 안에 끝나게 최근 질문 WORKER_RECENT 개만 본다
@@ -807,6 +828,21 @@ pub fn cmd_search(a: &Args) -> i32 {
     app.wait_rerank();
     let q = a.query.clone().unwrap_or_default();
     let chars = a.chars.unwrap_or(200);
+    // --group — 탐색기 모드 찾기(워커 /find 와 같은 출력)
+    if a.group {
+        let code = match crate::find::find(&app.retriever, &q, a.folder.as_deref(), a.top_k.unwrap_or(0)) {
+            Ok((lines, done)) => {
+                crate::find::print_lines(&lines, &done, &mut |s| outln(s));
+                0
+            }
+            Err(e) => {
+                outln(&crate::find::error_line(&e));
+                1
+            }
+        };
+        app.close();
+        return code;
+    }
     let r = app.retriever.search(&q, a.top_k, a.folder.as_deref());
     let code = match r {
         Err(e) => {

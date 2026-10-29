@@ -23,6 +23,8 @@ pub const BUSY: &str = "busy";
 pub const INDEXING: &str = "indexing";
 
 const INDEX_PREFIX: &str = "@index ";
+const FIND_PREFIX: &str = "@find ";
+const FIND_DONE_PREFIX: &str = "@find_done ";
 const CMD_TIMEOUT_S: u64 = 300;
 const RESTART_WINDOW_S: u64 = 300;
 const LOCK_HINT: &str = "already accessed";
@@ -839,7 +841,12 @@ impl Worker {
             cb(json!({"ok": false, "stopped": true, "why": "워커에 보내지 못함"}));
             return false;
         }
-        self.set_state(INDEXING, &label);
+        // 탐색기 모드 찾기는 인덱싱이 아니라 검색이다(툴팁·설정 창에 "인덱싱 중" 이 뜨지 않게)
+        if label == "/find" {
+            self.set_state(BUSY, "찾는 중");
+        } else {
+            self.set_state(INDEXING, &label);
+        }
         true
     }
 
@@ -851,9 +858,20 @@ impl Worker {
             None => return,
         };
         let mut res: Option<Value> = None;
+        // 탐색기 모드 찾기 — "@find {json}" 줄들 + "@find_done {json}" (탐색기 모드 설계서 §15)
+        let mut found: Vec<Value> = vec![];
         for ln in out.lines() {
+            let ln = ln.trim_end_matches('\r');
             if let Some(js) = ln.strip_prefix(INDEX_PREFIX) {
                 res = serde_json::from_str(js).ok();
+            } else if let Some(js) = ln.strip_prefix(FIND_PREFIX) {
+                if let Ok(v) = serde_json::from_str::<Value>(js) {
+                    found.push(v);
+                }
+            } else if let Some(js) = ln.strip_prefix(FIND_DONE_PREFIX) {
+                let done: Value = serde_json::from_str(js).unwrap_or(json!({}));
+                let ok = done.get("error").is_none();
+                res = Some(json!({"ok": ok, "lines": std::mem::take(&mut found), "done": done}));
             }
         }
         let res = res.unwrap_or_else(|| json!({"ok": false, "unknown": true,

@@ -412,7 +412,7 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
         # blocks 엔진 — 절 번호(Parent-Child 실험 A 에서 같은 절 청크를 모을 때 쓴다)·
         # 제목 경로·출처·쪽 범위를 함께 남긴다. 값이 없는 키는 넣지 않는다.
         for p, m in zip(payloads, metas):
-            for k in ("section_id", "path", "source", "page_from", "page_to"):
+            for k in ("section_id", "path", "source", "page_from", "page_to", "page"):
                 if m.get(k) not in (None, []):
                     p[k] = m[k]
     store.upsert(ids, vecs, payloads)

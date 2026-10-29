@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoAI 탐색기</title>
+<!--
+  MoAI 탐색기 — 탐색기 모드 화면 (폴더 아이콘 · 탐색기 모드 설계서 §10 · §11)
+  - 자연어로 찾으면 답을 짓지 않고 "문서 ▸ 쪽 ▸ 발췌" 를 탐색기 같은 목록으로 보여 준다
+  - __LAYOUT__ = window : 독립 창(주소줄 · 검색 상자 · 명령 모음 · 탐색 창 · 자세히 보기 · 미리 보기 창 · 상태 표시줄)
+               panel  : 탐색기 옆 좁은 패널(한 단 — 문서 카드 · 쪽 칩 · 발췌)
+  - 미리 보기 창의 PDF 는 Rust 가 이 화면 위에 따로 띄운 WebView 가 그린다(#pvframe 자리를 알려 준다).
+    PDF 가 아니면 이 화면이 청크 글을 직접 보여 준다(글 미리 보기).
+  Rust 와는 window.ipc.postMessage(JSON) / window.rsb.* 함수로 주고받는다.
+-->
+<style>
+  :root {
+    --bg: #f7f7f8; --surface: #ffffff; --sunken: #f1f2f4; --ink: #16181d; --ink2: #3c4049; --muted: #7a808c; --rule: #e6e8ec;
+    --brand: #e5163f; --brand-soft: #fdecef; --sel: #e8eefb; --sel-bar: #2c5aa0; --hover: #f2f4f7; --link: #1f5fbf;
+    --mark: #ffe58a; --fs: __FONT_PX__px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: "Malgun Gothic", "맑은 고딕", "Segoe UI", sans-serif; font-size: var(--fs); -webkit-font-smoothing: antialiased; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  svg { display: block; flex: none; }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+  .hidden { display: none !important; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #d3d6dc; border-radius: 10px; border: 3px solid var(--surface); }
+
+  /* ── 주소줄 ── */
+  .addr { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); }
+  .brand { display: flex; align-items: center; gap: 6px; flex: none; }
+  .brand img { width: 22px; height: 22px; object-fit: contain; }
+  .brand b { font-size: calc(var(--fs) * 1.0); }
+  .brand b span { color: var(--brand); }
+  .navbtn { width: 28px; height: 28px; border-radius: 6px; color: var(--muted); display: grid; place-items: center; }
+  .navbtn:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+  .navbtn:disabled { opacity: .35; cursor: default; }
+  .crumb { flex: 0 1 34%; min-width: 120px; display: flex; align-items: center; gap: 2px; border: 1px solid var(--rule); border-radius: 6px;
+    padding: 4px 8px; white-space: nowrap; overflow: hidden; color: var(--ink2); }
+  .crumb button { padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+  .crumb button:hover { background: var(--hover); }
+  .crumb .sep { color: var(--muted); }
+  .search { flex: 1; min-width: 160px; display: flex; align-items: center; gap: 8px; border: 2px solid var(--brand); border-radius: 8px;
+    padding: 3px 6px 3px 10px; background: var(--surface); }
+  .search input { flex: 1; min-width: 0; border: 0; outline: 0; font: inherit; font-weight: bold; color: var(--ink); background: none; padding: 3px 0; }
+  .search .hint { color: var(--muted); font-size: calc(var(--fs) * .82); white-space: nowrap; }
+  .search .go { background: var(--brand); color: #fff; border-radius: 6px; padding: 3px 10px; font-weight: bold; }
+
+  /* ── 명령 모음 ── */
+  .cmd { display: flex; align-items: center; gap: 4px; padding: 5px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); color: var(--ink2); }
+  .cmd .b { padding: 3px 9px; border-radius: 6px; white-space: nowrap; }
+  .cmd .b:hover { background: var(--hover); }
+  .cmd .b.on { background: var(--sunken); }
+  .cmd select { font: inherit; color: var(--ink2); border: 1px solid var(--rule); border-radius: 6px; padding: 2px 4px; background: var(--surface); }
+  .cmd .sp { flex: 1; }
+  .cmd .ai { border: 1px solid var(--rule); border-radius: 999px; padding: 3px 12px; white-space: nowrap; }
+  .cmd .ai:hover { border-color: var(--brand); color: var(--brand); }
+
+  /* ── 본문: 탐색 창 | 목록 | 미리 보기 ── */
+  .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr) 36%; }
+  .main.nopv { grid-template-columns: 200px minmax(0, 1fr); }
+  .main.nopv .pv { display: none; }
+  .side { border-right: 1px solid var(--rule); background: var(--surface); overflow-y: auto; padding: 6px 4px 12px; color: var(--ink2); }
+  .side .h { font-size: calc(var(--fs) * .8); color: var(--muted); padding: 10px 8px 3px; }
+  .side .i { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px; white-space: nowrap; overflow: hidden;
+    cursor: pointer; width: 100%; text-align: left; }
+  .side .i:hover { background: var(--hover); }
+  .side .i.on { background: var(--sel); color: var(--ink); }
+  .side .i .tw { width: 14px; color: var(--muted); flex: none; text-align: center; font-size: 10px; }
+  .side .i span.n { overflow: hidden; text-overflow: ellipsis; }
+  .side .empty { color: var(--muted); padding: 3px 10px; font-size: calc(var(--fs) * .85); }
+
+  .list { overflow: auto; background: var(--surface); position: relative; }
+  .cols, .r { display: grid; grid-template-columns: minmax(0, 1fr) 64px 70px 92px; gap: 8px; align-items: center; padding: 0 12px; }
+  .cols { position: sticky; top: 0; z-index: 2; background: var(--surface); color: var(--muted); font-size: calc(var(--fs) * .82);
+    padding-top: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+  .grp { color: var(--muted); font-size: calc(var(--fs) * .82); padding: 10px 12px 3px; }
+  .r { padding-top: 4px; padding-bottom: 4px; cursor: default; user-select: none; }
+  .r:hover { background: var(--hover); }
+  .r.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--sel-bar); }
+  .r.low { opacity: .5; }
+  .r.doc .n { display: flex; align-items: center; gap: 6px; font-weight: bold; min-width: 0; }
+  .r.doc .n .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .r.doc .tw { width: 12px; color: var(--muted); flex: none; font-size: 10px; text-align: center; }
+  .r.doc .cnt { font-weight: normal; color: var(--muted); font-size: calc(var(--fs) * .85); white-space: nowrap; }
+  .r.pg { padding-left: 42px; }
+  .r.pg .n { min-width: 0; }
+  .r .sec { color: var(--ink2); font-size: calc(var(--fs) * .85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r .snip { color: var(--muted); font-size: calc(var(--fs) * .85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r .dn { color: var(--ink2); font-size: calc(var(--fs) * .8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r .date { color: var(--muted); font-size: calc(var(--fs) * .85); white-space: nowrap; }
+  .pgchip { display: inline-block; border: 1px solid var(--rule); border-radius: 5px; padding: 0 6px; font-family: Consolas, monospace;
+    font-size: calc(var(--fs) * .82); background: var(--surface); white-space: nowrap; }
+  .pgchip.approx { border-style: dashed; }
+  .rel { display: inline-flex; gap: 2px; }
+  .rel i { width: 8px; height: 8px; border-radius: 2px; background: var(--rule); }
+  .rel i.f { background: var(--brand); }
+  .more { padding: 2px 12px 6px 42px; }
+  .more button { color: var(--link); font-size: calc(var(--fs) * .85); }
+  .msg { color: var(--muted); padding: 40px 20px; text-align: center; line-height: 1.7; }
+  .msg b { color: var(--ink); }
+  .msg img { width: 72px; height: 72px; object-fit: contain; background: #fff; border-radius: 20px; padding: 6px;
+    box-shadow: 0 6px 18px rgba(20,24,33,.10), 0 0 0 1px var(--rule); margin-bottom: 10px; }
+
+  /* AI 답 카드 */
+  .ai-card { margin: 10px 12px; border: 1px solid var(--rule); border-left: 3px solid var(--brand); border-radius: 8px; padding: 8px 12px; background: var(--surface); }
+  .ai-card .hd { display: flex; gap: 8px; align-items: center; font-weight: bold; }
+  .ai-card .hd .x { margin-left: auto; color: var(--muted); }
+  .ai-card .body { white-space: pre-wrap; line-height: 1.6; margin-top: 4px; }
+  .ai-card .ft { color: var(--muted); font-size: calc(var(--fs) * .8); margin-top: 4px; }
+
+  /* 미리 보기 창 */
+  .pv { border-left: 1px solid var(--rule); background: var(--sunken); display: flex; flex-direction: column; min-width: 0; }
+  .pv .ph { display: flex; gap: 8px; align-items: center; padding: 8px 10px 6px; color: var(--ink2); font-size: calc(var(--fs) * .85); }
+  .pv .ph .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
+  #pvframe { flex: 1; margin: 0 10px; background: var(--surface); border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.12); overflow: auto; min-height: 0; }
+  #pvtext { padding: 12px 14px; white-space: pre-wrap; line-height: 1.7; font-size: calc(var(--fs) * .92); }
+  #pvtext .sec { font-weight: bold; margin-bottom: 6px; color: var(--ink2); }
+  #pvtext .note { color: var(--muted); font-size: calc(var(--fs) * .8); margin-top: 10px; }
+  .pv .empty { color: var(--muted); padding: 30px 14px; text-align: center; }
+  .pv .acts { display: flex; gap: 6px; padding: 8px 10px 10px; }
+  .pv .acts button { flex: 1; border: 1px solid var(--rule); border-radius: 6px; padding: 5px 0; background: var(--surface); color: var(--ink2); }
+  .pv .acts button.p { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: bold; }
+  .pv .acts button:disabled { opacity: .45; cursor: default; }
+
+  /* 상태 표시줄 */
+  .st { display: flex; gap: 14px; padding: 4px 12px; border-top: 1px solid var(--rule); background: var(--surface); color: var(--muted);
+    font-size: calc(var(--fs) * .82); white-space: nowrap; overflow: hidden; }
+  .st .sp { flex: 1; }
+  .st .err { color: #b4462f; }
+
+  /* 오른쪽 클릭 메뉴 */
+  #menu { position: fixed; z-index: 30; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 4px;
+    box-shadow: 0 8px 24px rgba(20,24,33,.14); min-width: 170px; }
+  #menu button { display: block; width: 100%; text-align: left; padding: 5px 10px; border-radius: 5px; }
+  #menu button:hover { background: var(--hover); }
+
+  /* ── 좁은 패널 배치 ── */
+  body.panel .addr { flex-wrap: wrap; }
+  body.panel .phead { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); }
+  body.panel .phead .f { flex: 1; min-width: 0; color: var(--muted); font-size: calc(var(--fs) * .82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.panel .psearch { padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); }
+  body.panel .cards { flex: 1; overflow-y: auto; background: var(--surface); }
+  .card { border-bottom: 1px solid var(--rule); padding: 8px 12px; }
+  .card.low { opacity: .55; }
+  .card .t { font-weight: bold; display: flex; gap: 6px; align-items: center; min-width: 0; }
+  .card .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .m { color: var(--muted); font-size: calc(var(--fs) * .82); margin-top: 1px; }
+  .card .pgs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .card .pgs button { border: 1px solid var(--rule); border-radius: 5px; padding: 0 7px; font-family: Consolas, monospace; font-size: calc(var(--fs) * .82); }
+  .card .pgs button.on { border-color: var(--brand); color: var(--brand); }
+  .card .sn { background: var(--sunken); border-radius: 6px; padding: 6px 8px; margin-top: 6px; font-size: calc(var(--fs) * .85); color: var(--ink2); line-height: 1.55; }
+  .card .sn b { display: block; color: var(--ink); margin-bottom: 2px; }
+  .card .sn .acts { display: flex; gap: 10px; margin-top: 5px; }
+  .card .sn .acts button { color: var(--link); font-size: calc(var(--fs) * .82); }
+  .ibtn { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--ink2); flex: none; }
+  .ibtn:hover { background: var(--hover); color: var(--ink); }
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; flex: none; font-size: calc(var(--fs) * .82); }
+  .seg button { padding: 2px 8px; }
+  .seg button.on { background: var(--brand); color: #fff; font-weight: bold; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-fold" viewBox="0 0 16 16">
+      <path d="M1 3.5a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z" fill="#E3A231"/>
+      <rect x="1" y="5.5" width="14" height="8.5" rx="1" fill="#FFC93F"/>
+    </symbol>
+    <symbol id="i-moai" viewBox="0 0 16 16">
+      <path d="M1 3.5a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z" fill="#E3A231"/>
+      <rect x="1" y="5.5" width="14" height="8.5" rx="1" fill="#FFC93F"/>
+      <rect x="6.5" y="6" width="9.5" height="9.5" rx="2" fill="#fff"/>
+      <rect x="7.3" y="6.8" width="8" height="8" rx="1.5" fill="#e5163f"/>
+      <path d="M9 13.2V8.6l2.3 2.6 2.3-2.6v4.6" fill="none" stroke="#fff" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-drive" viewBox="0 0 16 16">
+      <rect x="0.5" y="4" width="15" height="7.5" rx="1.5" fill="#B9C0CA"/>
+      <rect x="0.5" y="4" width="15" height="3.5" rx="1.5" fill="#D5DAE1"/>
+      <rect x="6.5" y="6" width="9.5" height="9.5" rx="2" fill="#fff"/>
+      <rect x="7.3" y="6.8" width="8" height="8" rx="1.5" fill="#e5163f"/>
+      <path d="M9 13.2V8.6l2.3 2.6 2.3-2.6v4.6" fill="none" stroke="#fff" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-pdf" viewBox="0 0 16 16">
+      <path d="M3 1.5h6.5L13 5v9.5H3z" fill="#fff" stroke="#c9ced6"/>
+      <path d="M9.5 1.5V5H13" fill="none" stroke="#c9ced6"/>
+      <rect x="2" y="8" width="9" height="5" rx="1" fill="#d93025"/>
+      <text x="6.5" y="12" font-size="4" font-family="Arial" font-weight="bold" fill="#fff" text-anchor="middle">PDF</text>
+    </symbol>
+    <symbol id="i-doc" viewBox="0 0 16 16">
+      <path d="M3 1.5h6.5L13 5v9.5H3z" fill="#fff" stroke="#c9ced6"/>
+      <path d="M9.5 1.5V5H13" fill="none" stroke="#c9ced6"/>
+      <path d="M5 8h6M5 10h6M5 12h4" stroke="#8d96a3"/>
+    </symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- ───────── 독립 창 배치 ───────── -->
+<div id="win" class="hidden" style="display:contents">
+  <div class="addr">
+    <div class="brand"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span> 탐색기</span></b></div>
+    <button class="navbtn" id="back" title="뒤로 (Alt+←)" disabled>←</button>
+    <button class="navbtn" id="fwd" title="앞으로 (Alt+→)" disabled>→</button>
+    <button class="navbtn" id="up" title="상위 폴더 (Alt+↑)">↑</button>
+    <button class="navbtn" id="again" title="다시 찾기 (F5)">⟳</button>
+    <div class="crumb" id="crumb"></div>
+    <div class="search"><span>🔍</span><input id="q" placeholder="찾을 내용을 자연어로 쓰세요 — 예: 출장 여비 정산 방법" autocomplete="off" spellcheck="false">
+      <span class="hint">Enter 찾기 · Shift+Enter AI 답</span><button class="go" id="go">찾기</button></div>
+  </div>
+  <div class="cmd">
+    <span>묶기</span>
+    <select id="group"><option value="doc">문서별</option><option value="page">쪽 목록</option></select>
+    <span style="margin-left:6px">정렬</span>
+    <select id="sort"><option value="score">관련도</option><option value="name">이름</option><option value="date">수정한 날짜</option></select>
+    <button class="b on" id="pvtoggle" title="미리 보기 창 (Alt+P)">◫ 미리 보기 창</button>
+    <span class="sp"></span>
+    <button class="ai" id="askai" title="같은 검색어로 AI 답 받기 (Shift+Enter)">✦ AI에게 묻기</button>
+  </div>
+  <div class="main" id="main">
+    <div class="side" id="side"></div>
+    <div class="list" id="list"></div>
+    <div class="pv" id="pv">
+      <div class="ph"><span class="t" id="pvtitle">미리 보기</span><span id="pvpage"></span></div>
+      <div id="pvframe"><div class="empty" id="pvempty">쪽을 고르면 여기에 그 쪽을 보여 줍니다.</div><div id="pvtext" class="hidden"></div></div>
+      <div class="acts"><button class="p" id="pvopen" disabled>열기 ↗</button><button id="pvreveal" disabled>폴더에서 보기</button></div>
+    </div>
+  </div>
+  <div class="st"><span id="st1">찾을 내용을 쓰고 Enter</span><span id="st2"></span><span id="st3"></span><span class="sp"></span><span id="st4"></span></div>
+</div>
+
+<!-- ───────── 탐색기 옆 패널 배치 ───────── -->
+<div id="pnl" class="hidden" style="display:contents">
+  <div class="phead">
+    <div class="brand"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div>
+    <span class="f" id="pfolder"></span>
+    <span class="seg"><button class="on">탐색기</button><button id="torag" title="이 패널을 RAG(대화) 모드로">RAG</button></span>
+    <button class="ibtn" id="big" title="크게 보기 — MoAI 탐색기 창">⤢</button>
+    <button class="ibtn" id="pclose" title="닫기 (Esc)">✕</button>
+  </div>
+  <div class="psearch"><div class="search"><span>🔍</span><input id="pq" placeholder="찾을 내용 — Enter" autocomplete="off" spellcheck="false"><button class="go" id="pgo">찾기</button></div></div>
+  <div class="cards" id="cards"></div>
+  <div class="st"><span id="pst1">이 폴더(하위 포함)에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)">✦ AI에게 묻기</button></div>
+</div>
+
+<div id="menu" class="hidden"></div>
+
+<script>
+"use strict";
+const LAYOUT = "__LAYOUT__";
+const $ = (id) => document.getElementById(id);
+const send = (o) => window.ipc.postMessage(JSON.stringify(o));
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const base = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+const isPdf = (p) => /\.pdf$/i.test(p || "");
+
+// ── 상태 ─────────────────────────────────────────────────
+let roots = [];          // 인덱싱 폴더 [{path, name, drive}]
+let scope = null;        // 찾는 범위 폴더(null = 인덱싱 폴더 전체)
+let lastQ = "";          // 마지막으로 찾은 검색어
+let docs = [];           // 결과 문서 [{meta, pages:[…]}]
+let done = null;         // @find_done
+let rows = [];           // 지금 화면의 고를 수 있는 줄 [{kind, doc, page}]
+let selIdx = -1;
+let openDocs = new Set();  // 펼친 문서 경로
+let moreDocs = new Set();  // "더 보기" 누른 문서
+let dirs = {};           // 폴더 → 하위 폴더 이름(탐색 창, 펼친 것만)
+let openDirs = new Set();
+let hist = [], histPos = -1;   // 뒤로 · 앞으로 (검색어 · 범위)
+let pageClick = "preview";
+let pendingSelect = null;      // 크게 보기로 넘어온 쪽(결과가 오면 고른다)
+let pvShown = true;
+let ai = null;                 // AI 답 카드 {q, text, ev, info, err}
+let busy = false;
+
+// 최근 검색 — 이 PC 의 이 화면에만 남긴다(지워져도 동작에는 영향 없음)
+//   HTML 글로 띄운 화면은 localStorage 가 막혀 있을 수 있어(실측) 메모리 목록을 함께 둔다
+let recentMem = [];
+function recent() {
+  try { const v = JSON.parse(localStorage.getItem("moai.recent") || "null"); if (Array.isArray(v)) return v; } catch (e) { /* 막힘 */ }
+  return recentMem;
+}
+function remember(q) {
+  recentMem = [q].concat(recent().filter((x) => x !== q)).slice(0, 8);
+  try { localStorage.setItem("moai.recent", JSON.stringify(recentMem)); } catch (e) { /* 저장 못 해도 그만 */ }
+}
+
+// ── 찾기 ─────────────────────────────────────────────────
+function runFind(q, push) {
+  q = (q || "").trim();
+  if (!q || busy) return;
+  lastQ = q;
+  busy = true;
+  if (LAYOUT === "window") { $("q").value = q; } else { $("pq").value = q; }
+  if (push !== false) {
+    hist = hist.slice(0, histPos + 1);
+    hist.push({ q, scope });
+    histPos = hist.length - 1;
+  }
+  remember(q);
+  setStatus("찾는 중…");
+  send({ type: "find", q, folder: scope });
+  drawNav();
+}
+
+// Rust 가 /find 결과를 넘긴다
+function onResults(r) {
+  busy = false;
+  if (!r || r.q !== lastQ) { /* 지난 검색의 늦은 결과는 버린다 */ if (r && r.q) return; }
+  if (!r.ok) {
+    docs = []; done = null;
+    showMessage("<b>찾지 못했습니다</b><br>" + esc((r.done && r.done.error) || r.why || "워커가 응답하지 않았습니다"));
+    setStatus((r.done && r.done.error) || r.why || "찾지 못함", true);
+    return;
+  }
+  docs = [];
+  const byNo = {};
+  for (const l of r.lines) {
+    if (l.page === undefined) {
+      const d = { meta: l, pages: [] };
+      byNo[l.doc] = d;
+      docs.push(d);
+    } else if (byNo[l.doc]) {
+      byNo[l.doc].pages.push(l);
+    }
+  }
+  done = r.done || {};
+  openDocs = new Set();
+  moreDocs = new Set();
+  const first = docs.find((d) => d.pages.length);
+  if (first) openDocs.add(first.meta.doc_path);
+  selIdx = -1;
+  render();
+  // 크게 보기로 넘어온 쪽이 있으면 그 줄을, 아니면 첫 쪽 줄을 고른다
+  let target = -1;
+  if (pendingSelect) {
+    target = rows.findIndex((x) => x.kind === "page" && x.doc.meta.doc_path === pendingSelect.path && x.page.page === pendingSelect.page);
+    pendingSelect = null;
+  }
+  if (target < 0) target = rows.findIndex((x) => x.kind === "page");
+  if (target >= 0) select(target, true);
+  status();
+}
+
+function status() {
+  if (!done) return;
+  const places = docs.reduce((n, d) => n + d.pages.length, 0);
+  const sec = done.ms != null ? (done.ms / 1000).toFixed(2) + "초" : "";
+  const sc = scope ? base(scope) : "인덱싱 폴더 전체";
+  const sd = done.scope_docs != null ? `(문서 ${done.scope_docs}개)` : "";
+  if (LAYOUT === "window") {
+    $("st1").textContent = `문서 ${docs.length}개 · 위치 ${places}곳`;
+    $("st1").classList.remove("err");
+    $("st2").textContent = sec ? "검색 " + sec : "";
+    $("st3").textContent = `범위: ${sc}${sd}`;
+    $("st4").textContent = done.synonyms ? "검색어 넓힘: " + done.synonyms.join(", ") : "";
+  } else {
+    $("pst1").textContent = `문서 ${docs.length}개 · 위치 ${places}곳 · ${sec}`;
+  }
+}
+
+function setStatus(t, err) {
+  const el = LAYOUT === "window" ? $("st1") : $("pst1");
+  el.textContent = t;
+  el.classList.toggle("err", !!err);
+  if (LAYOUT === "window") { $("st2").textContent = ""; }
+}
+
+// ── 그리기 공통 ──────────────────────────────────────────
+function marked(text, marks) {
+  const ch = Array.from(text || "");
+  if (!marks || !marks.length) return esc(text);
+  let out = "", at = 0;
+  for (const [a, b] of marks) {
+    if (a < at) continue;
+    out += esc(ch.slice(at, a).join("")) + "<mark>" + esc(ch.slice(a, b).join("")) + "</mark>";
+    at = b;
+  }
+  return out + esc(ch.slice(at).join(""));
+}
+function bars(score, low) {
+  // 리랭커 점수 숫자는 뜻이 없으므로 1등 문서 기준 5칸 막대로(점수 2 차이마다 한 칸)
+  const top = docs.reduce((m, d) => (d.meta.score != null && d.meta.score > m ? d.meta.score : m), -1e9);
+  let n = score == null ? 1 : Math.max(1, Math.min(5, Math.round(5 - (top - score) / 2)));
+  if (low) n = 1;
+  let h = '<span class="rel">';
+  for (let i = 0; i < 5; i++) h += `<i class="${i < n ? "f" : ""}"></i>`;
+  return h + "</span>";
+}
+function pageLabel(p) {
+  if (p.page == null) return "";
+  const to = p.page_to != null && p.page_to > p.page && !p.exact ? "–" + p.page_to : "";
+  return `<span class="pgchip ${p.exact ? "" : "approx"}" title="${p.exact ? "" : "근사 쪽"}">p.${p.page}${to}</span>`;
+}
+function dateOf(m) {
+  if (!m.mtime) return "";
+  const d = new Date(m.mtime * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function docIcon(path) { return `<svg width="16" height="16"><use href="#${isPdf(path) ? "i-pdf" : "i-doc"}"/></svg>`; }
+function sortedDocs(list) {
+  const s = LAYOUT === "window" ? $("sort").value : "score";
+  const v = list.slice();
+  if (s === "name") v.sort((a, b) => a.meta.doc_name.localeCompare(b.meta.doc_name, "ko"));
+  else if (s === "date") v.sort((a, b) => (b.meta.mtime || 0) - (a.meta.mtime || 0));
+  return v;
+}
+function showMessage(html) {
+  const box = LAYOUT === "window" ? $("list") : $("cards");
+  box.innerHTML = aiCard() + `<div class="msg">${html}</div>`;
+  rows = [];
+  bindAi();
+}
+
+// ── 그리기: 독립 창 목록 ─────────────────────────────────
+function render() {
+  if (LAYOUT !== "window") return renderCards();
+  rows = [];
+  const L = $("list");
+  if (!docs.length) {
+    showMessage(lastQ ? `<b>"${esc(lastQ)}"</b> 와 맞는 문서를 찾지 못했습니다.<br>다른 말로 바꾸거나 범위를 넓혀 보세요.` : welcome());
+    return;
+  }
+  let h = aiCard() + `<div class="cols"><span>이름 · 위치 · 내용</span><span>쪽</span><span>관련도</span><span>수정한 날짜</span></div>`;
+  const byName = docs.filter((d) => d.meta.name_hit);
+  const content = docs.filter((d) => d.pages.length);
+  const places = content.reduce((n, d) => n + d.pages.length, 0);
+  if ($("group").value === "page") {
+    // 쪽 목록 — 모든 쪽 줄을 관련도 순으로 한 줄씩(문서 이름을 함께)
+    const all = [];
+    for (const d of content) for (const p of d.pages) all.push({ d, p });
+    all.sort((a, b) => (b.p.score || -1e9) - (a.p.score || -1e9));
+    h += `<div class="grp">내용 일치 — 위치 ${all.length}곳</div>`;
+    for (const { d, p } of all) h += pageRow(d, p, true);
+  } else {
+    if (byName.length) {
+      h += `<div class="grp">파일 이름 일치 (${byName.length})</div>`;
+      for (const d of sortedDocs(byName)) h += docRow(d, true);
+    }
+    if (content.length) {
+      h += `<div class="grp">내용 일치 — 문서 ${content.length}개 · 위치 ${places}곳</div>`;
+      for (const d of sortedDocs(content)) {
+        h += docRow(d, false);
+        if (!openDocs.has(d.meta.doc_path)) continue;
+        const show = moreDocs.has(d.meta.doc_path) ? d.pages : d.pages.slice(0, 3);
+        for (const p of show) h += pageRow(d, p, false);
+        if (d.pages.length > show.length) {
+          h += `<div class="more"><button data-more="${esc(d.meta.doc_path)}">＋ ${d.pages.length - show.length}곳 더 보기</button></div>`;
+        }
+      }
+    }
+  }
+  L.innerHTML = h;
+  bindAi();
+  L.querySelectorAll("[data-row]").forEach((el) => {
+    const i = +el.dataset.row;
+    el.onclick = () => select(i, true);
+    el.ondblclick = () => activate(i);
+    el.oncontextmenu = (e) => { e.preventDefault(); select(i, false); showMenu(e.clientX, e.clientY, rows[i]); };
+  });
+  L.querySelectorAll("[data-tw]").forEach((el) => {
+    el.onclick = (e) => { e.stopPropagation(); toggleDoc(rows[+el.dataset.tw].doc); };
+  });
+  L.querySelectorAll("[data-more]").forEach((el) => {
+    el.onclick = () => { moreDocs.add(el.dataset.more); render(); };
+  });
+  if (selIdx >= 0 && selIdx < rows.length) markSel();
+}
+function docRow(d, nameGroup) {
+  const i = rows.push({ kind: "doc", doc: d }) - 1;
+  const m = d.meta;
+  const open = openDocs.has(m.doc_path);
+  const tw = d.pages.length && !nameGroup ? `<span class="tw" data-tw="${i}">${open ? "▾" : "▸"}</span>` : `<span class="tw"></span>`;
+  const cnt = nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length}곳`;
+  return `<div class="r doc ${m.low ? "low" : ""}" data-row="${i}" title="${esc(m.doc_path)}">
+    <span class="n">${tw}${docIcon(m.doc_path)}<span class="t">${esc(m.doc_name)}</span><span class="cnt">${cnt}</span></span>
+    <span></span><span>${bars(m.score, m.low)}</span><span class="date">${dateOf(m)}</span></div>`;
+}
+function pageRow(d, p, withDoc) {
+  const i = rows.push({ kind: "page", doc: d, page: p }) - 1;
+  const sec = p.section ? esc(p.section) : "";
+  const more = p.more ? ` <span class="cnt">· 이 쪽 ${p.more + 1}곳</span>` : "";
+  return `<div class="r pg ${p.low ? "low" : ""}" data-row="${i}" ${withDoc ? 'style="padding-left:12px"' : ""}>
+    <span class="n">${withDoc ? `<div class="dn">${docIcon(d.meta.doc_path)}</div><div class="dn">${esc(d.meta.doc_name)}</div>` : ""}
+      ${sec ? `<div class="sec">${sec}${more}</div>` : ""}<div class="snip">${marked(p.snippet, p.marks)}</div></span>
+    <span>${pageLabel(p)}</span><span>${bars(p.score, p.low)}</span><span></span></div>`;
+}
+function welcome() {
+  return `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>무엇을 찾을까요?</b><br>
+    문장으로 쓰면 그 내용이 있는 <b>문서 · 쪽 · 대목</b>을 찾아 줍니다.<br>쪽을 고르면 오른쪽에 그 쪽이 보이고, 두 번 누르면 그 쪽에서 문서가 열립니다.`;
+}
+function toggleDoc(d) {
+  const k = d.meta.doc_path;
+  if (openDocs.has(k)) openDocs.delete(k); else openDocs.add(k);
+  const cur = rows[selIdx];
+  render();
+  if (cur) { const j = rows.findIndex((x) => x.doc === cur.doc && x.page === cur.page); if (j >= 0) select(j, false); }
+}
+
+// ── 고르기 · 미리 보기 · 열기 ────────────────────────────
+function markSel() {
+  const box = LAYOUT === "window" ? $("list") : $("cards");
+  box.querySelectorAll(".sel").forEach((e) => e.classList.remove("sel"));
+  const el = box.querySelector(`[data-row="${selIdx}"]`);
+  if (el) { el.classList.add("sel"); el.scrollIntoView({ block: "nearest" }); }
+}
+function select(i, preview) {
+  if (i < 0 || i >= rows.length) return;
+  selIdx = i;
+  markSel();
+  if (preview) showPreview(rows[i]);
+}
+// 문서 줄이면 그 문서의 가장 관련 높은 쪽을 쓴다
+function pageOf(row) {
+  if (!row) return null;
+  if (row.kind === "page") return row.page;
+  return row.doc.pages[0] || null;
+}
+function showPreview(row) {
+  if (LAYOUT !== "window" || !row) return;
+  const d = row.doc, p = pageOf(row);
+  $("pvtitle").textContent = d.meta.doc_name;
+  $("pvtitle").title = d.meta.doc_path;
+  $("pvpage").textContent = p && p.page != null ? `${p.exact ? "" : "약 "}${p.page}쪽` : "";
+  $("pvopen").disabled = false;
+  $("pvopen").textContent = p && p.page != null ? `${p.page}쪽 열기 ↗` : "열기 ↗";
+  $("pvreveal").disabled = false;
+  if (!pvShown) return;
+  if (isPdf(d.meta.doc_path) && p && p.page != null) {
+    // PDF 는 Rust 가 이 자리에 PDF 뷰어를 띄운다
+    $("pvempty").classList.add("hidden");
+    $("pvtext").classList.add("hidden");
+    send({ type: "preview", path: d.meta.doc_path, page: p.page });
+    sendRect();
+  } else {
+    // 글 미리 보기 — 청크 글을 그대로(PDF 아닌 문서 · 쪽 모르는 청크)
+    send({ type: "preview_hide" });
+    $("pvempty").classList.add("hidden");
+    const t = $("pvtext");
+    t.classList.remove("hidden");
+    t.innerHTML = p ? `${p.section ? `<div class="sec">${esc(p.section)}</div>` : ""}${hl(p.text || p.snippet)}
+      <div class="note">글 미리 보기 — 원본 모양(표 서식 · 그림)은 "열기"로 보세요.</div>`
+      : `<div class="note">이 문서는 이름만 맞았습니다. "열기"로 보세요.</div>`;
+  }
+}
+// 글 미리 보기 강조 — 검색어 낱말(두 글자 이상)을 표시
+function hl(text) {
+  const words = lastQ.split(/\s+/).map((w) => w.replace(/[은는이가을를에의로과와도만]$/, "")).filter((w) => w.length >= 2);
+  let h = esc(text);
+  for (const w of words) h = h.split(esc(w)).join(`<mark>${esc(w)}</mark>`);
+  return h;
+}
+function activate(i) {
+  const row = rows[i];
+  if (!row) return;
+  if (row.kind === "doc" && row.doc.pages.length && !openDocs.has(row.doc.meta.doc_path) && LAYOUT === "window") { toggleDoc(row.doc); }
+  openPage(row);
+}
+function openPage(row) {
+  const p = pageOf(row);
+  send({ type: "open_page", path: row.doc.meta.doc_path, page: p ? p.page : null });
+}
+function sendRect() {
+  if (LAYOUT !== "window") return;
+  const f = $("pvframe");
+  const r = f.getBoundingClientRect();
+  send({ type: "pv_rect", x: r.left, y: r.top, w: r.width, h: r.height, show: pvShown && !$("main").classList.contains("nopv") });
+}
+
+// ── 오른쪽 클릭 메뉴 ─────────────────────────────────────
+function showMenu(x, y, row) {
+  const p = pageOf(row);
+  const items = [
+    [p && p.page != null ? `${p.page}쪽 열기` : "열기", () => openPage(row)],
+    ["폴더에서 보기", () => send({ type: "reveal", path: row.doc.meta.doc_path })],
+    ["경로 복사", () => copy(row.doc.meta.doc_path)],
+    ["이 폴더에서만 찾기", () => { scope = row.doc.meta.doc_path.replace(/[\\/][^\\/]+$/, ""); runFind(lastQ); }],
+  ];
+  const m = $("menu");
+  m.innerHTML = items.map((it, k) => `<button data-k="${k}">${esc(it[0])}</button>`).join("");
+  m.querySelectorAll("button").forEach((b) => { b.onclick = () => { hideMenu(); items[+b.dataset.k][1](); }; });
+  m.classList.remove("hidden");
+  m.style.left = Math.min(x, innerWidth - 190) + "px";
+  m.style.top = Math.min(y, innerHeight - 150) + "px";
+}
+function hideMenu() { $("menu").classList.add("hidden"); }
+function copy(t) {
+  const a = document.createElement("textarea");
+  a.value = t; document.body.appendChild(a); a.select();
+  try { document.execCommand("copy"); setStatus("경로를 복사했습니다"); } catch (e) { /* 복사 못 함 */ }
+  a.remove();
+}
+document.addEventListener("click", (e) => { if (!$("menu").contains(e.target)) hideMenu(); });
+
+// ── AI 답 카드 ───────────────────────────────────────────
+function askAi() {
+  const q = (LAYOUT === "window" ? $("q").value : $("pq").value).trim() || lastQ;
+  if (!q) return;
+  ai = { q, text: "", ev: null, info: null, err: null };
+  send({ type: "ask_ai", q, folder: scope });
+  redrawAi();
+}
+function aiCard() {
+  if (!ai) return "";
+  const ev = ai.ev != null ? `근거 ${ai.ev}건` : "찾는 중…";
+  const body = ai.err ? `<span style="color:#b4462f">${esc(ai.err)}</span>` : esc(ai.text) || (ai.ev != null ? "답을 쓰는 중…" : "");
+  const ft = ai.info ? (ai.info.timing_text || "") : "";
+  return `<div class="ai-card"><div class="hd">✦ AI 답 — ${esc(ai.q)}<span class="cnt" style="font-weight:normal;color:var(--muted)">· ${ev}</span>
+    <button class="x" id="aix" title="닫기">✕</button></div><div class="body">${body}</div>${ft ? `<div class="ft">${esc(ft)}</div>` : ""}
+    <div class="ft">AI 요약 — 근거 문서로 확인하세요.</div></div>`;
+}
+function bindAi() { const x = $("aix"); if (x) x.onclick = () => { ai = null; render(); }; }
+function redrawAi() {
+  const box = LAYOUT === "window" ? $("list") : $("cards");
+  const old = box.querySelector(".ai-card");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = aiCard();
+  if (old && tmp.firstElementChild) old.replaceWith(tmp.firstElementChild);
+  else if (old) old.remove();
+  else if (tmp.firstElementChild) box.prepend(tmp.firstElementChild);
+  bindAi();
+}
+
+// ── 탐색 창 · 주소줄 ─────────────────────────────────────
+function rootOf(p) {
+  if (!p) return null;
+  const lp = p.toLowerCase().replace(/[\\/]+$/, "");
+  return roots.find((r) => { const lr = r.path.toLowerCase().replace(/[\\/]+$/, ""); return lp === lr || lp.startsWith(lr + "\\"); }) || null;
+}
+function setScope(p) {
+  scope = p;
+  drawNav();
+  if (lastQ) runFind(lastQ); else drawCrumb();
+}
+function drawCrumb() {
+  if (LAYOUT !== "window") return;
+  const c = $("crumb");
+  let h = `<button data-p="">MoAI 탐색기</button>`;
+  const r = rootOf(scope);
+  if (scope && r) {
+    h += `<span class="sep">›</span><button data-p="${esc(r.path)}">${esc(r.name)}</button>`;
+    const rest = scope.slice(r.path.replace(/[\\/]+$/, "").length).split(/[\\/]/).filter(Boolean);
+    let acc = r.path.replace(/[\\/]+$/, "");
+    for (const part of rest) { acc += "\\" + part; h += `<span class="sep">›</span><button data-p="${esc(acc)}">${esc(part)}</button>`; }
+  } else {
+    h += `<span class="sep">›</span><button data-p="">인덱싱 폴더 전체</button>`;
+  }
+  c.innerHTML = h;
+  c.querySelectorAll("button").forEach((b) => { b.onclick = () => setScope(b.dataset.p || null); });
+  c.scrollLeft = c.scrollWidth;
+  $("back").disabled = histPos <= 0;
+  $("fwd").disabled = histPos >= hist.length - 1;
+  $("up").disabled = !scope;
+}
+function drawNav() {
+  drawCrumb();
+  if (LAYOUT !== "window") return;
+  const s = $("side");
+  let h = `<div class="h">최근 검색</div>`;
+  const rc = recent();
+  h += rc.length ? rc.map((q) => `<button class="i" data-q="${esc(q)}"><svg width="14" height="14" style="color:var(--muted)"><use href="#i-clock"/></svg><span class="n">${esc(q)}</span></button>`).join("")
+    : `<div class="empty">아직 없습니다</div>`;
+  h += `<div class="h">인덱싱 폴더</div>`;
+  h += `<button class="i ${scope ? "" : "on"}" data-p=""><span class="tw"></span><span class="n">모든 인덱싱 폴더</span></button>`;
+  const node = (path, name, depth, icon) => {
+    const on = scope && scope.toLowerCase() === path.toLowerCase();
+    const open = openDirs.has(path);
+    const kids = dirs[path];
+    const tw = kids && !kids.length ? "" : open ? "▾" : "▸";
+    let out = `<button class="i ${on ? "on" : ""}" data-p="${esc(path)}" style="padding-left:${6 + depth * 14}px" title="${esc(path)}">
+      <span class="tw" data-dir="${esc(path)}">${tw}</span><svg width="16" height="16"><use href="#${icon}"/></svg><span class="n">${esc(name)}</span></button>`;
+    if (open && kids) for (const k of kids) out += node(path.replace(/[\\/]+$/, "") + "\\" + k, k, depth + 1, "i-fold");
+    return out;
+  };
+  for (const r of roots) h += node(r.path, r.name, 0, r.drive ? "i-drive" : "i-moai");
+  if (!roots.length) h += `<div class="empty">설정에서 인덱싱 폴더를 추가하세요</div>`;
+  s.innerHTML = h;
+  s.querySelectorAll("[data-q]").forEach((b) => { b.onclick = () => runFind(b.dataset.q); });
+  s.querySelectorAll("[data-p]").forEach((b) => { b.onclick = () => setScope(b.dataset.p || null); });
+  s.querySelectorAll("[data-dir]").forEach((t) => {
+    t.onclick = (e) => {
+      e.stopPropagation();
+      const p = t.dataset.dir;
+      if (openDirs.has(p)) { openDirs.delete(p); drawNav(); return; }
+      openDirs.add(p);
+      if (dirs[p]) drawNav(); else send({ type: "list_dirs", path: p });
+    };
+  });
+}
+
+// ── 그리기: 좁은 패널 카드 ───────────────────────────────
+let cardPick = {};   // 문서 경로 → 고른 쪽 줄 번호
+function renderCards() {
+  rows = [];
+  const C = $("cards");
+  if (!docs.length) {
+    showMessage(lastQ ? `<b>"${esc(lastQ)}"</b> 와 맞는 문서를 찾지 못했습니다.` :
+      `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>이 폴더에서 찾기</b><br>문장으로 쓰면 그 내용이 있는<br>문서 · 쪽 · 대목을 찾아 줍니다.`);
+    return;
+  }
+  let h = aiCard();
+  for (const d of docs) {
+    const m = d.meta;
+    const di = rows.push({ kind: "doc", doc: d }) - 1;
+    const pick = cardPick[m.doc_path] != null ? cardPick[m.doc_path] : 0;
+    const chips = d.pages.slice(0, 8).map((p, k) =>
+      `<button class="${k === pick ? "on" : ""}" data-chip="${di}:${k}" title="${esc(p.section || "")}">${p.page != null ? "p." + p.page : "·"}</button>`).join("")
+      + (d.pages.length > 8 ? `<button data-big="1">+${d.pages.length - 8}</button>` : "");
+    const p = d.pages[pick];
+    h += `<div class="card ${m.low ? "low" : ""}" data-row="${di}"><div class="t">${docIcon(m.doc_path)}<span title="${esc(m.doc_path)}">${esc(m.doc_name)}</span></div>
+      <div class="m">${m.name_hit && !d.pages.length ? "이름에 검색어" : d.pages.length + "곳"} · ${bars(m.score, m.low)}</div>
+      ${d.pages.length ? `<div class="pgs">${chips}</div>` : ""}
+      ${p ? `<div class="sn">${p.section ? `<b>${esc(p.section)}</b>` : ""}${marked(p.snippet, p.marks)}
+        <div class="acts"><button data-open="${di}:${pick}">${p.page != null ? p.page + "쪽 " : ""}열기 ↗</button><button data-reveal="${di}">폴더에서 보기</button></div></div>` : ""}
+      ${!d.pages.length ? `<div class="sn"><div class="acts"><button data-open="${di}:-1">열기 ↗</button><button data-reveal="${di}">폴더에서 보기</button></div></div>` : ""}
+    </div>`;
+  }
+  C.innerHTML = h;
+  bindAi();
+  C.querySelectorAll("[data-chip]").forEach((b) => {
+    b.onclick = () => {
+      const [di, k] = b.dataset.chip.split(":").map(Number);
+      const d = rows[di].doc;
+      cardPick[d.meta.doc_path] = k;
+      // 쪽 칩 — 설정이 "기본 앱" 이면 바로 열고, 아니면 크게 보기 창의 미리 보기로
+      if (pageClick === "app") { send({ type: "open_page", path: d.meta.doc_path, page: d.pages[k].page }); renderCards(); }
+      else { renderCards(); send({ type: "big", q: lastQ, folder: scope, select: { path: d.meta.doc_path, page: d.pages[k].page } }); }
+    };
+  });
+  C.querySelectorAll("[data-open]").forEach((b) => {
+    b.onclick = () => {
+      const [di, k] = b.dataset.open.split(":").map(Number);
+      const d = rows[di].doc;
+      send({ type: "open_page", path: d.meta.doc_path, page: k >= 0 && d.pages[k] ? d.pages[k].page : null });
+    };
+  });
+  C.querySelectorAll("[data-reveal]").forEach((b) => { b.onclick = () => send({ type: "reveal", path: rows[+b.dataset.reveal].doc.meta.doc_path }); });
+  C.querySelectorAll("[data-big]").forEach((b) => { b.onclick = () => send({ type: "big", q: lastQ, folder: scope }); });
+}
+
+// ── 키보드 ───────────────────────────────────────────────
+document.addEventListener("keydown", (e) => {
+  const inInput = e.target.tagName === "INPUT";
+  if ((e.ctrlKey && (e.key === "f" || e.key === "e")) || e.key === "F3") {
+    e.preventDefault(); (LAYOUT === "window" ? $("q") : $("pq")).focus(); (LAYOUT === "window" ? $("q") : $("pq")).select(); return;
+  }
+  if (e.key === "Escape") {
+    hideMenu();
+    if (inInput && e.target.value) { e.target.value = ""; return; }
+    if (LAYOUT === "panel") send({ type: "close" });
+    return;
+  }
+  if (e.key === "F5") { e.preventDefault(); if (lastQ) runFind(lastQ, false); return; }
+  if (LAYOUT !== "window") return;
+  if (e.altKey && (e.key === "p" || e.key === "P")) { e.preventDefault(); togglePv(); return; }
+  if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goHist(-1); return; }
+  if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); goHist(1); return; }
+  if (e.altKey && e.key === "ArrowUp") { e.preventDefault(); goUp(); return; }
+  if (inInput) {
+    if (e.key === "ArrowDown" && rows.length) { e.preventDefault(); e.target.blur(); select(Math.max(0, selIdx), true); }
+    return;
+  }
+  const row = rows[selIdx];
+  if (e.key === "ArrowDown") { e.preventDefault(); select(Math.min(rows.length - 1, selIdx + 1), true); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); if (selIdx <= 0) $("q").focus(); else select(selIdx - 1, true); }
+  else if (e.key === "ArrowRight" && row && row.kind === "doc" && !openDocs.has(row.doc.meta.doc_path)) { e.preventDefault(); toggleDoc(row.doc); }
+  else if (e.key === "ArrowLeft" && row) {
+    e.preventDefault();
+    if (row.kind === "doc" && openDocs.has(row.doc.meta.doc_path)) toggleDoc(row.doc);
+    else if (row.kind === "page") { const j = rows.findIndex((x) => x.kind === "doc" && x.doc === row.doc); if (j >= 0) select(j, true); }
+  }
+  else if (e.key === "Enter" && row) { e.preventDefault(); activate(selIdx); }
+  else if (e.key === " " && row) { e.preventDefault(); showPreview(row); }
+  else if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c") && row) { e.preventDefault(); copy(row.doc.meta.doc_path); }
+});
+function goHist(d) {
+  const k = histPos + d;
+  if (k < 0 || k >= hist.length) return;
+  histPos = k;
+  scope = hist[k].scope;
+  runFind(hist[k].q, false);
+}
+function goUp() {
+  if (!scope) return;
+  const r = rootOf(scope);
+  if (r && scope.toLowerCase().replace(/[\\/]+$/, "") === r.path.toLowerCase().replace(/[\\/]+$/, "")) { setScope(null); return; }
+  setScope(scope.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]+$/, ""));
+}
+function togglePv() {
+  pvShown = !pvShown;
+  $("main").classList.toggle("nopv", !pvShown);
+  $("pvtoggle").classList.toggle("on", pvShown);
+  sendRect();
+  if (pvShown && rows[selIdx]) showPreview(rows[selIdx]);
+}
+
+// ── Rust 가 부르는 함수들 ────────────────────────────────
+const api = {
+  setRoots(v) { roots = v || []; drawNav(); },
+  setDirs(path, names) { dirs[path] = names || []; drawNav(); },
+  setPageClick(v) { pageClick = v || "preview"; },
+  // 탐색기 옆 패널 — 지금 탐색기가 보는 폴더가 찾는 범위
+  setFolder(f) {
+    if (LAYOUT !== "panel") return;
+    const changed = (f || null) !== scope;
+    scope = f || null;
+    $("pfolder").textContent = scope ? "📁 " + scope : "";
+    $("pfolder").title = scope || "";
+    if (changed && lastQ) runFind(lastQ, false);
+  },
+  results(r) { onResults(r); },
+  // 크게 보기 — 다른 화면에서 넘어온 검색
+  runQuery(q, folder, select) {
+    if (folder !== undefined) scope = folder || null;
+    pendingSelect = select || null;
+    busy = false;
+    if (q) runFind(q); else drawNav();
+  },
+  setState(t) { if (t) setStatus(t); },
+  notice(t) { setStatus(t); },
+  error(t) {
+    busy = false;
+    if (ai && ai.text === "" && ai.info == null) { ai.err = t; redrawAi(); }
+    setStatus(t, true);
+  },
+  // AI 답(RAG) — 같은 검색어로 묻고 흘러나오는 답을 카드에
+  evidence(items) { if (ai) { ai.ev = (items || []).length; redrawAi(); } },
+  token(t) { if (ai) { ai.text += t; redrawAi(); } },
+  raw(t) { if (ai) { ai.text += t; redrawAi(); } },
+  finish(info) {
+    if (!ai) return;
+    ai.info = info || {};
+    if (info && info.answer && !ai.text) ai.text = info.answer;
+    redrawAi();
+  },
+};
+// 이 화면이 모르는 함수(대화 패널 전용 — setHistory · uploadDone …)는 조용히 넘긴다
+window.rsb = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => {}) });
+
+// ── 시작 ─────────────────────────────────────────────────
+if (LAYOUT === "window") {
+  $("win").classList.remove("hidden");
+  $("go").onclick = () => runFind($("q").value);
+  $("q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (e.shiftKey) askAi(); else runFind($("q").value); }
+  });
+  $("askai").onclick = askAi;
+  $("again").onclick = () => { if (lastQ) runFind(lastQ, false); };
+  $("back").onclick = () => goHist(-1);
+  $("fwd").onclick = () => goHist(1);
+  $("up").onclick = goUp;
+  $("group").onchange = render;
+  $("sort").onchange = render;
+  $("pvtoggle").onclick = togglePv;
+  $("pvopen").onclick = () => { if (rows[selIdx]) openPage(rows[selIdx]); };
+  $("pvreveal").onclick = () => { if (rows[selIdx]) send({ type: "reveal", path: rows[selIdx].doc.meta.doc_path }); };
+  new ResizeObserver(sendRect).observe($("pvframe"));
+  window.addEventListener("resize", sendRect);
+  $("list").innerHTML = `<div class="msg">${welcome()}</div>`;
+  drawNav();
+  setTimeout(() => $("q").focus(), 50);
+} else {
+  document.body.classList.add("panel");
+  $("pnl").classList.remove("hidden");
+  $("pgo").onclick = () => runFind($("pq").value);
+  $("pq").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (e.shiftKey) askAi(); else runFind($("pq").value); }
+  });
+  $("pask").onclick = askAi;
+  $("big").onclick = () => send({ type: "big", q: lastQ, folder: scope });
+  $("torag").onclick = () => send({ type: "mode", mode: "rag" });
+  $("pclose").onclick = () => send({ type: "close" });
+  renderCards();
+}
+send({ type: "ready" });
+</script>
+</body>
+</html>

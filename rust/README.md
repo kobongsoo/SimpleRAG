@@ -41,6 +41,7 @@ rust\
 │   ├─ store.rs bm25.rs  벡터 저장(sqlite, 메모리 전수 비교) · BM25 역색인
 │   ├─ indexer.rs commands.rs  증분 인덱싱(이동·복사 포함) · 워커 인덱싱 명령(@index)
 │   ├─ retrieve.rs       하이브리드(RRF) · 리랭킹 · 관련도 판정 · Parent-Child
+│   ├─ find.rs           탐색기 모드 찾기 — 문서 ▸ 쪽 ▸ 발췌 (/find · search --group)
 │   ├─ generate\         llama.dll FFI · 생성기 · 백엔드(CPU/iGPU) 측정 · 프롬프트 · 표 평문화
 │   ├─ app.rs cli.rs main.rs   병렬 예열 · 2단계 응답 · 명령들
 │   ├─ pdfium.rs pickle.rs xmldom.rs htmlparse.rs pyutil.rs   보조
@@ -50,15 +51,17 @@ rust\
     ├─ monitor.rs explorer.rs   탐색기 폴더 추적(Shell COM) · 탐색기에서 보기(UIA)
     ├─ panel.rs win.rs   패널 도킹 · Win32 도우미 (chat_panel.py · dock.py)
     ├─ jobs.rs watcher.rs     자동 인덱싱 · 폴더 감시 (index_jobs.py · watcher.py)
+    ├─ browse_win.rs     MoAI 탐색기 창(탐색기 모드) · PDF 미리 보기 WebView · file:// 주소
+    ├─ folder_icon.rs    인덱싱 폴더(desktop.ini) · 드라이브(HKCU DriveIcons) 아이콘 붙이기 · 되돌리기
     ├─ tray.rs settings.rs history.rs log.rs scope.rs
-    └─ ui\panel.html ui\info.html   패널·설정 창 화면
+    └─ ui\panel.html ui\info.html ui\browse.html   패널(RAG) · 설정 창 · 탐색기 모드 화면
 ```
 
 ## 3. Python 판과의 호환
 
 - **워커 프로토콜이 같습니다** — `질문> ` 프롬프트, `── 근거 N건 (ms)` / `── 답변` / `── 소요` 블록,
   `@ev {json}` 전체 근거 줄(`SIMPLERAG_EVIDENCE_FULL=1`), `@index {json}` · `@index-summary {json}` 결과 줄,
-  `/ask {"q","folder"}` · `/index-doc` · `/remove-doc` · `/bm25` · `/index-plan` · `/index-outside`, stderr 의 `리랭커 적재 완료`.
+  `/ask {"q","folder"}` · `/find {"q","folder"}`(Rust 판만 — `@find` · `@find_done` 줄) · `/index-doc` · `/remove-doc` · `/bm25` · `/index-plan` · `/index-outside`, stderr 의 `리랭커 적재 완료`.
   그래서 Python RAGSearchBox 가 `simplerag-rs.exe` 를 워커로 써도(INI `SimpleRagExe`) 동작하도록 맞췄습니다(이 조합은 직접 시험하지 않았습니다).
   stdin 은 UTF-8 을 먼저 읽고, 아니면 cp949 로 풉니다(Python RAGSearchBox 는 cp949 로 보냄).
 - **config.yaml · 환경변수 · index_state.json 모양이 같습니다**(지문·내용 해시·id 범위 규칙 동일).

@@ -300,4 +300,23 @@ impl Reranker {
         let (_, data) = out[0].try_extract_tensor::<f32>().map_err(|e| e.to_string())?;
         Ok(data.to_vec())
     }
+
+    //------------------------------------------------------------------
+    // 점수 — 길이순으로 batch 개씩 나눠서 (탐색기 모드처럼 후보가 많을 때)
+    //=> score 는 한 묶음을 가장 긴 글에 맞춰 채우므로, 후보가 많고 길이가 들쭉날쭉하면 채운 칸 계산이 커진다.
+    //   비슷한 길이끼리 작게 묶으면 같은 결과를 더 빨리 낸다. 돌려주는 순서는 passages 순서 그대로.
+    //------------------------------------------------------------------
+    pub fn score_batched(&self, query: &str, passages: &[String], batch: usize) -> Result<Vec<f32>, String> {
+        let mut order: Vec<usize> = (0..passages.len()).collect();
+        order.sort_by_key(|&i| passages[i].chars().count());
+        let mut out = vec![0f32; passages.len()];
+        for part in order.chunks(batch.max(1)) {
+            let texts: Vec<String> = part.iter().map(|&i| passages[i].clone()).collect();
+            let s = self.score(query, &texts)?;
+            for (k, &i) in part.iter().enumerate() {
+                out[i] = s[k];
+            }
+        }
+        Ok(out)
+    }
 }

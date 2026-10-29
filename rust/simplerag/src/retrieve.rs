@@ -331,8 +331,17 @@ impl Retriever {
     //------------------------------------------------------------------
     pub fn search_rrf_with(&self, query: &str, top_k: usize, folder: Option<&str>,
                            corpus: Option<&crate::uploads::UploadCorpus>) -> Result<(Vec<Chunk>, Timing), String> {
-        let dense_k = cfg().dense_top_k as usize;
-        let bm25_k = cfg().bm25_top_k as usize;
+        self.search_rrf_k(query, top_k, folder, corpus, 0)
+    }
+
+    //------------------------------------------------------------------
+    // 1단계 — wide 를 주면 dense·BM25 후보 수를 그만큼 넓힌다(설정값보다 작으면 설정값)
+    //   탐색기 모드는 "넓게" 찾아 문서별로 묶으므로 후보가 설정값(답용)보다 많아야 한다(find.rs)
+    //------------------------------------------------------------------
+    pub fn search_rrf_k(&self, query: &str, top_k: usize, folder: Option<&str>,
+                        corpus: Option<&crate::uploads::UploadCorpus>, wide: usize) -> Result<(Vec<Chunk>, Timing), String> {
+        let dense_k = (cfg().dense_top_k as usize).max(wide);
+        let bm25_k = if cfg().bm25_top_k > 0 { (cfg().bm25_top_k as usize).max(wide) } else { 0 };
         let t0 = Instant::now();
         let scope = match folder {
             Some(f) => Some(self.store.folder_scope(f)?),

@@ -67,6 +67,11 @@ impl Panel {
     pub fn call(&mut self, func: &str, arg: Value) {
         self.js(format!("rsb.{}({})", func, arg));
     }
+    // 화면을 갈아 끼웠다(탐색기 ↔ RAG) — 새 화면이 ready 를 보낼 때까지 부르는 함수를 모아 둔다
+    pub fn reset_ready(&mut self) {
+        self.ready = false;
+        self.queued.clear();
+    }
     pub fn on_ready(&mut self) {
         self.ready = true;
         for c in std::mem::take(&mut self.queued) {

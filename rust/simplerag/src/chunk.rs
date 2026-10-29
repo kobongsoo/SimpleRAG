@@ -21,6 +21,7 @@ use crate::tok::Tok;
 //------------------------------------------------------------------
 // 청크 하나 + 출처 정보 (split_blocks 결과)
 // -필드: text = 청크 글 / section_id·path·source·page_from·page_to = payload 에 남길 정보
+//        page = 청크가 실제로 시작하는 쪽(블록 지문 대조로 찾음, 못 찾으면 None)
 //------------------------------------------------------------------
 #[derive(Debug, Clone)]
 pub struct ChunkMeta {
@@ -30,6 +31,7 @@ pub struct ChunkMeta {
     pub source: String,
     pub page_from: Option<i64>,
     pub page_to: Option<i64>,
+    pub page: Option<i64>,
 }
 
 //------------------------------------------------------------------
@@ -181,10 +183,11 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
     if !doc.is_blocks() {
         let raw = doc.raw_text.clone().unwrap_or_default();
         return split_structured(&raw, tok, Some(&title), Some(size), Some(overlap)).into_iter().map(|t| ChunkMeta {
-            text: t, section_id: None, path: vec![], source: "legacy".into(), page_from: None, page_to: None,
+            text: t, section_id: None, path: vec![], source: "legacy".into(), page_from: None, page_to: None, page: None,
         }).collect();
     }
     let mut out: Vec<ChunkMeta> = vec![];
+    let mut pf = PageFinder::default();
     let mut buf: Vec<String> = vec![];
     let mut buf_n = 0;
     let mut buf_secs: Vec<Section> = vec![];
@@ -200,7 +203,7 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
         if n <= size {
             if buf_n + n > size {
                 if !buf.is_empty() {
-                    out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs));
+                    out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs, &mut pf));
                     buf.clear();
                     buf_secs.clear();
                 }
@@ -212,7 +215,7 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
             continue;
         }
         if !buf.is_empty() {
-            out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs));
+            out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs, &mut pf));
             buf.clear();
             buf_secs.clear();
         }
@@ -220,30 +223,136 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
         let budget = std::cmp::max(c.min_chunk_tokens as usize, size.saturating_sub(tok.tlen(&prefix)));
         for piece in pack_units(&units, tok, budget, overlap) {
             if !pyutil::strip(&piece).is_empty() {
-                out.push(chunk_meta(pyutil::strip(&format!("{}{}", prefix, piece)).to_string(), std::slice::from_ref(&sec)));
+                out.push(chunk_meta(pyutil::strip(&format!("{}{}", prefix, piece)).to_string(), std::slice::from_ref(&sec), &mut pf));
             }
         }
     }
     if !buf.is_empty() {
-        out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs));
+        out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs, &mut pf));
     }
     let out = enforce_hard_max(out, tok, overlap);
     out.into_iter().filter(|m| tok.tlen(&m.text) as i64 >= c.min_chunk_tokens).collect()
 }
 
-// 청크 출처 정보 — 첫 절 기준, 쪽 범위는 모든 절의 합
-fn chunk_meta(text: String, secs: &[Section]) -> ChunkMeta {
+// 청크 출처 정보 — 첫 절 기준. 쪽은 청크가 절 글의 어디에 있는지로 찾는다(탐색기 모드 설계서 §13)
+fn chunk_meta(text: String, secs: &[Section], pf: &mut PageFinder) -> ChunkMeta {
     let first = &secs[0];
     let pages: Vec<i64> = secs.iter().flat_map(|s| [s.page_from, s.page_to]).flatten().collect();
     let src = first.heading.as_ref().map(|h| h.source).unwrap_or("parser");
+    let (page, from, to) = match pf.locate(&text, secs) {
+        // 청크 자리를 찾았으면 쪽 범위를 그 자리로 좁힌다
+        Some((p, f, t)) => (Some(p), Some(f), Some(t)),
+        // 못 찾으면 예전처럼 절 범위(넓지만 틀리지는 않음)
+        None => (None, pages.iter().min().copied(), pages.iter().max().copied()),
+    };
     ChunkMeta {
         text,
         section_id: Some(first.id),
         path: first.path.clone(),
         source: src.to_string(),
-        page_from: pages.iter().min().copied(),
-        page_to: pages.iter().max().copied(),
+        page_from: from,
+        page_to: to,
+        page,
     }
+}
+
+const FIND_LEN: usize = 24;                 // 청크 머리·꼬리에서 대조할 글자 수(공백 뺀)
+const FIND_TRY: [usize; 4] = [0, 40, 80, 120]; // 머리 대조가 안 되면 이만큼 뒤에서 다시(표 머리글을 다시 붙인 조각)
+const FIND_MIN: usize = 8;                  // 이보다 짧으면 흔한 글이라 대조하지 않는다
+
+//------------------------------------------------------------------
+// 청크의 실제 쪽 찾기 (절 글 대조)
+//=> 청킹은 절의 단위(제목·블록·표 행)를 이어 붙여 자르므로, 청크는 절 글의 한 토막이다.
+//   그래서 절 글(공백 뺀)과 글자마다의 쪽을 만들어 두고, 청크 머리·꼬리가 절 글 어디에 있는지 찾는다.
+//    1) 청크 앞의 접두 "[문서 > 절]\n" 은 뗀다(절 글에는 없다)
+//    2) 머리 24자를 첫 절 글에서 찾는다 — 같은 절의 앞 청크 자리 뒤부터(같은 글귀가 반복돼도 순서대로).
+//       표 머리글을 다시 붙인 조각은 머리가 앞쪽 표 머리에 걸리므로 40·80·120자 뒤에서도 찾아 본다
+//    3) 꼬리 24자를 마지막 절 글에서 찾는다(머리 자리 뒤부터) → 끝 쪽
+//   Python chunk.py _PageFinder 와 같은 규칙.
+// -필드: secs = 절 번호 → (절 글, 바이트마다의 쪽, 다음 찾기 시작 자리)
+//------------------------------------------------------------------
+#[derive(Default)]
+pub struct PageFinder {
+    secs: std::collections::HashMap<i64, (String, Vec<Option<i64>>, usize)>,
+}
+
+impl PageFinder {
+    // 절 글 준비(한 번 만들어 둔다)
+    fn sec(&mut self, sec: &Section) -> &mut (String, Vec<Option<i64>>, usize) {
+        self.secs.entry(sec.id).or_insert_with(|| {
+            let mut hay = String::new();
+            let mut pg = vec![];
+            for (t, p) in unit_pages(sec) {
+                for ch in t.chars().filter(|c| !pyutil::is_space(*c)) {
+                    hay.push(ch);
+                    pg.extend(std::iter::repeat(p).take(ch.len_utf8()));
+                }
+            }
+            (hay, pg, 0)
+        })
+    }
+
+    // 청크 → Some((시작 쪽, 최소 쪽, 최대 쪽)) / 못 찾으면 None
+    pub fn locate(&mut self, text: &str, secs: &[Section]) -> Option<(i64, i64, i64)> {
+        // 접두는 "[문서 > 절]\n" 모양이다(make_prefix)
+        let body = match (text.starts_with('['), text.find("]\n")) {
+            (true, Some(i)) => &text[i + 2..],
+            _ => text,
+        };
+        let sq: Vec<char> = body.chars().filter(|c| !pyutil::is_space(*c)).collect();
+        let (start_pos, p0) = {
+            let (hay, pg, cur) = self.sec(&secs[0]);
+            let mut hit: Option<usize> = None;
+            for off in FIND_TRY {
+                let needle: String = sq.iter().skip(off).take(FIND_LEN).collect();
+                if needle.chars().count() < FIND_MIN {
+                    break;
+                }
+                // 앞 청크 자리 뒤에서 먼저, 없으면 절 처음부터
+                hit = hay[*cur..].find(&needle).map(|i| i + *cur).or_else(|| hay.find(&needle));
+                if hit.is_some() {
+                    break;
+                }
+            }
+            let pos = hit?;
+            let p0 = pg[pos]?;
+            // 다음 청크는 이 자리 뒤부터(겹침이 있어 끝이 아니라 시작 뒤로 둔다)
+            *cur = pos + hay[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            (pos, p0)
+        };
+        // 꼬리 — 마지막 절 글에서
+        let tail: String = sq[sq.len().saturating_sub(FIND_LEN)..].iter().collect();
+        let same = secs.len() == 1;
+        let (hay, pg, _) = self.sec(&secs[secs.len() - 1]);
+        let from = if same { start_pos } else { 0 };
+        let p1 = if tail.chars().count() >= FIND_MIN {
+            hay[from..].find(&tail).map(|i| i + from + tail.len() - 1).and_then(|e| pg.get(e).copied().flatten())
+        } else {
+            None
+        };
+        let p1 = p1.unwrap_or(p0);
+        Some((p0, p0.min(p1), p0.max(p1)))
+    }
+}
+
+//------------------------------------------------------------------
+// 절 단위와 그 쪽 (section_units 와 같은 순서·같은 글)
+//=> 제목은 제목 블록의 쪽, 표 머리글·행은 표 블록의 쪽, 그 밖은 블록의 쪽.
+//------------------------------------------------------------------
+fn unit_pages(sec: &Section) -> Vec<(String, Option<i64>)> {
+    let mut out = vec![];
+    if let Some(h) = &sec.heading {
+        if !h.synthetic && !pyutil::strip(&h.text).is_empty() {
+            out.push((h.text.clone(), h.page));
+        }
+    }
+    for b in &sec.blocks {
+        // 표든 문단이든 공백을 빼고 대조하므로 블록 글 전체를 그 블록의 쪽으로 둔다
+        if !pyutil::strip(&b.text).is_empty() {
+            out.push((b.text.clone(), b.page));
+        }
+    }
+    out
 }
 
 //------------------------------------------------------------------

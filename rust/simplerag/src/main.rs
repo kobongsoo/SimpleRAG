@@ -19,7 +19,8 @@ const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,cle
   ask      질의 (질문 생략 시 대화형)   [질문] [--top-k N] [--max-tokens N] [--folder <폴더>] [--model M] [--precise] [--no-stream]
   chat     대화형 질의 (모델 1회 적재) [--top-k N] [--max-tokens N] [--model M] [--precise] [--no-stream]
   extract  추출 미리보기               <파일> [--chars N] [--blocks] [--dump <폴더>]
-  search   검색만 수행(LLM 미적재)     <질의> [--top-k N] [--chars N] [--folder <폴더>]
+  search   검색만 수행(LLM 미적재)     <질의> [--top-k N] [--chars N] [--folder <폴더>] [--group]
+           --group: 탐색기 모드처럼 문서 ▸ 쪽으로 묶어 @find JSON 줄로 출력(--top-k = 1단계 후보 수)
   clear    인덱스 삭제                 [--doc <경로>] [-y]
   status   인덱스 상태                 [-v]
   backend  생성 백엔드(CPU/iGPU) 확인  [--reprobe]
@@ -97,6 +98,7 @@ fn parse(argv: &[String]) -> Args {
             "--from" => a.from = Some(next(&mut i, "--from")),
             "--out" => a.out = Some(next(&mut i, "--out")),
             "--no-llm" => a.no_llm = true,
+            "--group" => a.group = true,
             s if s.starts_with("--") => arg_error(&format!("unrecognized arguments: {}", s)),
             s => positional.push(s.to_string()),
         }

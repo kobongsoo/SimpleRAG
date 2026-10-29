@@ -82,9 +82,18 @@
 <div id="loadbox" class="hidden"><progress id="loadbar" max="100" value="0"></progress><div class="note load" id="loadnote"></div></div>
 <div class="note" id="actnote"></div>
 </fieldset>
+<fieldset><legend>화면 모드</legend>
+  <div><label><input type="radio" name="uimode" id="m_explorer" value="explorer"> 탐색기 모드 (기본) — 문서 · 쪽 · 내용을 찾아 목록으로 보여 줍니다</label></div>
+  <div><label><input type="radio" name="uimode" id="m_rag" value="rag"> RAG 모드 — 질문하면 AI 가 문서를 근거로 답합니다</label></div>
+  <div class="row" style="align-items:center;margin-top:4px"><span class="note">쪽을 누르면</span>
+    <label style="margin:0"><input type="radio" name="pclick" id="pc_preview" value="preview"> 미리 보기 창</label>
+    <label style="margin:0"><input type="radio" name="pclick" id="pc_app" value="app"> 기본 PDF 앱에서 그 쪽</label></div>
+  <div class="note" id="modenote"></div>
+</fieldset>
 <fieldset><legend>인덱싱 폴더</legend>
   <div class="row"><div class="grow"><select id="folders" size="3"></select></div>
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
+  <label><input type="checkbox" id="folder_icon"> 인덱싱 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
   <div class="note" id="foldernote"></div>
 </fieldset>
 <fieldset><legend>시작</legend>
@@ -162,6 +171,11 @@ window.rsb = {
     if (typeof info.multiturn === "boolean") $("multiturn").checked = info.multiturn;
     $("mtnote").textContent = info.multiturn_note || "";
     $("logdir").textContent = info.log_dir || "";
+    // 화면 모드 · 쪽 열기 · 폴더 아이콘 — ini 값으로 매번 맞춘다
+    if (info.ui_mode) $(info.ui_mode === "rag" ? "m_rag" : "m_explorer").checked = true;
+    if (info.page_click) $(info.page_click === "app" ? "pc_app" : "pc_preview").checked = true;
+    if (typeof info.folder_icon === "boolean") $("folder_icon").checked = info.folder_icon;
+    $("modenote").textContent = info.mode_msg || "";
     if (info.syn) drawSyn(info.syn);
   },
 };
@@ -265,6 +279,9 @@ $("b_rescan").onclick = () => send({ type: "rescan" });
 $("autorun").onchange = () => send({ type: "autorun" });
 $("precision").onchange = () => send({ type: "precision", on: $("precision").checked });
 $("multiturn").onchange = () => send({ type: "multiturn", on: $("multiturn").checked });
+for (const id of ["m_explorer", "m_rag"]) $(id).onchange = () => send({ type: "ui_mode", value: $(id).value });
+for (const id of ["pc_preview", "pc_app"]) $(id).onchange = () => send({ type: "page_click", value: $(id).value });
+$("folder_icon").onchange = () => send({ type: "folder_icon", on: $("folder_icon").checked });
 $("b_logs").onclick = () => send({ type: "open_logs" });
 $("b_open").onclick = () => send({ type: "open" });
 $("b_close").onclick = () => send({ type: "hide" });

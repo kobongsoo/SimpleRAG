@@ -42,6 +42,10 @@ pub struct Settings {
     pub autoindex_ask_above: i64,
     pub autoindex_bm25_idle_s: i64,
     pub log_level: String,
+    // 화면 모드(탐색기 모드 설계서 §16) — explorer(기본) | rag · 쪽을 눌렀을 때 preview | app · 폴더 아이콘 바꾸기
+    pub ui_mode: String,
+    pub page_click: String,
+    pub folder_icon: bool,
     pub warnings: Vec<String>,
     pub ini_path: String,
 }
@@ -80,6 +84,9 @@ impl Default for Settings {
             autoindex_ask_above: 50,
             autoindex_bm25_idle_s: 10,
             log_level: "INFO".into(),
+            ui_mode: "explorer".into(),
+            page_click: "preview".into(),
+            folder_icon: true,
             warnings: vec![],
             ini_path: String::new(),
         }
@@ -235,6 +242,19 @@ pub fn load(path: Option<&str>) -> Settings {
     s.autoindex_rescan_min = ini.int("AutoIndex", "RescanMin", 10, 0, 1440, &mut w);
     s.autoindex_ask_above = ini.int("AutoIndex", "AskAboveDocs", 50, 0, 100000, &mut w);
     s.autoindex_bm25_idle_s = ini.int("AutoIndex", "Bm25IdleSec", 10, 0, 3600, &mut w);
+    let m = ini.s("UI", "Mode").to_lowercase();
+    if m == "explorer" || m == "rag" {
+        s.ui_mode = m;
+    } else if !m.is_empty() {
+        w.push(format!("[UI] Mode = {} 를 알 수 없어 explorer 를 씁니다", m));
+    }
+    let pc = ini.s("UI", "PageClick").to_lowercase();
+    if pc == "preview" || pc == "app" {
+        s.page_click = pc;
+    } else if !pc.is_empty() {
+        w.push(format!("[UI] PageClick = {} 를 알 수 없어 preview 를 씁니다", pc));
+    }
+    s.folder_icon = ini.boolean("UI", "FolderIcon", true, &mut w);
     let lv = ini.s("Log", "Level");
     s.log_level = if lv.is_empty() { "INFO".into() } else { lv };
     s.warnings = w;

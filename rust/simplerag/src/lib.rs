@@ -14,6 +14,7 @@ pub mod config;
 pub mod docmodel;
 pub mod embed;
 pub mod extract;
+pub mod find;
 pub mod generate;
 pub mod htmlparse;
 pub mod indexer;

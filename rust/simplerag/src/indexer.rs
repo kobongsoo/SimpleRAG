@@ -353,7 +353,7 @@ fn extract_blocks(path: &str, name: &str, tok: &crate::tok::Tok) -> Result<(Stri
         split_blocks(&mut doc, tok, None)
     } else {
         split_text(&text, tok, None, None).into_iter().map(|t| crate::chunk::ChunkMeta {
-            text: t, section_id: None, path: vec![], source: String::new(), page_from: None, page_to: None }).collect()
+            text: t, section_id: None, path: vec![], source: String::new(), page_from: None, page_to: None, page: None }).collect()
     };
     Ok((text, n_rows, metas))
 }
@@ -477,6 +477,10 @@ pub fn sync_doc(path: &str, fp: &str, state: &mut State, embedder: &Embedder, st
             }
             if let Some(x) = m.page_to {
                 p.insert("page_to".into(), json!(x));
+            }
+            // 청크가 실제로 시작하는 쪽 — 탐색기 모드가 "그 쪽에서 열기"에 쓴다
+            if let Some(x) = m.page {
+                p.insert("page".into(), json!(x));
             }
         }
         payloads.push(p);

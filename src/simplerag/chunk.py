@@ -222,7 +222,7 @@ _SENT_END = re.compile(r"(?<=[.!?。])\s+")
 # -in: title   = 문서 제목(접두에 쓴다). None 이면 doc.title
 # -in: size, overlap = None 이면 설정값
 #
-# -out: [dict, …] — {text, section_id, path, source, page_from, page_to}
+# -out: [dict, …] — {text, section_id, path, source, page_from, page_to, page}
 #       (폴백 문서는 section_id/page 가 None, source="legacy")
 # -out: error = 없음 (빈 문서는 [])
 #------------------------------------------------------------------
@@ -235,17 +235,18 @@ def split_blocks(doc, tok, title=None, size=None, overlap=None):
 
     if not doc.is_blocks:
         return [{"text": c, "section_id": None, "path": [], "source": "legacy",
-                 "page_from": None, "page_to": None}
+                 "page_from": None, "page_to": None, "page": None}
                 for c in split_structured(doc.raw_text, tok, title=title,
                                           size=size, overlap=overlap)]
 
     out = []
+    pf = _PageFinder()
     buf, buf_n, buf_secs = [], 0, []
 
     # 모아 둔 작은 절들을 청크 하나로 내보낸다 — 메타는 첫 절 기준, 쪽은 합친 범위
     def flush():
         if buf:
-            out.append(_chunk_meta("\n\n".join(buf).strip(), buf_secs))
+            out.append(_chunk_meta("\n\n".join(buf).strip(), buf_secs, pf))
             buf.clear()
             buf_secs.clear()
 
@@ -273,7 +274,7 @@ def split_blocks(doc, tok, title=None, size=None, overlap=None):
         budget = max(config.MIN_CHUNK_TOKENS, size - _tlen(tok, prefix))
         for piece in _pack_units(units, tok, budget, overlap):
             if piece.strip():
-                out.append(_chunk_meta((prefix + piece).strip(), [sec]))
+                out.append(_chunk_meta((prefix + piece).strip(), [sec], pf))
     flush()
 
     out = _enforce_hard_max(out, tok, overlap)
@@ -282,20 +283,148 @@ def split_blocks(doc, tok, title=None, size=None, overlap=None):
 
 #------------------------------------------------------------------
 # 청크 메타 만들기
+#=> 대표 절(첫 절)의 출처 정보에, 청크가 절 글의 어디에 있는지로 찾은 쪽을 붙인다(탐색기 모드 설계서 §13).
+#    1) _PageFinder 로 시작 쪽 · 쪽 범위를 찾는다
+#    2) 못 찾으면 예전처럼 절들의 쪽 범위를 쓰고 page 는 None
 #
 # -in: text = 청크 글자
 # -in: secs = 이 청크에 든 절 목록(첫 절이 대표)
+# -in: pf   = 문서 하나 동안 쓰는 _PageFinder (절 글 · 찾기 자리를 기억)
 #
-# -out: dict = {text, section_id, path, source, page_from, page_to}
+# -out: dict = {text, section_id, path, source, page_from, page_to, page}
 # -out: error = 없음
 #------------------------------------------------------------------
-def _chunk_meta(text, secs):
+def _chunk_meta(text, secs, pf):
     first = secs[0]
     pages = [p for s in secs for p in (s.page_from, s.page_to) if p is not None]
     src = first.heading.source if first.heading is not None else "parser"
+    found = pf.locate(text, secs)
+    if found is not None:
+        # 청크 자리를 찾았으면 쪽 범위를 그 자리로 좁힌다
+        page, lo, hi = found
+    else:
+        # 못 찾으면 절 범위(넓지만 틀리지는 않음)
+        page, lo, hi = None, (min(pages) if pages else None), (max(pages) if pages else None)
     return {"text": text, "section_id": first.id, "path": list(first.path),
-            "source": src, "page_from": min(pages) if pages else None,
-            "page_to": max(pages) if pages else None}
+            "source": src, "page_from": lo, "page_to": hi, "page": page}
+
+
+_FIND_LEN = 24                  # 청크 머리 · 꼬리에서 대조할 글자 수(공백 뺀)
+_FIND_TRY = (0, 40, 80, 120)    # 머리 대조가 안 되면 이만큼 뒤에서 다시(표 머리글을 다시 붙인 조각)
+_FIND_MIN = 8                   # 이보다 짧으면 흔한 글이라 대조하지 않는다
+
+
+#------------------------------------------------------------------
+# 청크의 실제 쪽 찾기 (절 글 대조)
+#=> 청킹은 절의 단위(제목 · 블록 · 표 행)를 이어 붙여 자르므로, 청크는 절 글의 한 토막이다.
+#   그래서 절 글(공백 뺀)과 글자마다의 쪽을 만들어 두고, 청크 머리 · 꼬리가 절 글 어디에 있는지 찾는다.
+#    1) 청크 앞의 접두 "[문서 > 절]\n" 은 뗀다(절 글에는 없다)
+#    2) 머리 24자를 첫 절 글에서 찾는다 — 같은 절의 앞 청크 자리 뒤부터(같은 글귀가 반복돼도 순서대로).
+#       표 머리글을 다시 붙인 조각은 머리가 앞쪽 표 머리에 걸리므로 40 · 80 · 120자 뒤에서도 찾아 본다
+#    3) 꼬리 24자를 마지막 절 글에서 찾는다(머리 자리 뒤부터) → 끝 쪽
+#   Rust chunk.rs PageFinder 와 같은 규칙.
+#
+# -필드: secs = 절 번호 → [절 글, 글자마다의 쪽, 다음 찾기 시작 자리]
+#------------------------------------------------------------------
+class _PageFinder:
+    #------------------------------------------------------------------
+    # 빈 찾기 상태 만들기
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def __init__(self):
+        self.secs = {}
+
+    #------------------------------------------------------------------
+    # 절 글 준비(절마다 한 번 만들어 둔다)
+    #
+    # -in: sec = 절
+    #
+    # -out: [절 글, 글자마다의 쪽 목록, 다음 찾기 시작 자리]
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def _sec(self, sec):
+        got = self.secs.get(sec.id)
+        if got is None:
+            hay, pg = [], []
+            for t, p in _unit_pages(sec):
+                for ch in t:
+                    if not ch.isspace():
+                        hay.append(ch)
+                        pg.append(p)
+            got = ["".join(hay), pg, 0]
+            self.secs[sec.id] = got
+        return got
+
+    #------------------------------------------------------------------
+    # 청크의 쪽 찾기
+    #
+    # -in: text = 청크 글자
+    # -in: secs = 청크가 속한 절 목록
+    #
+    # -out: (시작 쪽, 최소 쪽, 최대 쪽) = 찾은 쪽
+    # -out: error = 머리를 못 찾거나 쪽이 없으면 None (예외 없음)
+    #------------------------------------------------------------------
+    def locate(self, text, secs):
+        body = text
+        # 접두는 "[문서 > 절]\n" 모양이다(make_prefix)
+        if text.startswith("[") and "]\n" in text:
+            body = text[text.index("]\n") + 2:]
+        sq = "".join(body.split())
+        st = self._sec(secs[0])
+        hay, pg, cur = st
+        hit = None
+        for off in _FIND_TRY:
+            needle = sq[off:off + _FIND_LEN]
+            if len(needle) < _FIND_MIN:
+                break
+            # 앞 청크 자리 뒤에서 먼저, 없으면 절 처음부터
+            hit = hay.find(needle, cur)
+            if hit < 0:
+                hit = hay.find(needle)
+            if hit >= 0:
+                break
+            hit = None
+        if hit is None or pg[hit] is None:
+            return None
+        p0 = pg[hit]
+        # 다음 청크는 이 자리 뒤부터(겹침이 있어 끝이 아니라 시작 뒤로 둔다)
+        st[2] = hit + 1
+        # 꼬리 — 마지막 절 글에서
+        tail = sq[-_FIND_LEN:]
+        hay2, pg2, _ = self._sec(secs[-1])
+        start = hit if len(secs) == 1 else 0
+        p1 = None
+        if len(tail) >= _FIND_MIN:
+            e = hay2.find(tail, start)
+            if e >= 0:
+                p1 = pg2[e + len(tail) - 1]
+        if p1 is None:
+            p1 = p0
+        return p0, min(p0, p1), max(p0, p1)
+
+
+#------------------------------------------------------------------
+# 절 단위와 그 쪽
+#=> 제목은 제목 블록의 쪽, 그 밖은 블록 글 전체를 그 블록의 쪽으로 둔다
+#   (공백을 빼고 대조하므로 표를 행으로 나누지 않아도 같은 글이 된다).
+#
+# -in: sec = 절
+#
+# -out: [(글, 쪽), …]
+# -out: error = 없음
+#------------------------------------------------------------------
+def _unit_pages(sec):
+    out = []
+    if sec.heading is not None and not sec.heading.synthetic and sec.heading.text.strip():
+        out.append((sec.heading.text, sec.heading.page))
+    for b in sec.blocks:
+        if b.text and b.text.strip():
+            out.append((b.text, b.page))
+    return out
 
 
 #------------------------------------------------------------------

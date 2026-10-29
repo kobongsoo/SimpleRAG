@@ -279,6 +279,73 @@ pub fn open_explorer(path: &str) -> Result<(), String> {
     std::process::Command::new("explorer.exe").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+// 탐색기에서 그 파일을 골라 보이기(폴더에서 보기)
+pub fn reveal(path: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    // /select, 뒤 경로는 따옴표째 한 덩어리로 넘겨야 공백 경로가 안 깨진다
+    std::process::Command::new("explorer.exe").raw_arg(format!("/select,\"{}\"", path)).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+//------------------------------------------------------------------
+// 확장자의 기본 앱 실행 파일 (예: ".pdf" → C:\…\msedge.exe)
+//------------------------------------------------------------------
+pub fn assoc_exe(ext: &str) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::UI::Shell::{AssocQueryStringW, ASSOCF_NONE, ASSOCSTR_EXECUTABLE};
+    let mut buf = vec![0u16; 1024];
+    let mut n = buf.len() as u32;
+    let hr = unsafe { AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_EXECUTABLE, &HSTRING::from(ext), &HSTRING::from("open"), PWSTR(buf.as_mut_ptr()), &mut n) };
+    if hr.is_err() {
+        return None;
+    }
+    let s = String::from_utf16_lossy(&buf[..buf.iter().position(|c| *c == 0).unwrap_or(0)]);
+    if s.is_empty() { None } else { Some(s) }
+}
+
+//------------------------------------------------------------------
+// PDF 앱별 "그 쪽에서 열기" 인자 (탐색기 모드 설계서 §14-②)
+//=> 기본 앱 실행 파일 이름으로 쪽 지정 방식을 고른다. 모르는 앱이면 None(파일만 열고 쪽은 안내).
+//   [Open] PdfPageArgs 같은 사용자 표는 아직 없다 — 앱이 늘면 여기에 더한다.
+// -in: exe = 실행 파일 경로 / path = PDF 경로 / page = 쪽(1부터)
+//------------------------------------------------------------------
+pub fn pdf_page_args(exe: &str, path: &str, page: i64) -> Option<Vec<String>> {
+    let name = exe.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
+    match name.as_str() {
+        // 크로미움 계열 — PDF 뷰어가 #page=N 을 안다
+        "msedge.exe" | "chrome.exe" | "whale.exe" | "brave.exe" => Some(vec![crate::browse_win::file_url(path, Some(page))]),
+        // Adobe · PDF-XChange — /A "page=N"
+        "acrobat.exe" | "acrord32.exe" | "pdfxedit.exe" | "pdfxcview.exe" => Some(vec!["/A".into(), format!("page={}", page), path.into()]),
+        "sumatrapdf.exe" => Some(vec!["-page".into(), page.to_string(), path.into()]),
+        _ => None,
+    }
+}
+
+//------------------------------------------------------------------
+// 문서를 그 쪽에서 열기
+//=> PDF 이고 쪽을 알면 기본 앱을 알아내 쪽 인자를 붙여 띄운다. 그 밖은 연결 프로그램으로 파일만 연다.
+// -out: Ok(안내 글 — 쪽을 못 넘겼으면 "N쪽을 보세요") / Err(실패 글)
+//------------------------------------------------------------------
+pub fn open_page(path: &str, page: Option<i64>) -> Result<String, String> {
+    let is_pdf = path.to_lowercase().ends_with(".pdf");
+    if let (true, Some(n)) = (is_pdf, page) {
+        if let Some(exe) = assoc_exe(".pdf") {
+            if let Some(args) = pdf_page_args(&exe, path, n) {
+                std::process::Command::new(&exe).args(&args).spawn().map_err(|e| format!("문서를 열지 못했습니다: {}", e))?;
+                crate::info!("win", "{}쪽에서 열기: {} ({})", n, path, exe);
+                return Ok(format!("{}쪽에서 열었습니다", n));
+            }
+            crate::info!("win", "쪽 지정을 모르는 PDF 앱이라 파일만 연다: {}", exe);
+        }
+        open_path(path)?;
+        return Ok(format!("기본 PDF 앱이 쪽 지정을 몰라 파일만 열었습니다 — {}쪽을 보세요", n));
+    }
+    open_path(path)?;
+    Ok(match page {
+        Some(n) => format!("문서를 열었습니다 — {}쪽 근처를 보세요", n),
+        None => "문서를 열었습니다".into(),
+    })
+}
+
 //------------------------------------------------------------------
 // 보이는 최상위 창을 z 순서대로 — (손잡이)
 //------------------------------------------------------------------
