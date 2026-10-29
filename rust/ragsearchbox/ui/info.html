@@ -5,9 +5,10 @@
 <title>MoAI-S 설정</title>
 <!--
   설정 창 (Python info_window.py 와 같은 구성)
-  - 왼쪽 메뉴: 기본 · 동의어 — 누르면 오른쪽 흰 판이 바뀐다
+  - 왼쪽 메뉴: 기본 · 동의어 · 사람 — 누르면 오른쪽 흰 판이 바뀐다
   - 기본: 묶음 상자 — 모델(1초마다 새 값 · 내리기/다시 올리기 · 올리는 중 진행 막대 %) · 인덱싱 폴더 · 시작 · 대화(이어서 묻기) · 정밀 모드 · 로그 폴더
   - 동의어: 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 동의어 [빼기] (동의어 설계서 4단계)
+  - 사람: 이름 별칭 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 별칭 [빼기] · "나" (메타데이터 검색 설계서 §7-2)
   - 맨 아래 화면 열기 · 닫기
 -->
 <style>
@@ -68,7 +69,7 @@
 </head>
 <body>
 <div class="main">
-<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div></div>
+<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">사람</span></div></div>
 <div class="panel">
 <div id="tab_basic">
 <fieldset><legend>모델</legend>
@@ -126,6 +127,26 @@
   <div class="row"><div class="grow"><select id="synlist" size="5"></select></div><div class="col"><button id="b_syn_remove">빼기</button></div></div>
 </fieldset>
 </div>
+<div id="tab_ppl" class="hidden">
+<fieldset><legend>이름 별칭 후보</legend>
+  <div class="lead">문서 속성에 계정 ID · 영문 이름으로 적힌 작성자를 사람 이름과 잇는 후보예요. 같은 사람이면 승인하세요 — "고봉수가 만든 문서" 로 그 문서도 찾습니다.</div>
+  <div id="pplrows"></div>
+  <div class="note" id="pplnote"></div>
+  <div class="btns"><button id="b_ppl_suggest">후보 만들기</button></div>
+</fieldset>
+<fieldset><legend>직접 추가</legend>
+  <div class="row" style="align-items:center"><span class="note">별칭</span><input type="text" id="ppl_a"><span class="note">→ 이름</span><input type="text" id="ppl_n">
+    <button id="b_ppl_add" style="margin:0">추가</button></div>
+</fieldset>
+<fieldset><legend>나</legend>
+  <div class="row" style="align-items:center"><span class="note">"내가 만든 문서" 의 나</span><input type="text" id="ppl_me">
+    <button id="b_ppl_me" style="margin:0">저장</button></div>
+  <div class="note">저장하면 이 PC 의 Windows 계정 · Office 사용자 이름도 별칭으로 함께 승인합니다.</div>
+</fieldset>
+<fieldset><legend>승인한 별칭</legend>
+  <div class="row"><div class="grow"><select id="ppllist" size="5"></select></div><div class="col"><button id="b_ppl_remove">빼기</button></div></div>
+</fieldset>
+</div>
 </div>
 </div>
 <div class="foot"><button id="b_open">화면 열기</button><button id="b_close">닫기</button></div>
@@ -177,6 +198,7 @@ window.rsb = {
     if (typeof info.folder_icon === "boolean") $("folder_icon").checked = info.folder_icon;
     $("modenote").textContent = info.mode_msg || "";
     if (info.syn) drawSyn(info.syn);
+    if (info.people) drawPeople(info.people);
   },
 };
 
@@ -200,15 +222,60 @@ function showLoading(st) {
   $("loadnote").textContent = "모델을 올리는 중 · " + (st.pct | 0) + "% · " + (st.sec | 0) + "초" + (d ? " — " + d : "");
 }
 
-// 왼쪽 메뉴로 판 바꾸기 — 기본 · 동의어
+// 왼쪽 메뉴로 판 바꾸기 — 기본 · 동의어 · 사람
 function showTab(name) {
-  for (const t of ["basic", "syn"]) {
+  for (const t of ["basic", "syn", "ppl"]) {
     $("tab_" + t).classList.toggle("hidden", t !== name);
     $("t_" + t).classList.toggle("on", t === name);
   }
 }
 $("t_basic").onclick = () => showTab("basic");
 $("t_syn").onclick = () => showTab("syn");
+$("t_ppl").onclick = () => showTab("ppl");
+
+// 사람 탭 — 동의어 탭과 같이 바뀌었을 때만 다시 그린다
+let pplSig = null, pplListSig = null, pplPairs = [], meShown = null;
+function drawPeople(pp) {
+  $("t_ppl_text").textContent = pp.n_left ? "사람 (" + pp.n_left + ")" : "사람";
+  const ls = JSON.stringify(pp.approved || []);
+  if (ls !== pplListSig) {
+    pplListSig = ls; pplPairs = pp.approved || [];
+    const sel = $("ppllist"); sel.innerHTML = "";
+    for (const [a, n] of pplPairs) { const o = document.createElement("option"); o.textContent = a + "  →  " + n; sel.appendChild(o); }
+  }
+  const sig = JSON.stringify(pp.rows || []);
+  if (sig !== pplSig) {
+    pplSig = sig;
+    const box = $("pplrows"); box.innerHTML = "";
+    for (const row of pp.rows || []) {
+      const d = document.createElement("div"); d.className = "syn";
+      const top = document.createElement("div"); top.className = "top";
+      const b = document.createElement("b"); b.textContent = row.alias + "  →  " + row.name; top.appendChild(b);
+      const sp = document.createElement("div"); sp.className = "sp"; top.appendChild(sp);
+      const ok = document.createElement("button"); ok.textContent = "✓ 맞음";
+      ok.onclick = () => send({ type: "ppl_approve", alias: row.alias, name: row.name });
+      const no = document.createElement("button"); no.textContent = "✕ 아님";
+      no.onclick = () => send({ type: "ppl_reject", alias: row.alias, name: row.name });
+      top.appendChild(ok); top.appendChild(no);
+      const why = document.createElement("div"); why.className = "note"; why.textContent = row.why || "";
+      d.appendChild(top); d.appendChild(why); box.appendChild(d);
+    }
+  }
+  $("pplnote").textContent = pp.note || "";
+  // "나" 칸 — 값이 바뀌었을 때만 채운다(치는 중인 글을 지우지 않게)
+  if ((pp.me || "") !== meShown) { meShown = pp.me || ""; $("ppl_me").value = meShown; }
+}
+$("b_ppl_suggest").onclick = () => send({ type: "ppl_suggest" });
+$("b_ppl_add").onclick = () => {
+  send({ type: "ppl_approve", alias: $("ppl_a").value.trim(), name: $("ppl_n").value.trim() });
+  $("ppl_a").value = ""; $("ppl_n").value = "";
+};
+$("b_ppl_me").onclick = () => send({ type: "ppl_me", name: $("ppl_me").value.trim() });
+$("b_ppl_remove").onclick = () => {
+  const i = $("ppllist").selectedIndex;
+  if (i < 0) return;
+  send({ type: "ppl_remove", alias: pplPairs[i][0] });
+};
 
 // 동의어 탭 — 후보 줄·승인 목록은 바뀌었을 때만 다시 그린다(고른 문서 용어·고른 줄이 매초 풀리지 않게)
 let synSig = null, listSig = null, lastAdd = null, pairs = [];

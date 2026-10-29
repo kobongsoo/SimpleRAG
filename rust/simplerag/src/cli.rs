@@ -386,6 +386,29 @@ fn upload_command(app: &App, cmd: &str, arg: &str) -> Value {
 }
 
 //------------------------------------------------------------------
+// 메타데이터 조건 꼬리말 — timing.meta 의 칩 · 문서 수 · 완화 내역 (Python render_answer 와 같은 글자)
+//
+// -in: timing = 검색 시간 묶음
+// -out: " · 조건 고봉수 (작성) · 엑셀(문서 14개) — 조건을 풀어 찾음: …" / 조건이 없으면 빈 문자열
+//------------------------------------------------------------------
+pub fn meta_scope(timing: &crate::retrieve::Timing) -> String {
+    let m = match timing.get("meta") {
+        Some(m) => m,
+        None => return String::new(),
+    };
+    let chips: Vec<&str> = m["chips"].as_array().map(|a| a.iter().filter_map(|c| c["label"].as_str()).collect()).unwrap_or_default();
+    let mut s = format!(" · 조건 {}", chips.join(" · "));
+    if let Some(n) = m["docs"].as_i64() {
+        s += &format!("(문서 {}개)", n);
+    }
+    let relaxed: Vec<&str> = m["relaxed"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+    if !relaxed.is_empty() {
+        s += &format!(" — 조건을 풀어 찾음: {}", relaxed.join(", "));
+    }
+    s
+}
+
+//------------------------------------------------------------------
 // 질의 1건 화면 출력 (ask·chat 공용) — true = 정상, false = 사용자 중단
 //------------------------------------------------------------------
 pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: Option<usize>, stream: bool, folder: Option<&str>,
@@ -434,6 +457,8 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                     }
                     None => String::new(),
                 } };
+                // 메타데이터 조건(메타데이터 검색 설계서 §1-1) — "고봉수 (작성) · 2025년 · 작성일(문서 12개)"
+                let scope = scope + &meta_scope(&timing);
                 outln(&format!("\n── 근거 {}건 ({:.0}ms){} ─────────────────────", chunks.len(), tget(&timing, "total_ms"), scope));
                 let full = std::env::var("SIMPLERAG_EVIDENCE_FULL").map(|v| v == "1").unwrap_or(false);
                 for (i, c) in chunks.iter().enumerate() {
@@ -666,7 +691,9 @@ pub fn cmd_chat(a: &Args) -> i32 {
                         if q.is_empty() {
                             outln(&crate::find::error_line("검색어가 비었습니다"));
                         } else {
-                            match crate::find::find(&app.retriever, &q, folder.as_deref(), limit) {
+                            // 조건 칩에서 끈 조건 · 넓힌 기간({"off": [...], "widen": N})
+                            let opts = crate::meta::query::PlanOpts::from_json(&Value::Object(req.clone()));
+                            match crate::find::find_with(&app.retriever, &q, folder.as_deref(), limit, &opts) {
                                 Ok((lines, done)) => crate::find::print_lines(&lines, &done, &mut |s| outln(s)),
                                 Err(e) => outln(&crate::find::error_line(&e)),
                             }
@@ -855,6 +882,9 @@ pub fn cmd_search(a: &Args) -> i32 {
                 outln(&format!("범위: {} (문서 {}건, 벡터 한 벌)", f, t.get("scope_docs").map(|v| v.to_string()).unwrap_or_default()));
             }
             let rr = if t.contains_key("rerank_ms") { format!(" + 리랭킹 {:.0}", tget(&t, "rerank_ms")) } else { String::new() };
+            if t.contains_key("meta") {
+                outln(&format!("조건:{}", meta_scope(&t).trim_start_matches(" · 조건")));
+            }
             outln(&format!("검색 {:.0}ms (임베딩 {:.0} + dense {:.0} + BM25 {:.0} + 융합 {:.0}{})\n",
                 tget(&t, "total_ms"), tget(&t, "embed_ms"), tget(&t, "dense_ms"), tget(&t, "bm25_ms"), tget(&t, "fuse_ms"), rr));
             if chunks.is_empty() {

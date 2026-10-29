@@ -265,13 +265,27 @@ impl Retriever {
         let top_k = top_k.filter(|k| *k > 0).unwrap_or(cfg().top_k as usize);
         // 업로드 문서만 — 폴더 한정은 의미가 없다
         let folder = if corpus.is_some() { None } else { folder };
+        // 메타데이터 조건(사람 · 기간 · 형식 · 출처 · 스캔) — 조건이 없는 질의는 mp 가 None 이라 예전과 똑같다
+        let mp = if corpus.is_none() { meta_plan(query, folder) } else { None };
+        if let Some(p) = &mp {
+            if p.meta_only {
+                // 본문 검색어가 남지 않았다 — 조건에 맞는 문서를 가산 · 수정일 순으로(§13-2)
+                return self.meta_only(p, top_k);
+            }
+        }
+        let query: &str = mp.as_ref().map(|p| p.query.as_str()).unwrap_or(query);
+        let docs = mp.as_ref().and_then(|p| p.docs.as_ref());
         let rr = self.reranker.lock().unwrap().clone();
         let rr = match rr {
-            None => return self.search_rrf_with(query, top_k, folder, corpus),
+            None => {
+                let (c, t) = self.search_rrf_docs(query, top_k, folder, corpus, 0, docs)?;
+                return Ok((c, meta_timing(t, mp.as_ref())));
+            }
             Some(r) => r,
         };
         let pool = top_k.max(cfg().rerank_pool as usize);
-        let (chunks, mut timing) = self.search_rrf_with(query, pool, folder, corpus)?;
+        let (chunks, timing) = self.search_rrf_docs(query, pool, folder, corpus, 0, docs)?;
+        let mut timing = meta_timing(timing, mp.as_ref());
         let gate = relevance_min();
         if chunks.is_empty() || (chunks.len() <= top_k && gate.is_none()) {
             return Ok((chunks, timing));
@@ -288,12 +302,20 @@ impl Retriever {
             }
         };
         let rms = ms(t0.elapsed());
+        // 관련도 문턱은 리랭커 점수 그대로로 본다(가산 때문에 관련 없는 근거가 문턱을 넘지 않게)
+        let top = scores.iter().cloned().fold(f32::MIN, f32::max) as f64;
+        let mut scores: Vec<f64> = scores.iter().map(|s| *s as f64).collect();
+        if let Some(p) = mp.as_ref().filter(|p| !p.boosts.is_empty()) {
+            // 메타데이터 가산 — 필터로 쓰기엔 애매한 조건(작성 역할 · 유형 · 양식 · 기간 안)으로 순위만 올린다(§13-1)
+            for (s, c) in scores.iter_mut().zip(chunks.iter()) {
+                *s += p.boosts.get(&c.doc_path).copied().unwrap_or(0.0);
+            }
+        }
         let mut order: Vec<usize> = (0..chunks.len()).collect();
         order.sort_by(|a, b| scores[*b].partial_cmp(&scores[*a]).unwrap_or(std::cmp::Ordering::Equal));
         timing.insert("rerank_ms".into(), pyutil::jf(rms));
         let total = pyutil::round_to(tget(&timing, "total_ms") + rms, 1);
         timing.insert("total_ms".into(), pyutil::jf(total));
-        let top = scores[order[0]] as f64;
         timing.insert("rerank_top".into(), pyutil::jf(pyutil::round_to(top, 2)));
         if let Some(g) = gate {
             let ov = keyword_overlap(query, &texts);
@@ -340,12 +362,23 @@ impl Retriever {
     //------------------------------------------------------------------
     pub fn search_rrf_k(&self, query: &str, top_k: usize, folder: Option<&str>,
                         corpus: Option<&crate::uploads::UploadCorpus>, wide: usize) -> Result<(Vec<Chunk>, Timing), String> {
+        self.search_rrf_docs(query, top_k, folder, corpus, wide, None)
+    }
+
+    //------------------------------------------------------------------
+    // 1단계 — docs 를 주면 그 문서들(메타데이터 조건에 맞는 문서)에서만 찾는다
+    //   폴더 한정과 같은 허용 점 id 방식(메타데이터 검색 설계서 §13-1)
+    //------------------------------------------------------------------
+    pub fn search_rrf_docs(&self, query: &str, top_k: usize, folder: Option<&str>,
+                           corpus: Option<&crate::uploads::UploadCorpus>, wide: usize,
+                           docs: Option<&HashSet<String>>) -> Result<(Vec<Chunk>, Timing), String> {
         let dense_k = (cfg().dense_top_k as usize).max(wide);
         let bm25_k = if cfg().bm25_top_k > 0 { (cfg().bm25_top_k as usize).max(wide) } else { 0 };
         let t0 = Instant::now();
-        let scope = match folder {
-            Some(f) => Some(self.store.folder_scope(f)?),
-            None => None,
+        let scope = match (docs, folder) {
+            (Some(d), f) if corpus.is_none() => Some(self.store.docs_scope(d, f)?),
+            (_, Some(f)) => Some(self.store.folder_scope(f)?),
+            _ => None,
         };
         if let Some((n_docs, _)) = &scope {
             if *n_docs == 0 {
@@ -423,6 +456,69 @@ impl Retriever {
             timing.insert("uploads".into(), json!(c.n_files));
         }
         Ok((chunks, timing))
+    }
+}
+
+//------------------------------------------------------------------
+// 메타데이터 계획 — 인덱서가 meta.sqlite 를 두는 곳(상태 파일 옆)의 사전 · 규칙으로
+//   메타가 없거나 조건이 없으면 None(검색을 막지 않는다)
+//------------------------------------------------------------------
+pub fn meta_plan(query: &str, folder: Option<&str>) -> Option<crate::meta::query::Plan> {
+    meta_plan_opts(query, folder, &crate::meta::query::PlanOpts::default())
+}
+
+// 메타데이터 계획 — 화면에서 끈 조건 · 넓힌 기간과 함께(탐색기 모드 조건 칩)
+pub fn meta_plan_opts(query: &str, folder: Option<&str>, opts: &crate::meta::query::PlanOpts) -> Option<crate::meta::query::Plan> {
+    let home = crate::meta::hook::data_dir();
+    crate::meta::query::plan_with(query, &crate::meta::store::default_path(&home), &home, folder, None, opts)
+}
+
+// timing 에 메타데이터 해석 결과를 싣는다 — 화면이 조건 칩 · "조건을 풀어 찾음" 을 보인다(§14)
+pub fn meta_timing(mut timing: Timing, mp: Option<&crate::meta::query::Plan>) -> Timing {
+    if let Some(p) = mp {
+        timing.insert("meta".into(), p.to_json());
+    }
+    timing
+}
+
+impl Retriever {
+    //------------------------------------------------------------------
+    // 본문 검색어가 남지 않은 질의 — 조건에 맞는 문서를 근거로 (§13-2)
+    //=> "작년에 고봉수님이 만든 문서" 처럼 조건만 있으면 본문 검색을 하지 않는다. 계획의 순서(가산 · 수정일)로
+    //   top_k 개 골라 문서마다 첫 청크를 근거로 돌려준다. 본문이 없는 문서(스캔 PDF 등)는 이름만 적은 근거.
+    //------------------------------------------------------------------
+    pub fn meta_only(&self, mp: &crate::meta::query::Plan, top_k: usize) -> Result<(Vec<Chunk>, Timing), String> {
+        let t0 = Instant::now();
+        let state = crate::indexer::load_state();
+        let docs = crate::indexer::docs(&state);
+        let picked: Vec<&String> = mp.order.iter().take(top_k).collect();
+        let first_ids: Vec<i64> = picked.iter()
+            .filter_map(|k| docs.get(*k).and_then(|d| d.get("ids")).and_then(|v| v.as_array()).and_then(|a| a.first()).and_then(|v| v.as_i64()))
+            .collect();
+        let payloads = if first_ids.is_empty() { HashMap::new() } else { self.store.payloads(&first_ids)? };
+        let by_path: HashMap<String, (i64, Payload)> = payloads.into_iter().filter(|(_, p)| !p.is_empty())
+            .map(|(i, p)| (pl_str(&p, "doc_path").to_string(), (i, p))).collect();
+        let chunks: Vec<Chunk> = picked.iter().map(|k| {
+            let name = pyutil::basename(k).to_string();
+            match by_path.get(*k) {
+                Some((i, pl)) => Chunk {
+                    id: *i, text: pl_str(pl, "text").to_string(), doc_name: pl_str(pl, "doc_name").to_string(),
+                    doc_path: (*k).clone(), folder: pl_str(pl, "folder").to_string(),
+                    chunk_idx: pl.get("chunk_idx").and_then(|v| v.as_i64()).unwrap_or(0),
+                    section_id: pl.get("section_id").and_then(|v| v.as_i64()), child_text: None,
+                },
+                None => Chunk {
+                    id: -1, text: format!("[{}] (본문을 읽지 못한 문서 — 이름 · 속성으로 찾음)", name), doc_name: name,
+                    doc_path: (*k).clone(), folder: String::new(), chunk_idx: 0, section_id: None, child_text: None,
+                },
+            }
+        }).collect();
+        let mut timing = Timing::new();
+        for k in ["embed_ms", "dense_ms", "bm25_ms", "fuse_ms"] {
+            timing.insert(k.into(), json!(0.0));
+        }
+        timing.insert("total_ms".into(), pyutil::jf(pyutil::round_to(ms(t0.elapsed()) + mp.ms, 1)));
+        Ok((chunks, meta_timing(timing, Some(mp))))
     }
 }
 

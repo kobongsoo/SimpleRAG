@@ -391,6 +391,11 @@ def main():
     if os.path.isfile(src_syn):
         shutil.copy2(src_syn, os.path.join(DIST, APP, "synonyms.default.yaml"))
         print("  synonyms.default.yaml 복사")
+    # 기본 사람 별칭 사전도 같은 규칙(사용자 사전 people.yaml 은 건드리지 않는다)
+    src_ppl = os.path.join(ROOT, "people.default.yaml")
+    if os.path.isfile(src_ppl):
+        shutil.copy2(src_ppl, os.path.join(DIST, APP, "people.default.yaml"))
+        print("  people.default.yaml 복사")
 
     if not args.no_models:
         print("\n[models] exe 옆으로 모델 복사")

@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>메타데이터 검색 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol, .flow ul { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.ok { color: var(--good); font-weight: 600; }
+.ng { color: var(--bad); font-weight: 600; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.kpi .v { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); line-height: 1.2; }
+.kpi .v.bad { color: var(--bad); }
+.kpi .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.bars { margin: 10px 0; font-size: 13.5px; }
+.bars .r { display: grid; grid-template-columns: 170px 1fr 60px; gap: 10px; align-items: center; margin: 5px 0; }
+@media (max-width: 560px) { .bars .r { grid-template-columns: 110px 1fr 48px; } }
+.bars .track { height: 12px; background: var(--sunken); border-radius: 6px; overflow: hidden; }
+.bars .track i { display: block; height: 100%; border-radius: 6px; background: var(--accent); }
+.bars .track i.g { background: var(--good); }
+.bars .track i.w { background: var(--warn); }
+.bars .track i.b { background: var(--bad); }
+.bars .n { text-align: right; font-family: var(--mono); color: var(--ink-2); }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+.mock { background: var(--sunken); border-radius: 12px; padding: 18px; margin: 16px 0; }
+.mock .win { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; max-width: 700px; margin: 0 auto; font-size: 14px; }
+.mock .bar { display: flex; gap: 8px; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--rule); font-weight: 600; }
+.mock .bar span { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 13px; }
+.mock .body { padding: 12px 14px; }
+.mock .q { border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
+.mock .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; align-items: center; }
+.mock .chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--accent); border-radius: 999px; padding: 1px 10px; font-size: 12.5px; background: var(--accent-soft); color: var(--accent); }
+.mock .chip.soft { border-style: dashed; }
+.mock .chip .x { color: var(--muted); }
+.mock .lbl { font-size: 12.5px; color: var(--muted); }
+.mock .row { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+.mock .row .t { font-weight: 600; }
+.mock .row .m { font-size: 12.5px; color: var(--muted); }
+.mock .row .m b { color: var(--good); font-weight: 600; }
+.mock .row .s { font-size: 13px; color: var(--ink-2); margin-top: 3px; }
+.mock mark { background: var(--warn-soft); color: inherit; padding: 0 2px; border-radius: 3px; }
+.steps { counter-reset: st; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: st; position: relative; padding-left: 40px; margin: 14px 0; }
+.steps > li::before { content: counter(st); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (SimpleRAG) · 설계서 · 2026-10-29</div>
+  <h1>메타데이터 검색 설계서 — "누가 · 언제 · 어떤 문서"까지 알아듣는 검색</h1>
+  <p class="lede">지금의 본문 검색(dense + BM25)에 <b>문서 속성(메타데이터)</b>을 더한다.
+  "작년에 고봉수님이 만든 절차서 양식을 찾아줘"라고 물으면 <b>사람 · 기간 · 문서 유형 · 양식 여부</b>를 질의에서 떼어 내
+  조건이나 가산점으로 쓰고, 남은 말("절차서 양식")은 지금처럼 본문에서 찾는다.
+  어떤 속성을 쓸지는 <code>D:\분류함</code> 2,293개 파일을 실제로 뽑아 본 결과로 정했다.</p>
+  <p class="meta">대상: SimpleRAG Python 판 · Rust 판(워커) · RAGSearchBox 탐색기 모드 ·
+  실측 도구: <code>bench/meta_survey.py</code> → <code>results/meta_survey/records.jsonl</code> ·
+  관련: plan/폴더아이콘_탐색기모드_설계서_20261029.html · plan/동의어사전_설계서_20261027.html · plan/폴더한정검색_설계서.html</p>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결론</a> · <a href="#s1-1">전체 검색 흐름</a></li>
+    <li><a href="#s2">목표와 범위</a></li>
+    <li><a href="#s3">실측 — 2,293개 파일에서 본 것</a></li>
+    <li><a href="#s4">확정 항목 18개</a></li>
+    <li><a href="#s5">저장하지 않는 항목</a></li>
+    <li><a href="#s6">포맷별 추출 위치와 함정</a></li>
+    <li><a href="#s7">정규화 ① 사람</a></li>
+    <li><a href="#s8">정규화 ② 날짜</a></li>
+    <li><a href="#s9">정규화 ③ 제목</a></li>
+    <li><a href="#s10">정규화 ④ 형식 · 출처 · 유형</a></li>
+    <li><a href="#s11">저장 구조</a></li>
+    <li><a href="#s12">질의 해석</a></li>
+    <li><a href="#s13">필터 · 가산 · 완화 규칙</a></li>
+    <li><a href="#s14">화면 — 조건 칩</a></li>
+    <li><a href="#s15">개인정보 · 보안</a></li>
+    <li><a href="#s16">시험 · 측정 계획</a> · <a href="#s16-2">타 검색 도구 비교</a></li>
+    <li><a href="#s17">구현 단계</a></li>
+    <li><a href="#s18">결정이 필요한 것</a></li>
+    <li><a href="#s19">구현 결과 — 1단계</a></li>
+  </ol>
+</nav>
+
+<!-- 1 -->
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="verdict">
+    <strong>만들 가치가 있고, 핵심 난이도는 "추출"이 아니라 "정규화"다.</strong>
+    속성 값은 생각보다 훨씬 지저분하다. 이름 표기가 제각각이고, 템플릿에서 물려받은 가짜 날짜가 있고, 제목 칸에는 기본값이 들어 있다.
+    이 셋을 바로잡는 규칙이 있으면 "작년에 고봉수님이 만든 절차서 양식" 같은 질의를 처리할 수 있다.
+  </div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">8 → 92</div><div class="l">"고봉수" 문서 수: 정확 일치 → 이름 정규화 + 계정 별칭</div></div>
+    <div class="kpi"><div class="v bad">19%</div><div class="l">템플릿에서 물려받은 가짜 (작성자, 생성일)</div></div>
+    <div class="kpi"><div class="v bad">8%</div><div class="l">파일 시스템 생성일이 실제 작성일과 맞는 비율</div></div>
+    <div class="kpi"><div class="v bad">29%</div><div class="l">속성 "제목" 중 쓸 만한 값</div></div>
+  </div>
+  <ul>
+    <li><b>쓰는 항목은 18개</b>(§4)다: 위치 · 날짜 · 사람 · 제목 · 쪽 구조 · 출처 · 파생 유형. 키워드 · 주제 · 회사 등 9가지는 버린다(§5).</li>
+    <li><b>사람</b>은 "만든 이 + 마지막 저장자"를 합쳐 정규화하고, 계정 ID를 이름으로 잇는 <b>별칭 사전</b>을 둔다. 사전은 동의어 사전처럼 자동 제안 → 승인 방식으로 관리한다.</li>
+    <li><b>날짜</b>는 수정일을 대표로 쓴다. 생성일은 템플릿 상속이 아닐 때만 쓴다. 파일 시스템 생성일은 "PC에 들어온 날"로 뜻을 바꿔 쓴다.</li>
+    <li><b>제목</b>은 하나를 고르지 않는다. 속성 제목 · 본문 첫 제목 · 파일명 3개 후보를 모두 검색에 쓰고, 화면에만 하나를 고른다.</li>
+    <li>질의 해석은 <b>규칙 우선</b>이다(색인에서 뽑은 사람 이름 목록 + 시간 표현 + 유형 사전). 신뢰도가 높은 조건만 걸러 내고, 나머지는 가산점으로 쓴다. 결과가 0건이면 조건을 하나씩 푼다.</li>
+    <li>저장은 Python · Rust 판이 함께 읽는 <code>meta.sqlite</code> 한 파일을 제안한다(결정 D1).</li>
+  </ul>
+
+  <h3 id="s1-1">1-1 전체 검색 흐름 — 메타데이터로 좁히고, 본문으로 찾는다</h3>
+  <p>메타데이터 검색은 RAG 검색을 대신하지 않는다. <b>앞단에서 문서 범위를 좁히고 순위를 보정</b>할 뿐이다.
+  범위가 정해지면 그 안에서 지금의 검색(벡터 + BM25 → RRF → 리랭킹)이 그대로 돌아가 <b>문서의 쪽과 내용</b>을 찾는다.</p>
+  <div class="pipe">
+    <span>질문</span><b>→</b>
+    <span class="hl">① 질의 해석</span><b>→</b>
+    <span class="hl">② 메타데이터로 범위 좁히기</span><b>→</b>
+    <span>③ 벡터 + BM25 → RRF → 사본 거르기 → 리랭킹</span><b>→</b>
+    <span class="hl">④ 메타데이터 가산</span><b>→</b>
+    <span>⑤ 탐색기 목록 / RAG 답변</span>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>하는 일</th><th>예: "작년에 고봉수님이 만든 절차서 양식을 찾아줘"</th><th>자세히</th></tr></thead>
+    <tbody>
+      <tr><td><b>① 질의 해석</b></td><td>질문을 <b>조건</b>(사람 · 기간 · 형식 · 출처 · 유형 · 양식)과 <b>본문 검색어</b>로 나눈다. 규칙 기반, 5ms 이내</td><td>조건: 고봉수(작성) · 2025년 · 절차서 · 양식<br>본문 검색어: "절차서 양식"</td><td>§12</td></tr>
+      <tr><td><b>② 범위 좁히기</b></td><td>meta.sqlite에서 <b>확실한 조건</b>에 맞는 문서를 고르고, 그 문서의 청크만 참으로 표시한다(폴더 한정 검색과 같은 마스크)</td><td>1,284개 문서 → 고봉수 작성 · 2025년 작성 문서만</td><td>§13-1</td></tr>
+      <tr><td><b>③ 본문 검색</b></td><td><b>지금과 같은 검색</b>을 표시된 청크 안에서만 한다. 동의어 확장도 그대로</td><td>"절차서 양식"으로 벡터 · BM25 검색 → 리랭킹</td><td>기존</td></tr>
+      <tr><td><b>④ 가산</b></td><td>필터로 쓰기엔 애매한 조건으로 점수를 보정한다</td><td>유형 = 절차서(점수 4) · 양식(점수 3) → 가산</td><td>§13-1</td></tr>
+      <tr><td><b>⑤ 결과</b></td><td>모드에 따라 목록 또는 답변으로 낸다(아래 표)</td><td>문서 → 3쪽 → 발췌</td><td>§14</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="flow">
+    <div class="card"><h3>갈림길</h3>
+      <ul>
+        <li><b>조건이 없는 질의</b>("휴가 규정에서 연차 이월")는 ②④를 건너뛴다. 지금 검색과 결과가 같아야 한다(시험 ④ "본문 질의 하락 없음").</li>
+        <li><b>본문 검색어가 남지 않는 질의</b>("작년에 고봉수님이 만든 문서")는 ③을 건너뛰고, 조건에 맞는 문서를 수정일 최신순으로 보인다(§13-2).</li>
+        <li><b>② 결과가 0건</b>이면 조건을 하나씩 풀고 ②로 돌아간다: 사람 → 기간 → 유형 순서(§13-3).</li>
+      </ul></div>
+    <div class="card"><h3>왜 "좁히기 + 가산" 둘로 나누나</h3>
+      <ul>
+        <li>메타데이터는 틀린 값이 많다(§3). 애매한 조건까지 필터로 쓰면 정답 문서가 <b>아예 후보에서 빠진다</b>.</li>
+        <li>그래서 확실한 조건만 ②에서 범위를 줄이고, 나머지는 ④에서 순위만 올린다.</li>
+        <li>범위를 줄이면 리랭킹할 후보 안에 조건에 맞는 문서가 더 많이 들어와서, 본문 검색의 정확도도 같이 오른다.</li>
+      </ul></div>
+  </div>
+
+  <h3>두 모드 모두에 적용</h3>
+  <p>①~④는 <code>Retriever</code> 한 곳에 넣으므로 <b>탐색기 모드와 RAG 모드가 같이 쓴다</b>. 다른 것은 ⑤뿐이다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>탐색기 모드</th><th>RAG 모드 (대화 · 답변)</th></tr></thead>
+    <tbody>
+      <tr><td>①~④</td><td colspan="2">같음 — 질의 해석 · 범위 좁히기 · 벡터 + BM25 · 가산</td></tr>
+      <tr><td>⑤ 결과 만들기</td><td>문서별 묶기 → 쪽 합치기 → 발췌 · 강조 (탐색기 모드 설계서 B-5) · 누르면 그 쪽에서 열림</td><td>부모 절 확장 · 이웃 청크 → 관련도 문턱 → LLM 답변 · 근거 문서와 쪽 표시</td></tr>
+      <tr><td>조건 보이기</td><td>검색창 아래 <b>조건 칩</b>, [✕]로 끄면 다시 검색 (§14)</td><td>답변 위에 한 줄: "고봉수 · 2025년 작성 문서 12개에서 찾았습니다" + [조건 없이 다시]</td></tr>
+      <tr><td>이어서 묻기(멀티턴)</td><td>—</td><td>앞 질문의 조건을 다음 질문에 이어 쓴다("그중에 엑셀만" → 형식 조건 추가). 새 조건이 같은 종류면 바꾼다</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 2 -->
+<section id="s2">
+  <h2><span class="no">2</span>목표와 범위</h2>
+  <h3>풀고 싶은 질의</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>질의</th><th>필요한 메타데이터</th><th>지금 가능?</th></tr></thead>
+    <tbody>
+      <tr><td>작년에 고봉수님이 만든 절차서 양식을 찾아줘</td><td>사람 · 기간 · 문서 유형 · 양식 여부</td><td class="ng">불가</td></tr>
+      <tr><td>메일로 받은 한글 파일 중 점검 확인서</td><td>받은 경로 · 형식</td><td class="ng">불가</td></tr>
+      <tr><td>지난주에 받은 제안서</td><td>PC에 들어온 날 · 유형</td><td class="ng">불가</td></tr>
+      <tr><td>스캔된 계약서</td><td>스캔 여부 · 유형</td><td class="ng">불가</td></tr>
+      <tr><td>2023년 정기점검 보고서 최신본</td><td>날짜 · 버전 그룹</td><td><span class="tag t-warn">일부</span> 본문에 날짜가 있을 때만</td></tr>
+      <tr><td>휴가 규정에서 연차 이월</td><td>(본문만)</td><td class="ok">가능</td></tr>
+    </tbody>
+  </table></div>
+  <h3>범위</h3>
+  <ul>
+    <li><b>포함</b>: 메타데이터 추출 · 정규화 · 저장, 질의 해석, 검색 반영(필터 · 가산 · 완화 — 탐색기 · RAG 두 모드 공통), 탐색기 모드의 조건 칩 · RAG 모드의 조건 안내 줄, 사람 별칭 사전.</li>
+    <li><b>제외(다음 단계)</b>: AD/조직도 연동, OCR 자체 개발(스캔본은 "스캔"이라고 표시만 한다), 메일 클라이언트 연동(eml/msg는 분류함에 없음).</li>
+  </ul>
+</section>
+
+<!-- 3 -->
+<section id="s3">
+  <h2><span class="no">3</span>실측 — 2,293개 파일에서 본 것</h2>
+  <p>2026-10-29, <code>bench/meta_survey.py</code>로 <code>D:\분류함</code> 전체를 포맷별 추출기로 읽어 원본 값을 그대로 저장했다.
+  정규화하지 않은 날것의 값이다. 다시 읽는 데 52초 걸린다(첫 실행 180초).</p>
+
+  <h3>3-1 구성</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>그룹</th><th class="num">파일</th><th>내부 속성</th></tr></thead>
+    <tbody>
+      <tr><td>PDF</td><td class="num">399</td><td>Info 사전 · 쪽수 · 책갈피 · 텍스트층</td></tr>
+      <tr><td>Office 신형 (docx · xlsx · pptx)</td><td class="num">296</td><td>core.xml · app.xml (확장자가 .doc인데 실제로는 docx인 3개 포함)</td></tr>
+      <tr><td>Office 구형 (doc · xls · ppt)</td><td class="num">217</td><td>OLE SummaryInformation (+ 0바이트 파일 1개)</td></tr>
+      <tr><td>한글 HWP / HWPX</td><td class="num">45 / 10</td><td>HwpSummaryInformation / content.hpf</td></tr>
+      <tr><td>이미지</td><td class="num">368</td><td>EXIF가 있는 것은 약 1%</td></tr>
+      <tr><td>텍스트 · 코드 · 데이터 · 기타</td><td class="num">957</td><td>없음 — 경로와 파일 시스템 정보만</td></tr>
+    </tbody>
+  </table></div>
+  <p>문서 속성이 있는 파일은 968개(42%)다. <b>나머지 58%에는 경로 · 파일명 · 날짜밖에 없다.</b> 그래서 경로와 파일명은 모든 파일에 통하는 1순위 메타데이터다.</p>
+
+  <h3>3-2 작성자 값의 모양 (만든 이, 문서 967개)</h3>
+  <div class="bars">
+    <div class="r"><span>계정 ID형 (jungcw, kik)</span><div class="track"><i class="w" style="width:29%"></i></div><span class="n">29%</span></div>
+    <div class="r"><span>빈 값</span><div class="track"><i class="b" style="width:21%"></i></div><span class="n">21%</span></div>
+    <div class="r"><span>한글 이름 (정상)</span><div class="track"><i class="g" style="width:20%"></i></div><span class="n">20%</span></div>
+    <div class="r"><span>쓰레기 값 (User, PC…)</span><div class="track"><i class="b" style="width:16%"></i></div><span class="n">16%</span></div>
+    <div class="r"><span>영문 이름</span><div class="track"><i class="w" style="width:5%"></i></div><span class="n">5%</span></div>
+    <div class="r"><span>기타 (회사명 · 깨짐)</span><div class="track"><i class="b" style="width:5%"></i></div><span class="n">5%</span></div>
+    <div class="r"><span>한글 띄어쓰기 · 역순</span><div class="track"><i class="w" style="width:4%"></i></div><span class="n">4%</span></div>
+  </div>
+  <p>쓰레기 값의 예: <code>User</code> · <code>PC</code> · <code>home</code> · <code>Administrator</code> · <code>Microsoft Corporation</code> · <code>Windows XP</code> · <code>IBM_USER</code> · <code>m</code> · <code>h</code>.
+  마지막 저장자 칸에서는 <code>Microsoft 계정</code>이 46건으로 가장 많았다.</p>
+
+  <h3>3-3 "고봉수"로 찾으면</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>방법</th><th class="num">찾은 문서</th><th>무엇이 더 잡혔나</th></tr></thead>
+    <tbody>
+      <tr><td>만든 이 = "고봉수" 정확 일치</td><td class="num">8</td><td></td></tr>
+      <tr><td>+ 이름 정규화 · 마지막 저장자 포함</td><td class="num">72</td><td><code>봉수 고</code> · <code>고 봉수</code> (저장자 칸에만 66건)</td></tr>
+      <tr><td>+ 계정 별칭</td><td class="num"><b>92</b></td><td><code>bong9</code> · <code>bong49</code></td></tr>
+      <tr><td>(참고) 경로 · 파일명에 "고봉수"</td><td class="num">17</td><td><code>2025년_업적평가_RnD_고봉수.xlsx</code> 등</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>3-4 날짜</h3>
+  <ul>
+    <li><b>템플릿 상속</b>: 내용이 다른 파일 180개(문서의 19%)가 같은 (만든 이, 생성일) 쌍을 공유한다.
+      <code>jungcw / 2011-02-07T02:01:21Z</code>가 PPT 75개에 붙어 있다. 회사 PPT 양식의 원래 값이다.
+      그래서 "2011년에 만든 문서" 113건 중 75건이 가짜다. 같은 이유로 회사 칸의 <code>IBM</code> 91건도 오염된 값이다.</li>
+    <li><b>파일 시스템 생성일</b>: 1,130개가 <code>2026-09</code>로 찍혀 있다(폴더로 복사한 시점). 문서 내부 생성일과 2일 안으로 맞는 것은 71/936(8%)뿐이다.</li>
+    <li><b>파일 시스템 수정일</b>: 문서 내부 수정일과 맞는 것이 489/937(52%)이다. 나머지 447건은 파일 시스템 쪽이 더 늦다(내려받기 · 다른 프로그램으로 저장).</li>
+    <li><b>이상한 값</b>: PDF 날짜 형식이 섞여 있다(<code>D:20100823131638+09'00'</code> · <code>Mon Jan 12 08:51:48 2004</code> · <code>March 15, 2024 14:09</code>). OLE에는 <code>1900-12-31</code>이 4건, 생성일이 수정일보다 늦은 경우가 2건 있다.</li>
+  </ul>
+
+  <h3>3-5 제목 (속성 제목, 문서 964개)</h3>
+  <div class="bars">
+    <div class="r"><span>빈 값</span><div class="track"><i class="b" style="width:38%"></i></div><span class="n">368</span></div>
+    <div class="r"><span>쓸 만함</span><div class="track"><i class="g" style="width:29%"></i></div><span class="n">283</span></div>
+    <div class="r"><span>기본값 · 쓰레기</span><div class="track"><i class="b" style="width:28%"></i></div><span class="n">266</span></div>
+    <div class="r"><span>깨짐</span><div class="track"><i class="b" style="width:5%"></i></div><span class="n">47</span></div>
+  </div>
+  <p>기본값 · 쓰레기 값의 예: <code>슬라이드 1</code>(117) · <code>PowerPoint 프레젠테이션</code>(74) · <code>Microsoft Word - 경조사지원규정.doc</code> · <code>ARIA2.dvi</code> · <code>3</code>.
+  깨진 값의 예: PDF 제목 <code>&lt;B8AEB4AABDBA2E687770&gt;</code>는 CP949 hex이고, 풀면 <code>리눅스.hwp</code>(원본 파일명)다.
+  쓸 만한 283개 중 파일명과 비슷한 것은 48개뿐이다. 즉 <b>파일명은 제목과 다른 정보를 담는다.</b></p>
+
+  <h3>3-6 그 밖에 쓸 만한 것 · 못 쓰는 것</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>실측</th><th>판정</th></tr></thead>
+    <tbody>
+      <tr><td>PPT 슬라이드 제목</td><td>172개 파일, 4,200장 중 2,413장(57%)에 제목</td><td><span class="tag t-good">쓴다</span></td></tr>
+      <tr><td>Excel 시트명</td><td>39개 · <code>표지</code> <code>자기평가</code> <code>1차평가</code> <code>이의제기</code></td><td><span class="tag t-good">쓴다</span></td></tr>
+      <tr><td>다운로드 출처 (Zone.Identifier)</td><td>197개(9%) · 웹메일(bizmeka) 61 · mpower.mocomsys.com 48 · 사내 10.10.4.10 23 · 구글 드라이브 20 · claude.ai 8 · Outlook 6</td><td><span class="tag t-good">쓴다</span></td></tr>
+      <tr><td>중복 (내용 해시)</td><td>202그룹 · 사본 352개 · 문서 중 19%(187)가 사본</td><td><span class="tag t-good">쓴다</span></td></tr>
+      <tr><td>버전 계열 (파일명 유사)</td><td>59그룹 168개 · <code>시간외근무일지</code> 6벌 · <code>정기점검확인서</code> 5벌</td><td><span class="tag t-good">쓴다</span></td></tr>
+      <tr><td>PDF 텍스트층</td><td>82/399(21%)가 텍스트 없음 → 스캔본. Producer가 <code>ApeosPort</code> · <code>SINDOH</code> · <code>Samsung</code></td><td><span class="tag t-good">쓴다</span></td></tr>
+      <tr><td>PDF Creator/Producer</td><td>Hancom PDF 54 · Acrobat Distiller 51 · Print To PDF 37 · PowerPoint 47 …</td><td><span class="tag t-good">쓴다</span> 원본 프로그램</td></tr>
+      <tr><td>템플릿명</td><td>대부분 <code>Normal</code> 계열 · 의미 있는 값: <code>수리부품구입의뢰.dot</code> 11 · <code>기안서양식2</code> 3 · <code>모코엠시스 파워포인트 테마</code> 12</td><td><span class="tag t-acc">가산</span></td></tr>
+      <tr><td>PDF 책갈피</td><td>81/399(20%)</td><td><span class="tag t-acc">쪽 제목</span></td></tr>
+      <tr><td>Word 제목 스타일</td><td>19/81만 사용</td><td><span class="tag t-acc">있으면 씀</span></td></tr>
+      <tr><td>Word 메모 · 변경 추적 작성자</td><td>0/81</td><td><span class="tag t-bad">버림</span></td></tr>
+      <tr><td>머리글 · 바닥글</td><td>38/81 · 대부분 <code>- 4 - 모코엠시스</code> · <code>페이지 2 / 2</code></td><td><span class="tag t-bad">버림</span></td></tr>
+      <tr><td>PDF 양식 필드 (AcroForm)</td><td>22개 · 대부분 일반 책자(J2EE 서적 등) → 오탐</td><td><span class="tag t-bad">버림</span></td></tr>
+      <tr><td>키워드 · 주제 · 설명 · 범주</td><td>1~5%</td><td><span class="tag t-bad">버림</span></td></tr>
+      <tr><td>사용자 정의 속성</td><td>5개 (<code>_DocHome</code> 등)</td><td><span class="tag t-bad">버림</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>3-7 추출하다 발견한 함정</h3>
+  <ul>
+    <li><b>확장자가 거짓말을 한다</b>: <code>.doc</code>인데 실제로는 docx(ZIP)인 파일 3개, 0바이트 파일 1개.</li>
+    <li><b>HWP 요약정보 파싱 버그</b>: olefile이 HWP 문자열 길이를 잘못 읽어 뒤 속성까지 붙여 반환한다. 예: <code>mpower_vm\x00\x1f…2013년 11월 20일…</code>. 첫 NUL에서 잘라야 한다(실측 도구에 반영함).</li>
+    <li><b>HWP 설명란의 DRM 추적 정보</b>: <code>|Fasoo_Trace_ID:eyJub2Rl…</code>(base64 JSON — 사용자 코드 · 로그 시각 · 프로세스)가 들어 있는 파일이 있다. 수집하지 않는다(§15).</li>
+    <li><b>인코딩 깨짐</b>: PDF 작성자 <code>ê³€ë´›ì‹Ÿ</code>(13건)는 손실된 모지바케라서 복구할 수 없다. 쓰레기 값으로 처리한다.</li>
+  </ul>
+</section>
+
+<!-- 4 -->
+<section id="s4">
+  <h2><span class="no">4</span>확정 항목 18개</h2>
+  <p>용도 표기:
+    <span class="tag t-good">필터</span> 조건으로 걸러 냄(신뢰도가 높을 때만) ·
+    <span class="tag t-acc">가산</span> 맞으면 점수를 올림 ·
+    <span class="tag t-warn">표시</span> 결과 화면에 보임 ·
+    <span class="tag">내부</span> 시스템 처리용</p>
+
+  <h3>A. 위치 · 식별 — 모든 파일</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>출처</th><th>용도</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><b>경로 · 폴더명 토큰</b></td><td>파일 시스템</td><td><span class="tag t-good">필터</span> <span class="tag t-acc">가산</span></td><td>85%가 분류 폴더 바로 아래에 있고, 폴더명(<code>08_사내규정_인사</code>)이 그대로 분류다. 파일의 58%는 이것밖에 없다</td></tr>
+      <tr><td>2</td><td><b>파일명</b> + 정리본(번호 · 날짜 · 버전 제거)</td><td>파일 시스템</td><td><span class="tag t-acc">가산</span> <span class="tag t-warn">표시</span></td><td>제목 속성과 겹치지 않는 정보(§3-5)</td></tr>
+      <tr><td>3</td><td><b>형식</b> 문서/엑셀/PPT/한글/PDF/텍스트/이미지/기타</td><td><b>매직 바이트</b> → 확장자</td><td><span class="tag t-good">필터</span></td><td>확장자가 틀린 파일 4개</td></tr>
+      <tr><td>4</td><td><b>내용 해시 · 중복 그룹 · 버전 그룹</b></td><td>SHA1(이미 있는 <code>content_hash</code>) + 파일명 정리본</td><td><span class="tag">내부</span> 결과 접기</td><td>문서 19%가 사본, 버전 계열 59그룹</td></tr>
+      <tr><td>5</td><td>크기 · 쪽 수 / 슬라이드 수 / 시트 수</td><td>파일 시스템 · 문서</td><td><span class="tag t-warn">표시</span></td><td></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>B. 날짜</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>출처 우선순위</th><th>용도</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td>6</td><td><b>수정일</b> (대표 날짜)</td><td>문서 내부 수정일 → 파일 시스템 수정일</td><td><span class="tag t-good">필터</span> 정렬 <span class="tag t-warn">표시</span></td><td>채움 100%, 상속 오염 없음</td></tr>
+      <tr><td>7</td><td><b>작성일</b> + 상속 표시</td><td>문서 내부 생성일 (상속이면 신뢰도 낮음)</td><td><span class="tag t-good">필터</span>(상속 아닐 때만)</td><td>19%가 템플릿 상속</td></tr>
+      <tr><td>8</td><td><b>PC에 들어온 날</b></td><td>파일 시스템 생성일</td><td><span class="tag t-good">필터</span> ("지난주에 받은")</td><td>작성일로는 일치율 8%. 뜻을 바꾸면 정확하다</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>C. 사람</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>출처</th><th>용도</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td>9</td><td><b>관련인 목록</b> — {이름, 역할(작성/수정/원본양식), 원본값, 신뢰도}</td><td>만든 이 + 마지막 저장자 (OOXML · OLE · HWP · HWPX), PDF Author</td><td><span class="tag t-acc">가산</span> · 별칭 확정이면 <span class="tag t-good">필터</span></td><td>8 → 92건 (§3-3)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>D. 제목</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>출처</th><th>용도</th></tr></thead>
+    <tbody>
+      <tr><td>10</td><td><b>제목 후보 3개</b></td><td>① 속성 제목(쓰레기 제거) ② 본문 첫 제목 ③ 파일명 정리본</td><td><span class="tag t-acc">가산</span> (3개 모두)</td></tr>
+      <tr><td>11</td><td><b>대표 제목</b></td><td>후보 중 규칙으로 선택 (§9)</td><td><span class="tag t-warn">표시</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>E. 내용 구조 — 청크 · 쪽 단위</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>출처</th><th>용도</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td>12</td><td><b>쪽 제목</b></td><td>PPT 슬라이드 제목 · PDF 책갈피 · Word/HWP 제목 스타일 · 기존 조항 경로</td><td><span class="tag t-warn">표시</span>(탐색기 모드 쪽 줄) <span class="tag t-acc">가산</span></td><td>슬라이드 제목 57%</td></tr>
+      <tr><td>13</td><td><b>시트명</b></td><td>Excel</td><td><span class="tag t-acc">가산</span> <span class="tag t-warn">표시</span></td><td>양식 성격이 드러난다</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>F. 출처 · 성격</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>출처</th><th>용도</th><th>근거</th></tr></thead>
+    <tbody>
+      <tr><td>14</td><td><b>원본 프로그램</b> 한글/워드/PPT/엑셀/스캐너/인쇄/웹/기타</td><td>PDF Creator · Producer, 문서 Application</td><td><span class="tag t-good">필터</span> ("한글로 만든 PDF")</td><td>§3-6</td></tr>
+      <tr><td>15</td><td><b>스캔 여부</b></td><td>PDF 앞 3쪽 글자 수 &lt; 50 · 스캐너 Producer</td><td><span class="tag t-warn">표시</span>(경고) <span class="tag">내부</span>(OCR 대상)</td><td>PDF 21%</td></tr>
+      <tr><td>16</td><td><b>받은 경로</b> 메일/웹/클라우드 드라이브/사내/AI</td><td>Zone.Identifier HostUrl → 도메인 매핑</td><td><span class="tag t-good">필터</span> ("메일로 받은")</td><td>9%에 있음</td></tr>
+      <tr><td>17</td><td><b>템플릿명</b> (<code>Normal</code> 계열 제외)</td><td>app.xml Template · OLE template</td><td><span class="tag t-acc">가산</span> · 양식 판별 입력</td><td>§3-6</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>G. 파생 — 색인할 때 만든다</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>항목</th><th>만드는 방법</th><th>용도</th></tr></thead>
+    <tbody>
+      <tr><td>18</td><td><b>문서 유형</b> + <b>양식 여부</b></td><td>폴더명 · 파일명 · 제목 후보 · 템플릿명 · 시트명 · 본문 빈칸 패턴의 규칙 점수 (§10)</td><td><span class="tag t-good">필터</span>(점수 높을 때) <span class="tag t-acc">가산</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>그 밖에 <b>상태값</b>(암호 · 배포용 · 추출 실패 · 0바이트)을 내부용으로 둔다. "검색할 수 없는 문서"라고 표시하는 데 쓴다.</p>
+</section>
+
+<!-- 5 -->
+<section id="s5">
+  <h2><span class="no">5</span>저장하지 않는 항목</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>키워드 · 주제 · 설명 · 범주</td><td>채움률 1~5%</td></tr>
+      <tr><td>회사 · 관리자</td><td>템플릿 오염(<code>IBM</code> 91), 같은 회사가 <code>mococo</code> · <code>MOCOCO</code> · <code>모코코</code> · <code>MOCOMSYS</code>로 흩어짐</td></tr>
+      <tr><td>사용자 정의 속성</td><td>5개뿐</td></tr>
+      <tr><td>Word 메모 · 변경 추적 작성자</td><td>0개. 있어도 작성자가 모르게 남은 정보다</td></tr>
+      <tr><td>머리글 · 바닥글</td><td>대부분 쪽번호 · 회사명. 본문 추출에 이미 섞여 들어간다</td></tr>
+      <tr><td>수정 횟수 · 편집 시간 · 인쇄일</td><td>템플릿 상속으로 오염(편집시간 11,656분짜리 PPT 양식), 검색 수요가 낮음</td></tr>
+      <tr><td>PDF 양식 필드</td><td>오탐(§3-6)</td></tr>
+      <tr><td>EXIF</td><td>1%</td></tr>
+      <tr><td><b>GPS · HWP 설명란(DRM 추적 ID)</b></td><td><b>개인정보 · 보안 정보 — 수집 금지</b> (§15)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 6 -->
+<section id="s6">
+  <h2><span class="no">6</span>포맷별 추출 위치와 함정</h2>
+  <p>추출은 포맷마다 다르게 하고, 정규화는 한 곳(§7~10)에서 한다.
+  추출기는 <b>원본 값을 그대로</b> <code>RawMeta</code>로 돌려준다.</p>
+  <div class="pipe"><span>파일</span><b>→</b><span class="hl">매직 바이트로 형식 판별</span><b>→</b><span>포맷별 추출기</span><b>→</b><span>RawMeta</span><b>→</b><span class="hl">공통 정규화</span><b>→</b><span>DocMeta</span><b>→</b><span>meta.sqlite</span></div>
+  <div class="tbl"><table>
+    <thead><tr><th>추출기</th><th>읽는 곳</th><th>뽑는 것</th><th>함정 (실측)</th><th>Rust 판 크레이트</th></tr></thead>
+    <tbody>
+      <tr><td><b>OOXML</b><br>docx · xlsx · pptx (+ m · x 템플릿)</td><td>ZIP: <code>docProps/core.xml</code> · <code>app.xml</code> · <code>ppt/slides/*.xml</code> · <code>xl/workbook.xml</code> · <code>word/styles.xml</code></td><td>제목 · 만든 이 · 저장자 · 생성/수정일(UTC Z) · 템플릿 · 쪽/슬라이드 수 · 슬라이드 제목 · 시트명 · 제목 스타일</td><td>한글 Word의 제목 스타일 ID는 <code>"1"</code>처럼 숫자라서 styles.xml의 이름(<code>heading 1</code>)으로 판별해야 한다</td><td>zip · quick-xml (있음)</td></tr>
+      <tr><td><b>OLE 공통</b><br>doc · xls · ppt · <b>hwp</b></td><td><code>\005SummaryInformation</code> · <code>\005DocumentSummaryInformation</code> · HWP는 <code>\005HwpSummaryInformation</code> + <code>FileHeader</code></td><td>같은 PIDSI 체계: 2 제목 · 4 작성자 · 7 템플릿 · 8 저장자 · 12 생성 · 13 저장 · 14 쪽수. HWP FileHeader 36바이트 = 압축/암호/배포용 비트</td><td>문자열이 CP949(코드페이지 949) · HWP 문자열 넘침(첫 NUL에서 자름) · <code>1900-12-31</code> 이상값</td><td>cfb · encoding_rs (있음)</td></tr>
+      <tr><td><b>HWPX</b></td><td>ZIP: <code>Contents/content.hpf</code> <code>&lt;opf:meta name=…&gt;</code></td><td>title · creator · lastsaveby · CreatedDate · ModifiedDate</td><td>creator 채움 50% · 10개뿐이라 규칙은 더 지켜봐야 한다</td><td>zip · quick-xml</td></tr>
+      <tr><td><b>PDF</b></td><td>Info 사전 (pdfium) · 앞 3쪽 텍스트 · 책갈피</td><td>Title · Author · Creator · Producer · CreationDate · ModDate · 쪽수 · 텍스트층 · 책갈피</td><td>제목이 CP949 hex(<code>&lt;B8AE…&gt;</code>) · 날짜 형식 5종 · 작성자 모지바케 · Author에 변환 도구 이름</td><td>pdfium (기존 find.rs의 pdf_pages 경로)</td></tr>
+      <tr><td><b>파일 시스템</b><br>모든 파일</td><td><code>stat</code> · <code>:Zone.Identifier</code> 대체 스트림</td><td>경로 · 크기 · 생성일 · 수정일 · HostUrl · ReferrerUrl</td><td>생성일 = 복사 시점 · Zone은 NTFS에서만 · 사본은 Zone이 따라가지 않을 수 있다</td><td>std::fs · windows-sys (있음)</td></tr>
+      <tr><td>이미지 · 텍스트 · 기타</td><td>—</td><td>파일 시스템 정보만</td><td>EXIF 1% → 1단계에서는 읽지 않는다</td><td>—</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">Rust 판에는 필요한 크레이트(zip · quick-xml · cfb · encoding_rs · chrono · rusqlite)가 <b>이미 모두 있다</b>. 새 의존성 없이 구현할 수 있다.
+  Python 판은 olefile · pypdfium2를 그대로 쓴다.</div>
+</section>
+
+<!-- 7 -->
+<section id="s7">
+  <h2><span class="no">7</span>정규화 ① 사람</h2>
+  <h3>7-1 처리 순서</h3>
+  <ol class="steps">
+    <li><b>정리</b>: 앞뒤 공백과 NUL을 지운다. 괄호 안 소속(<code>고봉수(품질팀)</code>), 직함(<code>과장</code> · <code>대리</code> · <code>책임</code>…), 이메일 도메인을 떼어 낸다. 이메일 앞부분은 계정 ID로 취급한다.</li>
+    <li><b>쓰레기 판정</b>: 목록 일치(대소문자 무시)면 버린다 — <code>user · pc · home · admin · administrator · owner · windows xp · windows user · windows 사용자 · microsoft 계정 · microsoft corporation · microsoft office user · ibm_user · winxp · 사용자</code>, 한 글자 영문, 숫자만, 깨진 문자열(라틴 확장 문자 비율 &gt; 30%).</li>
+    <li><b>한글 이름 정규화</b>: <code>^[가-힣]{1,3}\s+[가-힣]$</code>(예: <code>봉수 고</code>)는 뒤집어 붙인다 → <code>고봉수</code>. <code>^[가-힣]\s+[가-힣]{1,3}$</code>(예: <code>고 봉수</code>)는 붙인다. 나머지 한글은 공백만 없앤다.</li>
+    <li><b>영문 이름</b>: 소문자로 바꾸고 공백을 하나로 줄인다(<code>youngho yoon</code> · <code>yoon youngho</code>는 같은 토큰 집합으로 본다).</li>
+    <li><b>별칭 사전 적용</b>: <code>bong9 → 고봉수</code>처럼 계정 ID · 영문 이름 → 대표 이름 (§7-2).</li>
+    <li><b>역할 · 신뢰도</b>: 만든 이 = 작성, 마지막 저장자 = 수정. 템플릿 상속(§8-2) 문서의 만든 이는 역할을 <code>원본양식</code>으로 바꾸고 신뢰도를 0.3으로 낮춘다.</li>
+  </ol>
+
+  <h3>7-2 별칭 사전 — 자동 제안 + 승인</h3>
+  <p>동의어 사전(plan/동의어사전_설계서_20261027.html)의 4단계 승인 화면과 같은 흐름이다. 파일은 <code>people.yaml</code>(사용자) + <code>people.default.yaml</code>(배포 기본값)이다.</p>
+  <pre>고봉수:
+  aliases: [bong9, bong49, kobong9431]
+  # 자동 제안 근거: 같은 문서에서 만든 이=고봉수 / 마지막 저장자=bong9 가 n회 함께 나옴
+조강래:
+  aliases: ["cho kang lae", ckl]</pre>
+  <div class="flow">
+    <div class="card"><h3>자동 제안 근거</h3>
+      <ol>
+        <li><b>같은 문서 동시 출현</b>: 한 문서에서 만든 이와 마지막 저장자가 각각 한글 이름 / 계정 ID이고, 그런 쌍이 2회 이상 나오면 제안</li>
+        <li><b>로마자 일치</b>: <code>Cho Kang Lae</code> ↔ <code>조강래</code>(성 로마자 표 + 이니셜 <code>ckl</code>)</li>
+        <li><b>경로 단서</b>: <code>…_고봉수.xlsx</code>의 저장자가 <code>bong9</code></li>
+      </ol></div>
+    <div class="card"><h3>사용자가 하는 일</h3>
+      <ul>
+        <li>설정 → "사람 이름" 화면에서 제안을 [승인] / [무시]</li>
+        <li>직접 추가: "내 계정은 bong9" 같은 한 줄</li>
+        <li>PC 사용자 본인의 Windows 계정명 · Office 사용자 이름은 처음 실행할 때 자동으로 "나"에 연결 (질의 "내가 만든"용)</li>
+      </ul></div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="s8">
+  <h2><span class="no">8</span>정규화 ② 날짜</h2>
+  <h3>8-1 형식 통일</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>원본 형식</th><th>예</th><th>처리</th></tr></thead>
+    <tbody>
+      <tr><td>W3CDTF (OOXML · HWPX)</td><td><code>2023-11-10T02:00:23Z</code></td><td>UTC 그대로</td></tr>
+      <tr><td>FILETIME (OLE · HWP)</td><td><code>2012-03-22T07:05:00</code></td><td>UTC로 해석</td></tr>
+      <tr><td>PDF 날짜</td><td><code>D:20100823131638+09'00'</code></td><td>오프셋 적용 → UTC. 오프셋이 없으면 KST로 가정</td></tr>
+      <tr><td>PDF 자유 형식</td><td><code>Mon Jan 12 08:51:48 2004</code> · <code>March 15, 2024 14:09</code></td><td>영문 월/요일 파서. 실패하면 버린다</td></tr>
+      <tr><td>HWP 날짜 문자열 (PIDSI 20)</td><td><code>2005년 10월 7일 금요일 오전 10:28:32</code></td><td>생성일이 없을 때만 보조로 쓴다</td></tr>
+    </tbody>
+  </table></div>
+  <p>저장은 UTC epoch 초, 화면 표시는 KST다. <b>버리는 값</b>: 1980년 이전, 미래(오늘 + 1일 초과), 생성일 &gt; 수정일 + 1시간이면 생성일만 버린다.</p>
+
+  <h3>8-2 템플릿 상속 판정</h3>
+  <p>같은 (만든 이 원본값, 생성일 원본값) 쌍이 <b>내용 해시가 다른 문서 3개 이상</b>에 나오면, 그 쌍을 가진 문서는 모두 <code>inherited = true</code>로 표시한다.</p>
+  <ul>
+    <li>작성일 신뢰도 0.3 → 기간 필터에 쓰지 않는다(가산만).</li>
+    <li>만든 이 역할 = <code>원본양식</code>.</li>
+    <li>판정은 색인이 끝날 때마다 전체 문서를 대상으로 다시 한다(문서가 늘면 새로 걸릴 수 있다). SQL <code>GROUP BY</code> 한 번이면 된다.</li>
+  </ul>
+  <div class="note">2개짜리 쌍은 "같은 문서의 두 버전"일 수도 있어서 기준을 3개로 정했다. 실측에서 3개 이상 쌍은 180개 파일이었다. 기준은 시험 질의(§16)로 다시 조정한다.</div>
+
+  <h3>8-3 대표 날짜 고르기</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>규칙</th></tr></thead>
+    <tbody>
+      <tr><td>수정일 (#6)</td><td>문서 내부 수정일이 있으면 그것, 없으면 파일 시스템 수정일. (내부보다 파일 시스템이 늦은 47%는 "내려받기 · 복사로 다시 저장"인 경우가 많아서 내부 값을 믿는다)</td></tr>
+      <tr><td>작성일 (#7)</td><td>문서 내부 생성일 → PDF는 CreationDate. 상속이면 신뢰도 0.3</td></tr>
+      <tr><td>PC에 들어온 날 (#8)</td><td>파일 시스템 생성일 그대로</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 9 -->
+<section id="s9">
+  <h2><span class="no">9</span>정규화 ③ 제목</h2>
+  <h3>9-1 후보 만들기</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>후보</th><th>만드는 법</th></tr></thead>
+    <tbody>
+      <tr><td>① 속성 제목</td><td>쓰레기 패턴 제거: <code>슬라이드 \d+</code> · <code>PowerPoint 프레젠테이션</code> · <code>PptxGenJS Presentation</code> · <code>제목 없음</code> · <code>Microsoft Word - (.*)</code>(→ 괄호 안 파일명만 남김) · 확장자로 끝남(<code>.dvi .doc .hwp</code>) · 숫자만 · 제어문자 포함.
+        <code>&lt;hex&gt;</code>는 CP949로 풀어 보고, 결과가 파일명이면 버린다.
+        템플릿 상속 문서의 속성 제목도 버린다.</td></tr>
+      <tr><td>② 본문 첫 제목</td><td>§9-2 규칙 — 추출기가 이미 만든 구조(<code>docmodel</code>의 제목 블록 · 슬라이드 제목)를 우선 쓴다</td></tr>
+      <tr><td>③ 파일명 정리본</td><td>확장자 · 앞 번호(<code>07_</code>) · 날짜(<code>_20190824</code>, <code>_24.04.01</code>) · 버전(<code>v2.0</code> · <code>_최종</code> · <code>(1)</code>)을 떼고 <code>_</code>를 공백으로</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>9-2 본문 첫 제목 규칙 (포맷별)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>포맷</th><th>고르는 법</th><th>건너뛰는 것</th></tr></thead>
+    <tbody>
+      <tr><td>PPT</td><td>1번 슬라이드의 제목 자리표시자 → 없으면 1번 슬라이드에서 가장 큰 글자</td><td>회사명만 있는 줄 · "목차" · "Contents"</td></tr>
+      <tr><td>Word · HWP</td><td>제목 스타일(heading 1 · 개요 1)의 첫 문단 → 없으면 첫 쪽 앞 15줄 중 첫 "제목다운 줄"</td><td>표 안 짧은 셀(결재란: <code>담당 · 팀장 · 대표</code>), 문서번호(<code>제 2024-001 호</code>), 날짜만, 숫자만, <code>대외비</code> · <code>목 차</code>, 머리글 반복 문구</td></tr>
+      <tr><td>PDF</td><td>첫 쪽에서 <b>글자 크기가 가장 큰 줄</b>(pdfium 글꼴 크기) → 스캔본은 생략</td><td>쪽번호, 머리글(여러 쪽에 반복되는 줄)</td></tr>
+      <tr><td>Excel</td><td>첫 시트 상단 5행의 병합 셀 또는 첫 비어 있지 않은 셀</td><td>열 이름 행(짧은 셀이 3개 이상 나란히)</td></tr>
+    </tbody>
+  </table></div>
+  <p>"제목다운 줄": 4~60자, 문장 끝 어미(<code>~다.</code> · <code>~요.</code>)로 끝나지 않음, 숫자·기호 비율 &lt; 40%.</p>
+
+  <h3>9-3 대표 제목 고르기 (#11)</h3>
+  <ol>
+    <li>세 후보 중 두 개가 서로 비슷하면(공백 · 기호를 뺀 포함 관계, 또는 문자 3-gram 자카드 ≥ 0.6) → 그중 더 긴 쪽. 신뢰도 높음.</li>
+    <li>아니면 ② 본문 첫 제목 → ① 속성 제목 → ③ 파일명 정리본 순서.</li>
+    <li>모두 탈락이면 원래 파일명.</li>
+  </ol>
+  <p>검색에는 세 후보를 모두 <code>title_text</code>로 이어 붙여 BM25 가산 필드로 쓴다. 어느 쪽으로 기억하든 걸리게 하려는 것이다.</p>
+</section>
+
+<!-- 10 -->
+<section id="s10">
+  <h2><span class="no">10</span>정규화 ④ 형식 · 출처 · 유형</h2>
+  <h3>10-1 형식 (#3) — 매직 바이트</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>앞 바이트</th><th>판정</th></tr></thead>
+    <tbody>
+      <tr><td><code>PK\x03\x04</code></td><td>ZIP → <code>[Content_Types].xml</code> 안의 형식으로 docx/xlsx/pptx, <code>mimetype</code>이 hwp+zip이면 HWPX</td></tr>
+      <tr><td><code>D0 CF 11 E0</code></td><td>OLE → 스트림 이름으로 doc(<code>WordDocument</code>) / xls(<code>Workbook</code>) / ppt(<code>PowerPoint Document</code>) / hwp(<code>FileHeader</code>)</td></tr>
+      <tr><td><code>%PDF</code></td><td>PDF</td></tr>
+      <tr><td>0바이트</td><td>상태 = 빈 파일 (검색 제외)</td></tr>
+      <tr><td>그 밖</td><td>확장자로 판정</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>10-2 원본 프로그램 (#14)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>값</th><th>Creator · Producer · Application에 들어 있는 말</th></tr></thead>
+    <tbody>
+      <tr><td>한글</td><td><code>Hancom PDF</code> · <code>Hwp</code> · <code>한글</code></td></tr>
+      <tr><td>워드 / 엑셀 / PPT</td><td><code>Microsoft Word|Excel|PowerPoint</code> · <code>PDFMaker</code>(앞 단어로 구분)</td></tr>
+      <tr><td>스캐너</td><td><code>ApeosPort</code> · <code>SINDOH</code> · <code>Samsung-SCX</code> · <code>SL-C</code> · <code>Canon iR</code> · <code>RICOH</code> · <code>KONICA</code></td></tr>
+      <tr><td>인쇄 변환</td><td><code>Print To PDF</code> · <code>PScript</code> · <code>Distiller</code> · <code>Ghostscript</code></td></tr>
+      <tr><td>그 밖</td><td><code>OpenOffice</code> · <code>InDesign</code> · <code>dvips</code> · <code>pypdf</code> …</td></tr>
+    </tbody>
+  </table></div>
+  <p>표는 <code>meta_rules.yaml</code>로 빼서 코드 수정 없이 늘릴 수 있게 한다.</p>
+
+  <h3>10-3 받은 경로 (#16)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>값</th><th>HostUrl 도메인 (실측)</th></tr></thead>
+    <tbody>
+      <tr><td>메일</td><td><code>ezwebmail.bizmeka.com</code> · <code>outlook.office.com</code> · <code>mail-attachment.googleusercontent.com</code></td></tr>
+      <tr><td>클라우드 드라이브</td><td><code>drive.usercontent.google.com</code> · <code>zdl-storage.worksmobile.com</code></td></tr>
+      <tr><td>사내 · 그룹웨어</td><td>사설 IP(<code>10.*</code>, <code>192.168.*</code>) · <code>mpower.mocomsys.com</code> · <code>gw.*</code></td></tr>
+      <tr><td>AI 도구</td><td><code>claude.ai</code> · <code>chatgpt.com</code></td></tr>
+      <tr><td>웹</td><td>나머지</td></tr>
+    </tbody>
+  </table></div>
+  <p>회사 메일 · 그룹웨어 도메인은 설치처마다 다르므로 <code>meta_rules.yaml</code>에서 고칠 수 있게 한다.
+  도메인 원문도 저장한다("mpower 사이트에서 받은" 같은 질의용).</p>
+
+  <h3>10-4 문서 유형 · 양식 여부 (#18)</h3>
+  <p>LLM 분류기 없이 <b>규칙 점수</b>로 시작한다. 실측에서 신호가 충분히 보였고, 색인 속도를 떨어뜨리지 않기 때문이다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>신호</th><th>문서 유형 점수</th><th>양식 점수</th></tr></thead>
+    <tbody>
+      <tr><td>제목 후보 · 파일명에 유형어</td><td>+3 (<code>절차서 · 지침 · 규정 · 매뉴얼 · 제안서 · 계약서 · 보고서 · 회의록 · 확인서 · 계획서 · 정의서</code> …)</td><td><code>양식 · 서식 · 신청서 · 의뢰서 · 일지 · 별지</code> +3</td></tr>
+      <tr><td>폴더명에 유형어</td><td>+2</td><td><code>템플릿 · 양식 · 서식</code> +2</td></tr>
+      <tr><td>템플릿명 (Normal 제외)</td><td>템플릿명 속 유형어 +2</td><td>+2</td></tr>
+      <tr><td>시트명</td><td></td><td><code>표지 · 작성방법 · 입력</code> +1</td></tr>
+      <tr><td>본문 빈칸 패턴</td><td></td><td><code>____</code> · <code>(   )</code> · 빈 셀 비율 &gt; 50%인 표 · <code>□</code> 체크박스 3개 이상 → +2</td></tr>
+      <tr><td>확장자 dotx · xltx · potx · hwt</td><td></td><td>+5 (실측에는 없었다)</td></tr>
+    </tbody>
+  </table></div>
+  <p>유형은 점수가 가장 높고 3점 이상인 것을, 양식은 3점 이상이면 참으로 본다. 점수는 그대로 저장해서 필터/가산 선택(§13)에 쓴다.
+  <b>이 규칙은 아직 실측하지 않았다.</b> §16의 시험으로 정확도를 확인한 뒤 확정한다.</p>
+</section>
+
+<!-- 11 -->
+<section id="s11">
+  <h2><span class="no">11</span>저장 구조</h2>
+  <h3>11-1 지금 구조</h3>
+  <ul>
+    <li><code>index_state.json</code> — 문서별 <code>fingerprint · content_hash · chunks · ids · name · folder · mtime</code></li>
+    <li>점 payload (Python: Qdrant local / Rust: sqlite) — <code>text · doc_path · doc_name · folder · chunk_idx · mtime · page · section…</code></li>
+  </ul>
+  <h3>11-2 제안 — <code>meta.sqlite</code> 한 파일 추가 (결정 D1)</h3>
+  <p>문서 단위 메타데이터는 점 payload에 넣지 않고 따로 둔다. 청크마다 같은 값을 복사하면 낭비이고, 별칭 사전이 바뀌어 재정규화할 때 벡터 저장소를 건드리지 않아도 되기 때문이다.
+  Python(<code>sqlite3</code> 내장)과 Rust(<code>rusqlite</code> 있음)가 같은 파일을 읽는다.</p>
+  <pre>CREATE TABLE doc_meta (
+  doc_path      TEXT PRIMARY KEY,   -- index_state.json 의 키와 같다
+  content_hash  TEXT,               -- 중복 그룹 키
+  version_key   TEXT,               -- 파일명 정리본 → 버전 그룹
+  format        TEXT,               -- word|excel|ppt|hwp|pdf|text|image|other
+  size          INTEGER,
+  pages         INTEGER,
+  modified_ts   INTEGER,            -- #6 대표 수정일 (UTC epoch)
+  created_ts    INTEGER,            -- #7
+  created_conf  REAL,               -- 상속이면 0.3
+  added_ts      INTEGER,            -- #8 PC에 들어온 날
+  title_display TEXT,               -- #11
+  title_text    TEXT,               -- #10 후보 3개 이어 붙임 (검색 가산용)
+  origin_app    TEXT,               -- #14
+  scanned       INTEGER,            -- #15
+  recv_kind     TEXT,               -- #16 mail|drive|intranet|ai|web
+  recv_host     TEXT,
+  template      TEXT,               -- #17
+  doc_type      TEXT, doc_type_score REAL,   -- #18
+  is_form       INTEGER, form_score REAL,
+  status        TEXT,               -- ok|encrypted|empty|failed
+  raw_json      TEXT                -- 원본 값 전부 (재정규화용)
+);
+CREATE TABLE doc_people (           -- #9 (문서당 여러 줄)
+  doc_path TEXT, name TEXT, role TEXT,      -- role: author|editor|template
+  raw TEXT, source TEXT, conf REAL
+);
+CREATE INDEX ix_people_name ON doc_people(name);
+CREATE INDEX ix_meta_mod    ON doc_meta(modified_ts);</pre>
+  <p>쪽 단위 항목(#12 쪽 제목, #13 시트명)은 <b>청크 payload</b>에 둔다. 이미 <code>page · section</code>이 있는 자리라서 <code>page_title</code> 하나만 더한다.</p>
+  <h3>11-3 원본값 · 정규화값 · 출처 · 신뢰도</h3>
+  <pre>{"author": {"value": "고봉수", "raw": "봉수 고", "source": "ooxml.core.creator", "conf": 0.9}}</pre>
+  <p><code>raw_json</code>에 원본을 남기므로 별칭 사전 · 쓰레기 목록 · 상속 기준이 바뀌어도 <b>파일을 다시 읽지 않고</b> <code>meta rebuild</code> 한 번으로 다시 계산할 수 있다(2,000개 기준 1초 미만 예상).</p>
+  <h3>11-4 색인 흐름에 끼우는 곳</h3>
+  <div class="pipe"><span>변경 감지</span><b>→</b><span>본문 추출 · 청킹 · 임베딩</span><b>→</b><span class="hl">메타 추출 · 정규화 → meta.sqlite</span><b>→</b><span>점 저장</span><b>→</b><span class="hl">(끝날 때) 상속 판정 · 버전 그룹</span></div>
+  <p>메타 추출은 실측 기준 파일당 수십 ms라서(2,293개 180초, 해시 포함) 임베딩에 비하면 무시할 수준이다. 사본 복사(<code>op: copied</code>) 경로에서는 메타도 함께 복사하되 경로 · 파일 시스템 날짜 · Zone만 새로 읽는다.</p>
+</section>
+
+<!-- 12 -->
+<section id="s12">
+  <h2><span class="no">12</span>질의 해석</h2>
+  <p><b>규칙 우선</b>으로 한다(결정 D4). 0.6B LLM으로 조건을 뽑으면 질의마다 수백 ms가 들고 결과가 흔들린다. 규칙은 5ms 안에 끝나고, 같은 질의에는 늘 같은 해석을 낸다.</p>
+  <pre>"작년에 고봉수님이 만든 절차서 양식을 찾아줘"
+   │ ① 사람: 색인의 사람 이름 목록(doc_people.name + 별칭)과 대조, 뒤의 '님/씨/이/가/의' 제거
+   │ ② 시간: 상대 표현 → 오늘(2026-10-29) 기준 범위
+   │ ③ 동사: '만든/작성한' → 작성일 · 작성 역할,  '고친/수정한' → 수정일 · 수정 역할
+   │ ④ 유형·양식·형식·출처 사전
+   ▼
+{ "people":  [{"name": "고봉수", "role": "author"}],
+  "date":    {"field": "created", "from": "2025-01-01", "to": "2025-12-31"},
+  "doc_type": "절차서", "is_form": true,
+  "query":   "절차서 양식" }        ← 사람·시간·명령어만 떼고, 유형어는 본문 검색에도 남긴다</pre>
+
+  <h3>12-1 시간 표현</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>표현</th><th>범위 (오늘 = 2026-10-29)</th></tr></thead>
+    <tbody>
+      <tr><td>올해 / 작년 / 재작년</td><td>2026 / 2025 / 2024 전체</td></tr>
+      <tr><td>2023년, 23년</td><td>2023 전체</td></tr>
+      <tr><td>이번 달 / 지난달</td><td>2026-10 / 2026-09</td></tr>
+      <tr><td>3월, 3월쯤</td><td>올해 3월. 미래 달이면 작년. "쯤"이면 앞뒤 1개월 더</td></tr>
+      <tr><td>상반기 / 하반기 (+ 연도)</td><td>1~6월 / 7~12월</td></tr>
+      <tr><td>지난주 / 최근 / 요즘</td><td>7일 / 90일 / 90일</td></tr>
+      <tr><td>N년 전 / N개월 전</td><td>그해 전체 / 그달 전체</td></tr>
+    </tbody>
+  </table></div>
+  <p>날짜 필드 선택: "만든 · 작성한" → 작성일(신뢰도가 낮으면 수정일로 대신, 결정 D3), "고친 · 수정한 · 최근에 본" → 수정일, "받은 · 내려받은 · 들어온" → PC에 들어온 날, 동사가 없으면 수정일.</p>
+
+  <h3>12-2 사전 (meta_rules.yaml)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>분류</th><th>질의 낱말 → 조건</th></tr></thead>
+    <tbody>
+      <tr><td>형식</td><td>엑셀 · 엑셀파일 → excel / 피피티 · PPT · 발표자료 → ppt / 한글 · 한글파일 · hwp → hwp / PDF / 워드</td></tr>
+      <tr><td>출처</td><td>메일로 받은 · 첨부로 온 → mail / 드라이브 → drive / 다운받은 → recv_kind 있음</td></tr>
+      <tr><td>성격</td><td>스캔한 · 스캔본 → scanned / 양식 · 서식 · 템플릿 → is_form</td></tr>
+      <tr><td>유형</td><td>절차서 · 규정 · 지침 · 매뉴얼 · 제안서 · 계약서 · 보고서 · 회의록 · 확인서 …</td></tr>
+      <tr><td>사람 (자동)</td><td>doc_people의 정규화 이름 전체 + 별칭 + "내가 / 나의" → 나</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">사람 이름은 사전에 있는 이름만 사람으로 본다. 모르는 두세 글자 한글을 사람으로 짐작하지 않는다("규정" · "연차"가 이름으로 잡히는 사고를 막기 위해서다). 사전에 없는 이름은 본문 검색어로 남는다.</div>
+</section>
+
+<!-- 13 -->
+<section id="s13">
+  <h2><span class="no">13</span>필터 · 가산 · 완화 규칙</h2>
+  <h3>13-1 조건별 처리</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>조건</th><th>필터 (후보를 줄임)</th><th>가산 (점수를 올림)</th></tr></thead>
+    <tbody>
+      <tr><td>폴더 범위</td><td>항상 (기존 폴더한정검색과 같음)</td><td></td></tr>
+      <tr><td>형식 · 스캔 · 받은 경로</td><td>항상 (확실한 값)</td><td></td></tr>
+      <tr><td>기간</td><td>날짜 신뢰도 ≥ 0.7인 문서에 적용. 신뢰도가 낮은 문서는 탈락시키지 않고 가산 없음</td><td>범위 안이면 +</td></tr>
+      <tr><td>사람</td><td>질의 이름이 별칭 사전에 확정돼 있고, 그 이름의 문서가 1개 이상일 때</td><td>작성 역할 +0.3, 수정 역할 +0.15, 원본양식 역할 +0.05</td></tr>
+      <tr><td>문서 유형 · 양식</td><td>점수 ≥ 5일 때</td><td>점수 3~5면 가산만</td></tr>
+    </tbody>
+  </table></div>
+  <p>필터는 <b>검색 전에</b> 문서 집합(doc_path 목록)을 만들어 dense · BM25 단계에 넘긴다. 폴더 한정 검색이 쓰는 방식(<code>vector_matrix</code>: 벡터 행렬 한 벌 + 청크별 참/거짓 표시, Qdrant 필터는 6만 청크에서 114ms → 730ms 이상으로 느려져 쓰지 않음)을 그대로 쓴다. 조건에 맞는 문서의 청크만 참으로 표시하면 된다. 2,000~20,000개 문서에서 SQL은 1ms 안쪽이다.
+  가산은 리랭킹 점수에 더한다(리랭커 점수 척도 기준 값, §16에서 조정).</p>
+
+  <h3>13-2 메타데이터만 있는 질의</h3>
+  <p>"작년에 고봉수님이 만든 문서"처럼 조건을 떼고 나면 본문 검색어가 남지 않는 경우는 본문 검색을 하지 않는다. 조건에 맞는 문서를 <b>수정일 최신순</b>으로 보여 준다. 탐색기의 "정렬" 모드와 같다.</p>
+
+  <h3>13-3 0건일 때 완화</h3>
+  <ol>
+    <li>필터 결과 0건이면 사람 필터 → 가산으로 바꾼다</li>
+    <li>여전히 0건이면 기간을 앞뒤 1년 넓힌다</li>
+    <li>여전히 0건이면 유형 · 양식 필터 → 가산으로 바꾼다</li>
+    <li>화면에 "조건을 풀어 찾은 결과입니다: 작성자 조건 해제"라고 알린다</li>
+  </ol>
+</section>
+
+<!-- 14 -->
+<section id="s14">
+  <h2><span class="no">14</span>화면 — 조건 칩</h2>
+  <p>탐색기 모드(plan/폴더아이콘_탐색기모드_설계서_20261029.html B-3) 검색창 아래에 <b>해석한 조건을 칩으로</b> 보인다.
+  실선 칩은 필터, 점선 칩은 가산이다. [✕]로 끄면 바로 다시 검색한다. 사용자가 "왜 이 결과인지"를 알고 바로잡을 수 있게 하는 것이 목적이다.</p>
+  <div class="mock"><div class="win">
+    <div class="bar">MoAI 탐색기 <span>D:\분류함 · 문서 1,284개</span></div>
+    <div class="body">
+      <div class="q">작년에 고봉수님이 만든 절차서 양식을 찾아줘</div>
+      <div class="chips">
+        <span class="lbl">조건</span>
+        <span class="chip">👤 고봉수 (작성) <span class="x">✕</span></span>
+        <span class="chip">📅 2025년 · 작성일 <span class="x">✕</span></span>
+        <span class="chip soft">📄 절차서 <span class="x">✕</span></span>
+        <span class="chip soft">🧾 양식 <span class="x">✕</span></span>
+      </div>
+      <div class="row"><div class="t">업무 처리 절차서 양식 (v1.2)</div>
+        <div class="m">한글 · 고봉수 작성 · 2025-03-14 · 13_샘플_템플릿 · <b>양식</b></div>
+        <div class="s">3쪽 — 신청 → 검토 → <mark>승인</mark> 단계별 담당자와 처리 기한을 적는 <mark>절차서</mark> 서식…</div></div>
+      <div class="row"><div class="t">수리부품 구입 의뢰서</div>
+        <div class="m">워드 · 고봉수 수정 · 2025-08-02 · 템플릿 수리부품구입의뢰.dot · <b>양식</b></div>
+        <div class="s">1쪽 — 구입 <mark>절차</mark>: 의뢰 → 팀장 결재 → 구매…</div></div>
+      <div class="m" style="font-size:12.5px;color:var(--muted)">같은 문서 사본 2개 · 이전 버전 3개 접힘</div>
+    </div>
+  </div></div>
+  <p>결과 줄에는 <b>대표 제목 · 형식 · 관련인(역할) · 날짜 · 폴더</b>를 보인다. 조건에 걸린 값은 강조한다. 사본 · 버전은 한 줄로 접는다(#4).
+  (화면 속 문서는 설명용 예시다.)</p>
+</section>
+
+<!-- 15 -->
+<section id="s15">
+  <h2><span class="no">15</span>개인정보 · 보안</h2>
+  <ul>
+    <li><b>수집하지 않는다</b>: GPS, HWP 설명란(DRM 추적 ID), Word 메모 · 변경 추적, 사용자 정의 속성 값.</li>
+    <li><b>raw_json에도 넣지 않는다</b>: 위 항목은 추출 단계에서 버린다. 재정규화용 원본이라도 남기지 않는다.</li>
+    <li><b>관련인 표시</b>: 화면에는 정규화된 이름만 보인다. 별칭이 확정되지 않은 계정 ID는 "기타 계정"으로 묶어 보인다(계정 ID 자체가 사내 식별자일 수 있다).</li>
+    <li><b>모든 처리는 로컬</b>: meta.sqlite는 색인 폴더 안에 있고, 외부로 보내는 것이 없다.</li>
+    <li><b>Zone 정보</b>: 도메인과 분류만 저장하고, 전체 URL(쿼리 문자열에 토큰이 있을 수 있다)은 저장하지 않는다.</li>
+  </ul>
+</section>
+
+<!-- 16 -->
+<section id="s16">
+  <h2><span class="no">16</span>시험 · 측정 계획</h2>
+  <h3>16-1 기능 시험 (단계별)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>시험</th><th>방법</th><th>합격 기준</th></tr></thead>
+    <tbody>
+      <tr><td>①</td><td>정규화 정확도</td><td>실측 records.jsonl에서 사람 · 날짜 · 대표 제목 각 100건을 표본으로 뽑아 사람이 판정</td><td>사람 95% · 날짜 98% · 제목 85%</td></tr>
+      <tr><td>②</td><td>상속 판정</td><td>상속으로 판정된 180개 중 50개를 확인 (진짜 양식 상속인가)</td><td>오탐 ≤ 5%</td></tr>
+      <tr><td>③</td><td>유형 · 양식 판별</td><td>13_샘플_템플릿 · 08_사내규정_인사에서 100개를 사람이 라벨링해 비교</td><td>정밀도 85% · 재현율 70%</td></tr>
+      <tr><td>④</td><td>메타 질의 골든셋</td><td>30문항 (사람 8 · 기간 8 · 유형/양식 6 · 형식/출처 4 · 조합 4), 문항마다 정답 문서 목록</td><td>정답 Top-10 포함률: 지금 대비 +30%p, 본문 질의 골든셋은 하락 없음</td></tr>
+      <tr><td>⑤</td><td>질의 해석</td><td>④의 30문항 + 본문 질의 50문항에서 조건 오탐(본문 질의에 조건이 붙는 경우)</td><td>오탐 ≤ 2문항</td></tr>
+      <tr><td>⑥</td><td>시간</td><td>메타 추출 추가분(색인), 질의 해석 + 필터(검색)</td><td>색인 +10% 이내 · 검색 +10ms 이내</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="s16-2">16-2 최종 비교 시험 — 기존 문서 검색 프로그램과 나란히</h3>
+  <p>구현이 끝나면 사용자가 실제로 쓰는 <b>PC 문서 검색 프로그램을 같은 PC에 설치</b>해서, 같은 문서 · 같은 질문으로 비교한다.
+  "우리 검색이 어디서 이기고 어디서 지는가"를 숫자로 확인하는 것이 목적이다. 제품 소개 자료의 근거로도 쓴다.</p>
+
+  <div class="tbl"><table>
+    <thead><tr><th>비교 대상</th><th>성격</th><th>비교하는 이유</th></tr></thead>
+    <tbody>
+      <tr><td><b>Everything</b> (voidtools)</td><td>파일 이름 · 경로 검색. NTFS 파일 목록을 읽어 매우 빠르다. 본문(<code>content:</code>)과 날짜 · 크기 조건 문법이 있다</td><td><b>파일명 · 경로 · 날짜 검색의 기준선</b>. 사용자가 "탐색기보다 나은 검색"으로 가장 먼저 떠올리는 도구다</td></tr>
+      <tr><td><b>AnyTXT Searcher</b></td><td>로컬 문서 본문 전문 검색. 색인을 만들어 두고 키워드로 찾는다. Office · PDF 등 다수 포맷 지원</td><td><b>본문 키워드 검색의 기준선</b>. 우리 제품과 가장 직접적으로 겹치는 무료 도구다</td></tr>
+      <tr><td>(참고) <b>Windows 검색</b></td><td>OS 기본 색인. 본문 + 속성 조건(<code>author:</code> · <code>datecreated:</code> 같은 AQS 문법)</td><td>설치 없이 누구나 가진 기준선. 메타데이터 조건 문법이 있어서 §4의 비교 상대가 된다</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">각 도구의 지원 포맷(특히 <b>HWP · HWPX · 스캔 PDF</b>)과 속성 조건 지원 범위는 설치 후 실제로 확인해서 비교표에 적는다. 이 설계서에서는 짐작으로 채우지 않는다.
+  설치 전에 라이선스(개인 · 사내 사용 조건)와 버전을 기록한다.</div>
+
+  <h3>시험 조건</h3>
+  <ul>
+    <li><b>같은 PC · 같은 문서</b>: <code>D:\분류함</code> 전체. 도구마다 기본 설정으로 색인을 끝까지 마친 뒤 측정한다.</li>
+    <li><b>한 번에 한 도구만</b>: 색인 · 측정 중에는 다른 도구의 색인 서비스를 멈춘다(CPU · 디스크 경쟁 방지).</li>
+    <li><b>질문 두 가지 형태로 입력</b>
+      <ul>
+        <li><b>A. 자연어 그대로</b>: "작년에 고봉수님이 만든 절차서 양식". 일반 사용자가 실제로 치는 방식이다.</li>
+        <li><b>B. 도구 문법으로 바꾼 최선</b>: 예) Everything <code>절차서 양식 dc:2025</code>, Windows <code>절차서 author:고봉수 datecreated:2025</code>. 숙련자가 공들여 쓴 경우다. 공정한 비교를 위해 시험자가 도구마다 가장 좋은 문법을 쓴다.</li>
+      </ul></li>
+    <li><b>질문 세트</b>: §16-1 ④의 메타 질의 30문항 + 기존 본문 질의 골든셋 50문항 + 파일명 질의 10문항(Everything의 강점 확인용).</li>
+  </ul>
+
+  <h3>측정 항목</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>분류</th><th>항목</th><th>측정 방법</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="3"><b>찾는 능력</b></td><td>정답 문서 Top-10 포함률 · MRR</td><td>문항별 정답 문서 목록과 대조</td></tr>
+      <tr><td>쪽 위치까지 맞힘</td><td>결과가 정답 쪽(또는 ±1쪽)을 가리키는가. 문서만 주는 도구는 "쪽 없음"으로 기록</td></tr>
+      <tr><td>바꿔 말한 질문</td><td>본문에 없는 말로 물은 문항(예: "해지할 때 돈 돌려받는 조건" → 환불 규정)의 정답률</td></tr>
+      <tr><td rowspan="2"><b>쓰기 편함</b></td><td>첫 정답까지 걸린 조작 수</td><td>검색 → 결과 클릭 → 문서 안에서 다시 찾기까지 클릭 · 입력 횟수</td></tr>
+      <tr><td>사본 · 버전 정리</td><td>같은 문서 사본이 결과 첫 화면을 몇 줄 차지하는가</td></tr>
+      <tr><td rowspan="2"><b>성능</b></td><td>질의 응답 시간</td><td>문항별 첫 결과 표시까지(중앙값 · 최댓값)</td></tr>
+      <tr><td>색인 시간 · 색인 크기 · 상주 메모리</td><td>최초 색인 소요 시간, 색인 폴더 크기, 대기 중 메모리</td></tr>
+      <tr><td><b>포맷 커버리지</b></td><td>HWP · HWPX · 구형 doc/xls/ppt · 스캔 PDF · 확장자가 틀린 파일</td><td>포맷별 대표 문서 5개씩 본문 고유 문구로 검색해 찾히는 비율</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>기능 비교표 (결과 보고서에 채울 틀)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>기능</th><th>MoAI-S</th><th>Everything</th><th>AnyTXT</th><th>Windows 검색</th></tr></thead>
+    <tbody>
+      <tr><td>파일명 · 경로</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>본문 키워드</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>의미 검색 (바꿔 말한 질문 · 동의어)</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>자연어 한 문장에서 조건 추출</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>사람 조건 (이름 표기 차이 · 계정 별칭)</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>날짜 조건 (템플릿 상속 걸러 내기)</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>문서 유형 · 양식 조건</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>받은 경로 (메일 · 드라이브)</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>쪽 위치 + 발췌 · 강조</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>그 쪽에서 바로 열기</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>사본 · 버전 접기</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>HWP · HWPX</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>스캔 PDF</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>답변 생성 (RAG)</td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>완전 오프라인</td><td></td><td></td><td></td><td></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>기대와 합격 기준</h3>
+  <ul>
+    <li><b>지는 것이 정상인 곳</b>: 파일명만으로 찾기, 응답 속도. 여기서는 Everything이 앞설 것으로 본다. 목표는 "크게 뒤지지 않음"이다(파일명 질의 Top-10 포함률 90% 이상, 응답 1초 이내).</li>
+    <li><b>이겨야 하는 곳</b>
+      <ul>
+        <li>메타 질의 30문항(형태 A, 자연어): Top-10 포함률이 가장 좋은 비교 도구보다 <b>+30%p 이상</b>.</li>
+        <li>같은 문항을 형태 B(숙련자 문법)로 바꿔 넣은 비교 도구보다도 앞서야 한다. 문법을 몰라도 숙련자보다 잘 찾는다는 근거가 된다.</li>
+        <li>바꿔 말한 질문 · 쪽 위치 · HWP에서 우위.</li>
+      </ul></li>
+    <li><b>진 항목은 원인을 적는다</b>: 정규화 규칙 · 질의 해석 · 본문 검색 중 어디서 놓쳤는지 문항별로 분류해서 다음 개선 목록으로 넘긴다.</li>
+  </ul>
+  <p>결과물은 <code>report/문서검색_비교_YYYYMMDD.html</code>로 남긴다. 기존 Newploy 비교 리포트와 같은 형식이다. 원자료(문항별 결과 · 시간)는 <code>results/search_compare/</code>에 둔다.</p>
+</section>
+
+<!-- 17 -->
+<section id="s17">
+  <h2><span class="no">17</span>구현 단계</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>할 일</th><th>결과물</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>추출기 정식화 (bench/meta_survey.py → 모듈), 매직 바이트 판정, 정규화 · 상속 판정, meta.sqlite</td><td>Python <code>simplerag/meta/</code> · <code>meta rebuild</code> 명령 · 시험 ①②</td></tr>
+      <tr><td>2</td><td>색인 연동 (indexer · 사본 복사 경로 · 삭제 시 정리)</td><td>색인하면 meta.sqlite가 함께 채워짐</td></tr>
+      <tr><td>3</td><td>사람 별칭 사전: 자동 제안 + people.yaml</td><td>제안 목록 명령 · 시험 ① 사람</td></tr>
+      <tr><td>4</td><td>질의 해석기 + 필터 · 가산 · 완화 (Retriever)</td><td>시험 ④⑤⑥</td></tr>
+      <tr><td>5</td><td>Rust 판 이식 (meta.rs · 워커 <code>/find</code> 응답에 조건 · 메타 필드 추가)</td><td>Python과 같은 meta.sqlite</td></tr>
+      <tr><td>6</td><td>RAGSearchBox 탐색기 모드 칩 UI · 결과 줄 메타 표시 · 사람 이름 승인 화면</td><td>§14 화면</td></tr>
+      <tr><td>7</td><td>제목 후보 ② 본문 첫 제목 · 유형/양식 판별 다듬기</td><td>시험 ③</td></tr>
+      <tr><td>8</td><td><b>최종 비교 시험</b>: Everything · AnyTXT Searcher (+ Windows 검색) 설치 · 색인 → 같은 질문 세트로 비교</td><td><code>report/문서검색_비교_YYYYMMDD.html</code> · §16-2 합격 기준</td></tr>
+    </tbody>
+  </table></div>
+  <p>1~4는 Python 판에서 먼저 검증한다(실측 · 시험 도구가 Python에 있다). 5부터 Rust 판으로 옮긴다. 순서를 바꾸려면 결정 D5.</p>
+</section>
+
+<!-- 18 -->
+<section id="s18">
+  <h2><span class="no">18</span>결정이 필요한 것</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>결정</th><th>추천</th><th>대안</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>메타데이터 저장 위치</td><td><b>meta.sqlite 별도 파일</b> — 재정규화가 쉽고, 두 판이 같이 읽는다</td><td>index_state.json의 문서 항목에 붙이기 (파일 하나 줄지만 필터 질의가 느리고 JSON이 커진다)</td></tr>
+      <tr><td>D2</td><td>사람 별칭 사전 관리</td><td><b>자동 제안 + 승인</b> (동의어 사전과 같은 화면)</td><td>자동 적용 (빠르지만 오연결 위험) · 수동만</td></tr>
+      <tr><td>D3</td><td>"만든"의 날짜 해석</td><td><b>작성일(신뢰도 ≥ 0.7) → 아니면 수정일</b></td><td>항상 수정일 (단순하지만 "작년에 만든"이 "작년에 고친"과 같아진다)</td></tr>
+      <tr><td>D4</td><td>질의 해석 방식</td><td><b>규칙만</b> (1단계). LLM 보조는 시험 ⑤에서 놓친 유형이 많을 때 검토</td><td>규칙 + 0.6B LLM 보조</td></tr>
+      <tr><td>D5</td><td>먼저 할 판</td><td><b>Python 판 1~4 → Rust 판</b></td><td>Rust 판 먼저 (탐색기 모드 작업과 같이 가지만 실측 도구가 Python에 있다)</td></tr>
+      <tr><td>D6</td><td>이미지 · 텍스트 파일</td><td><b>파일 시스템 메타데이터만</b> (1단계)</td><td>EXIF · md front matter까지</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="s19">
+  <h2><span class="no">19</span>구현 결과 — 1단계 (2026-10-29)</h2>
+  <p>D1~D6 은 모두 추천안으로 정했다. §17 의 1단계(추출기 정식화 · 형식 판정 · 정규화 · 상속 판정 · meta.sqlite · meta 명령)를 Python 판에 넣었다.
+  <b>본문 추출 · 청킹 · 임베딩(색인)과는 아직 이어지지 않았다</b> — 색인할 때 meta.sqlite 가 함께 채워지는 것은 2단계다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>파일</th><th>하는 일</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/simplerag/meta/extract.py</code></td><td>매직 바이트 형식 판정(ZIP 내부 · OLE 스트림 · %PDF · 0바이트) · OOXML · OLE · HWP · HWPX · PDF 속성 · 파일 시스템 정보(Zone 은 도메인만). 수집 금지 항목(§5 · §15)은 처음부터 읽지 않는다</td></tr>
+      <tr><td><code>src/simplerag/meta/normalize.py</code></td><td>사람(정리 · 쓰레기 · 순서 · 직함 · 부서 · 이메일 · hex · 모지바케 · 별칭) · 날짜(5형식, KST/UTC, 이상값) · 제목(쓰레기 · 후보 3개 · 대표 고르기) · 원본 프로그램 · 스캔 · 받은 경로 · 템플릿 · 유형/양식 점수</td></tr>
+      <tr><td><code>src/simplerag/meta/rules.py</code></td><td>규칙 사전(기본값) + <code>&lt;데이터 루트&gt;/meta_rules.yaml</code> 덧붙이기</td></tr>
+      <tr><td><code>src/simplerag/meta/store.py</code></td><td>meta.sqlite(§11-2 + <code>base · inherited · folder_text · ext_mismatch</code> 칸) · 상속 판정 · raw 로 다시 정규화 · 바뀐 파일만 다시 읽는 scan</td></tr>
+      <tr><td><code>simplerag meta scan|rebuild|stats|show</code></td><td>cli.py 명령. <code>--db</code> 로 파일 위치를 바꿀 수 있다(기본 <code>&lt;데이터 루트&gt;/meta.sqlite</code>)</td></tr>
+      <tr><td><code>bench/test_meta.py</code></td><td>실측 사례로 만든 단위 시험 5묶음(사람 · 날짜 · 제목 · 출처/유형 · 상속) — 통과</td></tr>
+    </tbody>
+  </table></div>
+  <h3>D:\분류함 실측 (2,295개)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>시간</td><td>처음 46.7초(해시 포함) · 바뀐 것 없을 때 1.4초 · rebuild(다시 정규화) 0.5~0.7초. 실패 0, 0바이트 1</td></tr>
+      <tr><td>"고봉수" 문서</td><td>정확 일치 8 → <b>72</b>(정규화 · 저장자 포함) — 설계 실측과 같다. 계정 별칭(bong9 13 · bong49 7)은 3단계 별칭 사전에서 승인하면 92 근처</td></tr>
+      <tr><td>사람</td><td>원본 값 285가지 → 쓰레기 판정 · 정규화 후 사람 216명, 사람이 있는 문서 646. 회사 · 장비 · 프로그램 이름을 걸러 냈고, 남은 설치처별 계정(mpower · softbay · cyberdigm 등)은 <code>meta_rules.yaml</code> 로 더할 수 있다(확정 별칭이 아니면 필터로 쓰지 않으므로 결과를 좁히지는 않는다)</td></tr>
+      <tr><td>날짜</td><td>원본 날짜 값 1,902개 중 못 읽은 것 5개 — 모두 일부러 버리는 이상값(1900-12-31 · 1601-01-01). "2011년 작성" 113건 중 신뢰 작성일은 22건(상속 걸러 냄)</td></tr>
+      <tr><td>시험 ② 상속 판정</td><td>상속 문서 <b>188</b>개 · 18그룹을 모두 눈으로 확인 — 회사 PPT 양식(91) · 구입의뢰서 · 시간외근무일지 · 라이선스 · 검수확인서 · 교육 자료 묶음. 뚜렷한 오탐은 보이지 않았다</td></tr>
+      <tr><td>시험 ① 정규화</td><td>사람 · 날짜 · 대표 제목 표본을 눈으로 검토하며 규칙을 고쳤다(쉼표 영문 이름 · hex · 모지바케 · 부서명 · 여러 사람 칸 · 제품 버전 V9 를 제목에서 지우던 문제 · <code>_v1.1</code> 버전 · 한 글자씩 띄운 제목 · 겹친 확장자). <b>설계의 합격 기준(사람 95 · 날짜 98 · 제목 85%)으로 100건씩 라벨링한 정량 측정은 아직 하지 않았다</b></td></tr>
+      <tr><td>그 밖</td><td>스캔 PDF 82 · 받은 경로 189 · 유형 판정 513 · 양식 65 · 사본 그룹 202. 유형 · 양식 규칙은 본문 빈칸 패턴 없이 이름 · 폴더 · 템플릿 · 시트명만 쓴 상태(시험 ③ 은 7단계)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>설계와 다르게 한 것</b> — 대표 제목의 ② 본문 첫 제목은 1단계에서 PPT 1번 슬라이드 제목만 쓴다(Word · HWP · PDF · Excel 은 7단계). 버전 그룹 키는 버전을 떼고, 화면 제목 후보는 제품 버전(V9 · V10)을 남긴다.</li>
+    <li><b>다음</b> — 2단계 색인 연동(index 가 meta.sqlite 를 함께 채움 · 사본 복사 · 삭제 정리), 3단계 별칭 자동 제안 + people.yaml, 4단계 질의 해석 · 필터 · 가산 · 완화.</li>
+  </ul>
+  <h3>2단계 — 색인 연동 (2026-10-29)</h3>
+  <p>Python 판 인덱서가 문서를 다룰 때마다 meta.sqlite 를 함께 고친다(<code>src/simplerag/meta/hook.py</code>).
+  <code>index</code> 명령과 자동 인덱싱 워커 명령(<code>/index-doc</code> · <code>/remove-doc</code> · <code>/bm25</code>)이 같은 길을 쓴다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>인덱서 사건</th><th>메타데이터</th></tr></thead>
+    <tbody>
+      <tr><td>추가 · 수정 · 내용 같음(날짜만 바뀜)</td><td>원본 값을 다시 읽어 넣고 그 문서만 임시 정규화. 색인이 센 내용 해시를 넘겨 다시 세지 않는다</td></tr>
+      <tr><td>추출 실패(스캔 PDF 등)</td><td>메타는 남긴다 — 본문은 못 찾아도 이름 · 날짜 · 사람으로 찾게</td></tr>
+      <tr><td>사본(벡터 재사용)</td><td>원본 raw 를 베끼고 경로 · 파일 시스템 정보만 새로</td></tr>
+      <tr><td>이동</td><td>행의 경로만 바꾸고 파일 시스템 정보를 새로</td></tr>
+      <tr><td>삭제</td><td>메타도 지움</td></tr>
+      <tr><td>끝(<code>index</code> 끝 · 워커 <code>/bm25</code>)</td><td>인덱스에 있는데 메타가 없는 문서 채우기(옛 인덱스 · 끊긴 실행) → 인덱스에 없는 메타 지우기 → 전체 다시 정규화(템플릿 상속 판정)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>시험</b> — 임시 폴더에서 실제 인덱서로 ① 처음 인덱싱 ② 다른 이름 사본(새 문서로 처리) · 같은 이름 사본(복사 경로: 내용 해시 같고 폴더만 다름) ③ 이동(폴더 점검 → 보관) ④ 내용 같은 저장 ⑤ 삭제 ⑥ meta.sqlite 를 지운 뒤 다시 인덱싱 → 3건 채움, 그리고 워커 <code>/index-doc</code> · <code>/remove-doc</code> · <code>/bm25</code> 를 확인했다. 모두 메타 행이 인덱스 문서와 같게 따라갔다. 단위 시험(bench/test_meta.py)도 그대로 통과.</li>
+    <li><b>시간</b> — 문서당 원본 값 읽기는 1단계 실측 기준 약 20ms(2,295개 46.7초, 해시 포함 — 색인 연동에서는 해시를 다시 세지 않아 더 짧다). 분류함 인덱싱 79분(report/분류함_인덱싱시간_측정_20261029.html)의 1% 미만이다. 마무리 다시 정규화는 2,300건에 0.6초.</li>
+    <li><b>안전</b> — 메타 처리에서 무슨 일이 나도 인덱싱을 멈추지 않는다(경고 한 줄). <code>SIMPLERAG_META=0</code> 이면 끈다. meta.sqlite 는 인덱스와 같은 데이터 루트에 둔다.</li>
+    <li><b>남은 것(2단계)</b> — 지금 쓰는 인덱스는 <b>Rust 판</b>(dist-rust · 분류함 시험 인덱스)이라 이 연동이 아직 닿지 않는다. 결정 D5 대로 Rust 판 연동은 5단계다. 그 전에는 <code>simplerag meta scan --dir &lt;폴더&gt; --db &lt;Rust 데이터 폴더&gt;\meta.sqlite</code> 로 채울 수 있다.</li>
+  </ul>
+  <h3>3단계 — 사람 별칭 사전 (2026-10-29)</h3>
+  <p><code>src/simplerag/meta/people.py</code> · <code>simplerag meta people suggest|list|approve|reject|remove|me</code> ·
+  <code>people.default.yaml</code>(배포) + <code>people.yaml</code>(사용자, 모양 <code>people: {대표: [별칭]}</code> · <code>rejected:</code> · <code>me:</code>).
+  사전을 바꾸면 곧바로 다시 정규화한다. 자동 적용은 하지 않는다(결정 D2).</p>
+  <div class="note"><b>설계와 다르게 한 것 — 후보 근거.</b> §7-2 의 "같은 문서 동시 출현"을 주 근거로 썼더니 분류함 후보 17개 중 대부분이 틀렸다.
+  같은 문서의 만든 이 / 저장자가 다른 것은 <b>남이 만든 문서를 다른 사람이 저장</b>한 경우가 대부분이었다
+  (김영민 작성 ← youngho yoon 저장, 나문규 서식 ← bong9 저장 → "bong9 = 나문규" 오답). 실제로 bong9 는 고봉수와 같은 문서에 한 번도 같이 나오지 않았다.
+  그래서 <b>이름 모양 근거가 있어야만</b> 후보로 올리고, 동시 출현 · 파일명은 점수만 더하게 바꿨다.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>이름 모양 근거</th><th class="num">점수</th><th>예</th></tr></thead>
+    <tbody>
+      <tr><td>로마자 일치(성 표기 표 + 음절 표기 변형, 순서 · 하이픈 무시)</td><td class="num">5</td><td>cho kang lae · kang-lae cho → 조강래, kim-sung-su → 김성수</td></tr>
+      <tr><td>이름 일부(성+이름 · 이름 · 성+첫 음절 · 첫 음절 · 이름 이니셜+성)</td><td class="num">3</td><td>bong · bong9 → 고봉수, skchoi → 최성근, hrchoi → 최혜림</td></tr>
+      <tr><td>이니셜(성 첫 글자 + 이름 음절 첫 소리, ㄱ=g/k · ㄹ=r/l)</td><td class="num">2</td><td>ckl → 조강래, pky → 박규영</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>막는 것</b> — 흔한 성 표기만으로 된 계정(yoon · sung · lee)은 이름 일부로 보지 않는다(yoon → 이윤석, sung → 허성 오답을 실측에서 봄). 한 별칭이 같은 점수로 여러 이름에 맞으면 모호해서 올리지 않는다. 영문 두 낱말 이름은 로마자가 맞아야만 후보다(youngho yoon ↛ 김영민).</li>
+    <li><b>"나"</b> — <code>meta people me 고봉수</code> 가 me 를 적고 이 PC 의 Windows 계정명 · Office 사용자 이름(bong9)을 별칭으로 승인한다. 질의 "내가 만든"(4단계)이 쓴다.</li>
+    <li><b>분류함 결과</b> — 후보 11개(cho kang lae · bong · bong9 · bong49 · ckl → 대표 이름 등), 사람이 보기에 모두 그럴듯했다. 승인 4 · 무시 1 · me 설정 후
+      <b>"고봉수" 문서 72 → 92건</b>(설계 실측 목표와 같다), 조강래 17 → 28건. 승인 · 무시한 짝은 다음 후보에 다시 나오지 않는다.</li>
+    <li><b>시험</b> — bench/test_meta.py 에 test_people 추가(로마자 · 이름 일부 · 이니셜 · 흔한 성 거절 · 승인 → 별칭 적용 → 무시 → 빼기). 6묶음 모두 통과.</li>
+    <li><b>남은 것</b> — 설정 창의 "사람 이름" 승인 화면은 6단계(화면). 지금은 명령으로 승인한다.</li>
+  </ul>
+  <h3>4단계 — 질의 해석 · 필터 · 가산 · 완화 (2026-10-29)</h3>
+  <p><code>src/simplerag/meta/query.py</code>(규칙만 — 결정 D4) + Python 검색기(<code>retrieve/hybrid.py</code>) 연결. RAG 모드 · 업로드 밖 검색 전부가 같은 길을 쓴다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>부분</th><th>구현</th></tr></thead>
+    <tbody>
+      <tr><td>해석</td><td>사람(색인 · 별칭 사전 이름 + 님/씨/이/가… , 별칭 계정, "내가 · 제가" → me) · 시간(§12-1 전부: 올해 · 작년 · 재작년 · 2023년 · 23년 · 이번/지난 달 · 3월(쯤) · 상/하반기 · 지난주 · 최근 · N년/개월 전, 연도+월) · 동사(만든 → 작성일 · 작성 역할 / 고친 → 수정일 / 받은 → PC 에 들어온 날) · 형식 · 받은 경로 · 스캔 · 유형 · 양식. 사람 · 시간 · 형식 · 명령어는 본문 검색어에서 떼고 유형어 · 양식어는 남긴다</td></tr>
+      <tr><td>필터</td><td>형식 · 스캔 · 받은 경로 = 항상 / 기간 = 작성일은 신뢰도 0.7 이상만, 아니면 수정일(D3), 날짜 없는 문서는 떨어뜨리지 않음 / 사람 = 그 이름이 관련인인 문서 / 유형 · 양식 = 점수 5 이상 문서가 있을 때. 검색기에는 폴더 한정과 같은 <b>청크 표시(벡터 한 벌 마스크)</b>로 넘긴다(<code>VectorMatrix.mask_docs</code>)</td></tr>
+      <tr><td>가산</td><td>리랭커 점수에 더함 — 사람 작성 1.5 · 수정 0.8 · 원본양식 0.3(질의 동사와 같은 역할 +0.5) · 기간 안 1.0 · 유형/양식 최대 1.0. 관련도 문턱은 가산 전 점수로 본다</td></tr>
+      <tr><td>완화(0건)</td><td>사람 필터 → 가산 → 기간 앞뒤 1년 → 유형 · 양식 필터 → 가산. 무엇을 풀었는지 결과에 남긴다</td></tr>
+      <tr><td>메타만 있는 질의</td><td>본문 검색 없이 조건에 맞는 문서를 가산 · 수정일 순으로, 문서마다 첫 청크를 근거로(본문 없는 스캔 PDF 는 이름만)</td></tr>
+      <tr><td>보이기</td><td>timing.meta = 칩(이름 · 필터/가산) · 완화 · 본문 검색어 · 문서 수. RAG 답변 근거 줄: <code>── 근거 3건 (86ms) · 조건 노길우 (수정)(문서 1개)</code> (+ "조건을 풀어 찾음: …")</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>설계와 다르게 한 것 — 내용 질문 걸러내기.</b> 처음 규칙으로 골든 본문 질문 362개를 돌리니 <b>21개</b>에 조건이 붙었다(합격 ≤ 2).
+  "2016년 한국의 점수는?" · "2026년 시장 규모" 의 연도, "내가 결혼하면 휴가 며칠 줘?" 의 '나'는 문서 속성이 아니라 질문 내용이다.
+  그래서 <b>질문 꼴</b>(물음표 · 의문 어미 · 얼마 · 몇 · 어떻게 …)이면 "만든 · 받은 · 고친 + 두 낱말 안의 문서 낱말(문서 · 파일 · 유형어 · 형식어)"이 있을 때만 조건으로 쓴다
+  ("작년에 고봉수님이 만든 보고서에서 예산은 얼마야?" 는 조건 유지). 유형어 · 양식어만 있는 질의("휴가 규정에서 연차 이월")도 조건으로 보지 않는다.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>시험</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>⑤ 본문 질의 오탐(골든 · 바꿔 말한 질문 362개)</td><td class="ok">0개 (합격 ≤ 2)</td></tr>
+      <tr><td>⑥ 시간</td><td class="ok">해석만 0.46ms · 해석 + 필터 계획 3.3ms/질의 (합격 ≤ 10ms). 처음 한 번은 meta.sqlite 를 읽어 약 110ms, 이후 파일이 바뀔 때만 다시 읽는다</td></tr>
+      <tr><td>설계서 예시 질의(§2)</td><td>8개 모두 의도대로 나뉨 — 예: "작년에 고봉수님이 만든 절차서 양식" → 본문 '절차서 양식' · 2025년 작성일 · 고봉수(작성) · 양식, 0건이라 작성자 → 가산 · 기간 ±1년으로 풀어 35건 / "내가 만든 엑셀" → me(고봉수) · 엑셀 14건 / "휴가 규정에서 연차 이월" → 조건 없음</td></tr>
+      <tr><td>실제 검색기</td><td>2단계 시험 인덱스로 메타만 질의 · 본문+조건 질의(완화 포함) · 조건 없는 질의(예전과 같음)를 확인. 기존 검색 시험(폴더 한정 30 · 이웃 · 사본 · 리랭커 지연 · 백엔드 53) 모두 통과</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>시험 ④(메타 질의 골든셋 30문항 · 정답 Top-10 포함률)은 아직이다.</b> 문항마다 사람이 정답 문서를 적어야 하고, 분류함 인덱스가 Rust 판이라 Python 검색기로는 분류함 본문을 찾을 수 없다. 5단계(Rust 이식) 뒤 분류함에서 하는 것이 맞다.</li>
+    <li><b>남은 것</b> — 이어서 묻기에서 앞 질문 조건 이어 쓰기("그중에 엑셀만", §1-1 표), 가산 크기 조정(④ 결과로), Rust 판 이식(5단계) · 탐색기 모드 조건 칩(6단계).</li>
+  </ul>
+
+  <h3>5단계 — Rust 판 이식 (2026-10-29)</h3>
+  <p>1~4단계 전부를 <code>rust/simplerag/src/meta/</code> 로 옮겼다. 배포 엔진(simplerag-rs)이 인덱싱 · 탐색기 모드 · RAG 모두에서 같은 meta.sqlite 를 쓰고, Python 판과 파일을 서로 바꿔 써도 된다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>파일</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td><code>meta/extract.rs · normalize.rs · rules.rs</code></td><td>형식 판정 · fs 정보(Zone.Identifier) · OOXML/HWPX/OLE(HWP · 옛 Office)/PDF(pdfium FPDF_GetMetaText · 책갈피) 원본 값, 이름 정규화(hex · 깨진 글자 복원 · 별칭) · 날짜 · 제목 후보 · 출처 · 유형 점수 — Python 과 같은 규칙. 날짜 반올림 · olefile 의 읽기 습관까지 맞췄다</td></tr>
+      <tr><td><code>meta/store.rs · hook.rs · people.rs · cmd.rs</code></td><td>같은 스키마 · 템플릿 상속 · 색인 연동(넣기 · 사본 · 이동 · 빼기 · 마무리), 별칭 제안 · 승인 · me, <code>simplerag-rs meta scan|rebuild|stats|show|people|plan</code></td></tr>
+      <tr><td><code>meta/query.rs</code></td><td>질의 해석 · 필터 · 가산 · 완화(query.py 와 같음). meta.sqlite · 이름 목록 · 유형어는 파일이 바뀔 때만 다시 읽고, 정규식은 한 번만 만든다</td></tr>
+      <tr><td><code>retrieve.rs · find.rs · cli.rs</code></td><td>RAG: 조건 문서만 검색(<code>store.docs_scope</code> — 폴더 한정과 같은 허용 id 방식) · 리랭커 점수에 가산 · 메타만 질의 · timing.meta · 근거 줄 "조건 …". 탐색기 모드(/find · search --group): 같은 필터 · 가산, 문서 줄에 <code>title</code> · <code>people</code>(최대 3명), 메타만 질의는 쪽 없는 문서 줄(<code>meta_hit</code>), <code>@find_done.meta</code> = 칩 · 완화 · 본문 검색어 · 문서 수</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>시험</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>단위 시험</td><td class="ok">cargo test 35개 통과(bench/test_meta.py 경우 전부 + 날짜 · 제목 · OLE · 질의 해석 · 시간 범위) · 빌드 경고 0</td></tr>
+      <tr><td>추출 · 정규화 Python 대조 (D:\분류함 2,014개 + 다른 말뭉치 5곳)</td><td class="ok">doc_meta 모든 칸 · doc_people · raw_json 글자까지 행 단위로 같음. 서로의 DB 에 rebuild · 증분 scan 을 돌려도 변화 없음. stats · show · people suggest(후보 11개) 같음</td></tr>
+      <tr><td>질의 해석 Python 대조 (예시 25 + 골든 362)</td><td class="ok">387개 중 386개 같음 — 남은 1개는 "조강래 고봉수 같이 쓴 문서" 의 사람 순서(Python 은 집합 순서라 매번 다를 수 있음, Rust 는 이름 순 고정)</td></tr>
+      <tr><td>⑤ 본문 질의 오탐</td><td class="ok">0 / 362</td></tr>
+      <tr><td>⑥ 시간</td><td class="ok">해석 + 계획 평균 3.2ms/질의(처음 한 번 meta.sqlite 읽기 포함 최대 19ms). 처음에는 정규식을 질의마다 만들어 27ms 였고 캐시해 줄였다</td></tr>
+      <tr><td>scan 속도 (분류함 전체)</td><td class="ok">Rust 14.9초(Python 47.9초) · 증분 0.5초</td></tr>
+      <tr><td>색인 연동 시나리오</td><td class="ok">넣기 · 같은 이름 사본 · 이동 · 삭제 · meta.sqlite 지운 뒤 재인덱싱(채우기) 모두 Python 과 같은 행. SIMPLERAG_META=0 이면 만들지 않음</td></tr>
+    </tbody>
+  </table></div>
+  <h3>분류함 인덱스로 탐색기 모드 실측 (search --group, 조건 켬 / 끔)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>질의</th><th>조건 (문서 수)</th><th>조건 켬 — 앞 문서</th><th>조건 끔 — 앞 문서</th></tr></thead>
+    <tbody>
+      <tr><td>고봉수님이 만든 보고서</td><td>고봉수(작성) 필터 · 보고서 가산 (92)</td><td>AI솔루션 테스트 보고서 · 해군 소요제기서 · 지능형문서관리솔루션 — 모두 고봉수 관련</td><td>원격접속 신청서 · 역량평가(고봉수) · 사용자메뉴얼</td></tr>
+      <tr><td>조강래가 작성한 매뉴얼</td><td>조강래(작성) · 매뉴얼 필터 (5)</td><td>EZis-V 관리자페이지 메뉴얼 · 클라우드저장소 운영메뉴얼 · 웹하드 장애대응매뉴얼</td><td>기능목록 · 이관 구축매뉴얼 (조강래 무관)</td></tr>
+      <tr><td>내가 만든 엑셀</td><td>me(고봉수) · 엑셀 — 메타만 (14)</td><td>표준절차서 예시1 · 2.xlsx (본문 검색 없이 35ms)</td><td>ISM매뉴얼 pdf · piigen.py (엉뚱)</td></tr>
+      <tr><td>작년에 수정한 PPT 제안서</td><td>PPT · 2025년 수정일 필터 (18)</td><td>2025 AI 기술 현황 · 유사문서추천 · 사업화방안 pptx</td><td>제안요청서 hwp/pdf</td></tr>
+      <tr><td>메일로 받은 한글 파일 중 점검 확인서</td><td>한글 · 메일 (11) — 유형 조건 해제</td><td>메일로 받은 제안요청서 hwp 들</td><td>정기점검확인서 doc · 검수확인서 doc</td></tr>
+      <tr><td>2023년 정기점검 보고서</td><td>2023년 수정일 (103)</td><td>2023년 문서 중 비슷한 것 — 진짜 정기점검 보고서(2024 · 2025년)는 빠짐</td><td>정기점검통합보고서 2024 · 정기점검확인서 2025</td></tr>
+      <tr><td>휴가 규정에서 연차 이월</td><td>조건 없음</td><td colspan="2">같은 결과(본문 질의는 그대로)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>잘 되는 것</b> — 사람 · 형식 · 메타만 질의는 조건을 끈 결과보다 분명히 낫다. 본문 질의는 바뀌지 않는다.</li>
+    <li><b>볼 것</b> — ① 기간은 필터라 "2023년 정기점검" 처럼 연도가 <i>내용</i>(점검 연도)인데 파일 날짜가 다르면 정답이 빠진다 → 기간을 가산으로 낮추거나 "파일 날짜" 칩을 눌러 풀게(6단계 칩). ② "스캔된 계약서" 는 스캔 문서 82개 중 본문이 있는 11개만 검색 대상이라, 본문 검색어가 남으면 본문 없는 스캔본이 안 보인다 → 이름 · 제목 일치로 메타 문서 줄을 덧붙일지 검토. ③ "메일로 받은 … 점검 확인서" 는 메일로 받은 한글 파일에 확인서가 없어 유형을 풀었다 — 정답이 doc 형식이면 형식 필터가 너무 세다.</li>
+    <li><b>CLI search 는 리랭커를 싣지 않아</b> 위 표는 1단계(RRF) + 가산 없는 순서다. 상주 워커(/find)는 리랭커 점수에 가산이 더해진다. 메타 계획 시간은 한 번만 도는 CLI 에서 약 30ms(meta.sqlite 첫 읽기), 상주 워커에서는 3ms 남짓.</li>
+    <li><b>남은 것</b> — 6단계: 탐색기 모드 조건 칩(끄기 · 기간 넓히기) · 사람 승인 화면, 시험 ④(분류함 메타 질의 골든셋 30문항), 이어서 묻기 조건 이어 쓰기, dist-rust 배포(배포 폴더에 meta.sqlite 를 만들려면 재인덱싱 또는 <code>meta scan</code>).</li>
+  </ul>
+
+  <h3>6단계 — 탐색기 모드 조건 칩 · 결과 줄 메타 · 사람 승인 화면 (2026-10-29)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>부분</th><th>구현</th></tr></thead>
+    <tbody>
+      <tr><td>조건 칩 (§14)</td><td>탐색기 창 · 패널 검색창 아래 한 줄. 실선 = 필터, 점선 = 가산. <b>[✕]</b> 그 조건을 끄고 바로 다시 찾기 → 흐린 칩 <b>[↺]</b> 으로 다시 켜기. 기간 칩에는 <b>[±1년]</b>(누를 때마다 1년씩, 최대 3년). "· 문서 N개에서" · "맞는 문서가 없어 조건을 풀어 찾음: …"(주황). 끈 조건은 같은 검색어 안에서만 유지</td></tr>
+      <tr><td>엔진</td><td>워커 <code>/find {"q", "folder", "off": [종류…], "widen": N}</code> → <code>query::plan_with</code>(PlanOpts). 질의에 조건이 없으면 예전과 같고, 조건을 다 꺼도 계획을 돌려 칩을 다시 켤 수 있게 한다. 남은 조건도 본문 검색어도 없으면 원래 질의로 본문 검색. <code>@find_done.meta</code> 에 off · widen 을 되돌려 준다</td></tr>
+      <tr><td>결과 줄</td><td>문서 줄에 관련인 "👤 고봉수 · 조강래"(작성 → 수정, 최대 3명), 풍선 도움말에 경로 + 파일 이름과 다른 문서 제목. 조건만 있는 질의는 <b>"조건 일치 (N)"</b> 묶음(쪽 줄 없이 문서 줄 — 두 번 누르면 문서 열기). 패널 카드도 같음</td></tr>
+      <tr><td>사람 승인 화면</td><td>설정 창 왼쪽 메뉴 <b>사람 (남은 후보 수)</b>: 별칭 후보([✓ 맞음] [✕ 아님] · 근거 줄: 이름 모양 · 같은 문서 · 예시 문서) · [후보 만들기] · 직접 추가 · "나" 저장 · 승인한 별칭 [빼기]. 쓰기는 <code>simplerag-rs meta people approve|reject|remove|me|suggest</code> 를 뒤에서 돌려 한 곳에서 한다(people.yaml 글 모양 · 다시 정규화). meta.sqlite 만 고치므로 워커가 떠 있어도 된다. 워커는 people.yaml · meta.sqlite 수정 시각이 바뀌면 다음 찾기 때 이름 목록을 다시 읽는다</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>확인</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>워커 /find (분류함 인덱스)</td><td class="ok">"2023년 정기점검 보고서": 그대로 → 2023년 문서 103개(정답 없음) / <b>widen 1</b> → 1,006개, 1~3위가 정기점검통합보고서 / <b>off date</b> → 정기점검통합보고서가 1위. "내가 만든 엑셀" off person+format → 조건 없이 원래 질의로 본문 검색</td></tr>
+      <tr><td>화면(실제 워커 결과를 넣은 시험 페이지)</td><td class="ok">창 · 패널 칩 그리기, ±1년 · ✕ · ↺ 가 off/widen 을 실어 다시 찾기, 조건 일치 묶음 14개, 관련인 표시, 설정 창 사람 탭 버튼이 ppl_approve · ppl_remove · ppl_me 를 보냄</td></tr>
+      <tr><td>사람 명령(복사본 데이터 폴더)</td><td class="ok">approve · reject · remove · me · suggest 모두 people.yaml 에 바로 적고 다시 정규화(2,295 문서). 첫 줄 글("승인: hrchoi → 최혜림")을 설정 창 안내 줄에 보인다</td></tr>
+      <tr><td>빌드 · 시험</td><td class="ok">RAGSearchBox-rs · simplerag-rs 경고 0 · cargo test 통과</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>아직</b> — 실제 RAGSearchBox 를 띄워 트레이 · 설정 창에서 끝까지 눌러 보기(시험 페이지는 ipc 를 가짜로 바꿔 끼운 것), 배포 폴더 meta.sqlite(재인덱싱 또는 <code>meta scan</code>), 크게 보기로 넘어갈 때 끈 조건 이어 주기, 시험 ④, 이어서 묻기 조건 이어 쓰기, 7단계(제목 · 유형 다듬기).</li>
+  </ul>
+</section>
+
+<footer>작성 2026-10-29 · 실측: bench/meta_survey.py (D:\분류함 2,293개, results/meta_survey/records.jsonl) · 지금 구조 검토: index/indexer.py · index_state.json · rust/simplerag/Cargo.toml · src/find.rs · 관련: plan/폴더아이콘_탐색기모드_설계서_20261029.html · plan/동의어사전_설계서_20261027.html · plan/폴더한정검색_설계서.html</footer>
+</div>
+</body>
+</html>

@@ -5,8 +5,11 @@
 //          탐색기 알림을 함께 처리한다. 원래 값은 desktop.ini 의 [MoAI-S] 절과 상태 파일 두 곳에 남긴다.
 //   · 드라이브(C:\ · D:\): desktop.ini 는 "내 PC" 의 드라이브 그림에 듣지 않으므로
 //          HKCU\Software\Classes\Applications\Explorer.exe\Drives\<문자>\DefaultIcon 에 쓴다(관리자 불필요).
-//   아이콘 파일은 exe 안에 넣어 두고 %LOCALAPPDATA%\RAGSearchBox-rs\icons 로 꺼내 쓴다
+//   아이콘 파일은 exe 안에 넣어 두고 %ProgramData%\MoAI-S\icons 로 꺼내 쓴다
 //   (폴더 안에 두면 사용자 폴더가 어지러워지고, exe 를 가리키면 옮길 때 깨진다).
+//   ⚠️ %LOCALAPPDATA% 아래 아이콘은 탐색기가 폴더 아이콘으로 그리지 않는다(실측 2026-10-29 — 같은 .ico 를
+//      ProgramData · 문서 · D:\ 에 두면 보이고 AppData\Local 에 두면 기본 폴더). 셸 함수 SHGetFileInfo 는
+//      AppData 쪽도 돌려줘서 알아채기 어렵다. 이미 붙인 폴더 · 드라이브는 sync 가 새 경로로 고쳐 쓴다.
 //   탐색기 알림 · 네트워크 폴더는 느릴 수 있어 sync 는 자기 스레드에서 부른다.
 //------------------------------------------------------------------
 
@@ -26,7 +29,11 @@ const INFOTIP: &str = "MoAI-S 인덱싱 폴더 — 자연어로 문서와 쪽을
 const SECTION: &str = "MoAI-S";
 const SHELL: &str = ".ShellClassInfo";
 const DRIVES_KEY: &str = r"Software\Classes\Applications\Explorer.exe\Drives";
-const ICON_VERSION: &str = "1";
+const ICON_VERSION: &str = "3";
+// 꺼내 둘 파일 이름 — 그림을 바꾸면 이름도 바꾼다. 탐색기는 같은 경로의 아이콘을 캐시해 옛 그림을 계속 보인다
+//   (sync 가 이미 붙인 폴더 · 드라이브를 새 이름으로 고쳐 쓴다)
+const FOLDER_ICO_NAME: &str = "moai-folder-3.ico";
+const DRIVE_ICO_NAME: &str = "moai-drive-3.ico";
 
 // 앱 데이터 폴더(%LOCALAPPDATA%\RAGSearchBox-rs)
 fn data_dir() -> String {
@@ -43,10 +50,27 @@ fn state_path() -> String {
 // -out: (폴더용 경로, 드라이브용 경로) / 쓰기 실패면 Err
 //------------------------------------------------------------------
 fn ensure_icons() -> Result<(String, String), String> {
-    let dir = format!("{}\\icons", data_dir());
-    std::fs::create_dir_all(&dir).map_err(|e| format!("아이콘 폴더를 만들지 못했습니다: {}", e))?;
+    // ProgramData 를 못 쓰면(권한) 예전 자리로 — 아이콘이 안 보일 수는 있어도 붙이기는 된다
+    match write_icons(&icons_dir()) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            crate::warn!("icon", "{} — 앱 데이터 폴더에 둔다", e);
+            write_icons(&format!("{}\\icons", data_dir()))
+        }
+    }
+}
+
+// 아이콘 폴더 — %ProgramData%\MoAI-S\icons (탐색기가 읽는 자리)
+fn icons_dir() -> String {
+    let base = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
+    format!("{}\\MoAI-S\\icons", base)
+}
+
+// 아이콘 두 파일을 dir 에 쓴다 — 없거나 크기가 다르면(그림이 바뀐 새 exe)
+fn write_icons(dir: &str) -> Result<(String, String), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("아이콘 폴더를 만들지 못했습니다: {}", e))?;
     let mut out = vec![];
-    for (name, bytes) in [("moai-folder.ico", FOLDER_ICO), ("moai-drive.ico", DRIVE_ICO)] {
+    for (name, bytes) in [(FOLDER_ICO_NAME, FOLDER_ICO), (DRIVE_ICO_NAME, DRIVE_ICO)] {
         let p = format!("{}\\{}", dir, name);
         let same = std::fs::metadata(&p).map(|m| m.len() == bytes.len() as u64).unwrap_or(false);
         if !same {
@@ -124,6 +148,16 @@ pub fn sync(folders: &[String], enabled: bool) -> Vec<String> {
         match ensure_icons() {
             Err(e) => notes.push(e),
             Ok((folder_ico, drive_ico)) => {
+                // 이미 붙인 곳이 옛 아이콘 경로(AppData)를 가리키면 지금 경로로 고쳐 쓴다
+                for e in &entries {
+                    let p = e["path"].as_str().unwrap_or("");
+                    let r = if e["kind"] == "drive" { repoint_drive(e, &drive_ico) } else { repoint_folder(p, &folder_ico) };
+                    match r {
+                        Ok(true) => crate::info!("icon", "아이콘 경로를 고쳤다: {}", p),
+                        Ok(false) => {}
+                        Err(err) => crate::warn!("icon", "아이콘 경로를 고치지 못했다: {} — {}", p, err),
+                    }
+                }
                 for f in &want {
                     if entries.iter().any(|e| same_path(e["path"].as_str().unwrap_or(""), f)) {
                         continue;
@@ -267,6 +301,36 @@ fn apply_folder(folder: &str, ico: &str) -> Result<Value, String> {
 }
 
 //------------------------------------------------------------------
+// 이미 붙인 폴더의 아이콘 경로 고치기 — 지금 아이콘이 우리 것인데 경로가 다르면 IconResource 만 새로
+//   (원래 값 백업 · 속성은 그대로). 사용자가 다른 아이콘으로 바꿨으면 손대지 않는다.
+// -out: Ok(true) = 고침 / Ok(false) = 고칠 것 없음 / Err = 쓰기 실패
+//------------------------------------------------------------------
+fn repoint_folder(folder: &str, ico: &str) -> Result<bool, String> {
+    let ini = format!("{}\\desktop.ini", folder.trim_end_matches(['\\', '/']));
+    if !std::path::Path::new(&ini).is_file() {
+        return Ok(false);
+    }
+    let (now_icon, _) = read_custom(folder);
+    let now = now_icon.to_lowercase();
+    if !now.contains("moai-folder") || now.starts_with(&ico.to_lowercase()) {
+        return Ok(false);
+    }
+    let icon_w: Vec<u16> = ico.encode_utf16().chain(Some(0)).collect();
+    let mut fcs = SHFOLDERCUSTOMSETTINGS {
+        dwSize: std::mem::size_of::<SHFOLDERCUSTOMSETTINGS>() as u32,
+        dwMask: FCSM_ICONFILE,
+        pszIconFile: PWSTR(icon_w.as_ptr() as *mut u16),
+        iIconIndex: 0,
+        ..Default::default()
+    };
+    unsafe { SHGetSetFolderCustomSettings(&mut fcs, &HSTRING::from(folder), FCS_FORCEWRITE) }
+        .map_err(|e| format!("폴더 설정을 쓰지 못했습니다: {}", e))?;
+    ini_set(&ini, SECTION, Some("IconVersion"), Some(ICON_VERSION))?;
+    notify_dir(folder);
+    Ok(true)
+}
+
+//------------------------------------------------------------------
 // 폴더 원래대로
 //    1) 지금 아이콘이 우리 것이 아니면(사용자가 그 뒤 바꿨으면) [MoAI-S] 절만 지운다
 //    2) 우리가 만든 desktop.ini 면 파일째 지우고, 우리가 켠 폴더 속성도 끈다
@@ -279,7 +343,8 @@ fn restore_folder(e: &Value) -> Result<(), String> {
         return Ok(());
     }
     let (now_icon, _) = read_custom(folder);
-    let ours = now_icon.to_lowercase().contains("moai-folder.ico");
+    // 옛 경로 · 시험 사본(moai-folder-*.ico)도 우리 것으로 본다
+    let ours = now_icon.to_lowercase().contains("moai-folder");
     let created = if ini_get(&ini, SECTION, "Managed") == "1" { ini_get(&ini, SECTION, "Created") == "1" } else { e["created"].as_bool().unwrap_or(false) };
     let attr_set = e["attr_set"].as_bool().unwrap_or(false) || ini_get(&ini, SECTION, "AttrSet") == "1";
     if !ours {
@@ -382,6 +447,22 @@ fn apply_drive(path: &str, d: char, ico: &str) -> Result<Value, String> {
 }
 
 //------------------------------------------------------------------
+// 이미 붙인 드라이브의 아이콘 경로 고치기 — 지금 값이 우리 아이콘인데 경로가 다르면 새로 쓴다
+//------------------------------------------------------------------
+fn repoint_drive(e: &Value, ico: &str) -> Result<bool, String> {
+    let d = e["letter"].as_str().and_then(|s| s.chars().next()).or_else(|| drive_letter(e["path"].as_str().unwrap_or("")));
+    let Some(d) = d else { return Ok(false) };
+    let key = format!("{}\\{}\\DefaultIcon", DRIVES_KEY, d);
+    let now = reg_default(&key).unwrap_or_default().to_lowercase();
+    if !now.contains("moai-drive") || now.starts_with(&ico.to_lowercase()) {
+        return Ok(false);
+    }
+    reg_set_default(&key, &format!("{},0", ico)).map_err(|e| format!("레지스트리에 쓰지 못했습니다: {}", e))?;
+    notify_drive(&format!("{}:\\", d));
+    Ok(true)
+}
+
+//------------------------------------------------------------------
 // 드라이브 원래대로 — 우리가 만든 키면 지우고, 원래 값이 있었으면 되쓴다
 //   지금 값이 우리 아이콘이 아니면(사용자가 바꿨으면) 건드리지 않는다
 //------------------------------------------------------------------
@@ -391,7 +472,7 @@ fn restore_drive(e: &Value) -> Result<(), String> {
     let base = format!("{}\\{}", DRIVES_KEY, d);
     let key = format!("{}\\DefaultIcon", base);
     let now = reg_default(&key).unwrap_or_default();
-    if !now.to_lowercase().contains("moai-drive.ico") {
+    if !now.to_lowercase().contains("moai-drive") {
         return Ok(());
     }
     if e["created"].as_bool().unwrap_or(true) {
@@ -429,7 +510,7 @@ mod tests {
         let e = apply_folder(&dir, &fico).unwrap();
         let (icon, tip) = read_custom(&dir);
         println!("붙인 뒤: icon={} tip={}", icon, tip);
-        assert!(icon.to_lowercase().contains("moai-folder.ico"));
+        assert!(icon.to_lowercase().contains("moai-folder"));
         assert_eq!(tip, INFOTIP);
         assert_eq!(ini_get(&ini, SECTION, "Created"), "1");
         let attrs = unsafe { GetFileAttributesW(&HSTRING::from(dir.as_str())) };
@@ -462,7 +543,7 @@ mod tests {
         assert!(reg_default(&key).is_none(), "Z 키가 이미 있어 시험하지 않는다");
         let e = apply_drive("Z:\\", 'Z', &dico).unwrap();
         println!("드라이브 키: {:?}", reg_default(&key));
-        assert!(reg_default(&key).unwrap().contains("moai-drive.ico"));
+        assert!(reg_default(&key).unwrap().contains("moai-drive"));
         restore_drive(&e).unwrap();
         assert!(reg_default(&key).is_none());
     }

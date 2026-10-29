@@ -51,8 +51,17 @@ pub fn is_transient(path: &str) -> bool {
 pub fn list_files(root: &str, recursive: bool) -> std::io::Result<(Vec<String>, usize)> {
     let mut files = vec![];
     let mut skipped = 0;
+    // SIMPLERAG_INDEX_EXCLUDE — ; 로 나눈 제외 목록(대소문자 무시). 말뭉치처럼 문서가 아닌 큰 파일 · 폴더를 뺄 때
+    //   \ 나 / 가 든 항목은 폴더(그 아래 전부), 아니면 파일 이름
+    let exclude: Vec<String> = std::env::var("SIMPLERAG_INDEX_EXCLUDE").unwrap_or_default()
+        .split(';').map(|s| s.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase()).filter(|s| !s.is_empty()).collect();
+    let excluded = |p: &str| {
+        let low = p.replace('/', "\\").to_lowercase();
+        let name = pyutil::basename(&low).to_string();
+        exclude.iter().any(|e| if e.contains('\\') { low.starts_with(&format!("{}\\", e)) } else { name == *e })
+    };
     let mut take = |p: String| {
-        if TEXT_EXTS.contains(&pyutil::ext_lower(&p).as_str()) && !is_transient(&p) {
+        if TEXT_EXTS.contains(&pyutil::ext_lower(&p).as_str()) && !is_transient(&p) && !excluded(&p) {
             files.push(p);
         } else {
             skipped += 1;
@@ -390,6 +399,8 @@ pub fn sync_doc(path: &str, fp: &str, state: &mut State, embedder: &Embedder, st
             m.insert("mtime".into(), json!(pyutil::mtime_int(path).unwrap_or(0)));
             failed_pop(state, &key);
             save_state(state)?;
+            // 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
+            crate::meta::hook::synced(&key, Some(&chash));
             return Ok(SyncResult { ok: true, op: "same".into(), chunks: p.get("chunks").and_then(|v| v.as_i64()).unwrap_or(0), ..Default::default() });
         }
     }
@@ -433,6 +444,8 @@ pub fn sync_doc(path: &str, fp: &str, state: &mut State, embedder: &Embedder, st
             let why = why_of(&e);
             failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name}));
             save_state(state)?;
+            // 본문을 못 뽑은 문서(스캔 PDF 등)도 이름 · 날짜 · 사람으로는 찾을 수 있게 메타는 남긴다
+            crate::meta::hook::synced(&key, Some(&chash));
             return Ok(SyncResult { ok: false, op: op.into(), why, kept_old: prev.is_some(), ..Default::default() });
         }
     };
@@ -496,6 +509,7 @@ pub fn sync_doc(path: &str, fp: &str, state: &mut State, embedder: &Embedder, st
     failed_pop(state, &key);
     mark_changed(state);
     save_state(state)?;
+    crate::meta::hook::synced(&key, Some(&chash));
     Ok(SyncResult { ok: true, op: op.into(), chunks: chunks.len() as i64, n_rows, ..Default::default() })
 }
 
@@ -509,6 +523,7 @@ pub fn remove_doc(key: &str, state: &mut State, store: &VectorStore) -> Result<i
     failed_pop(state, key);
     mark_changed(state);
     save_state(state)?;
+    crate::meta::hook::removed(key);
     Ok(n)
 }
 
@@ -719,6 +734,8 @@ pub fn copy_doc(src_key: &str, path: &str, fp: &str, state: &mut State, store: &
     failed_pop(state, &key);
     mark_changed(state);
     save_state(state)?;
+    // 메타도 원본을 베끼고 경로 · 파일 시스템 정보만 새로 읽는다
+    crate::meta::hook::copied(src_key, &key, src.get("content_hash").and_then(|v| v.as_str()));
     Ok(Some(SyncResult { ok: true, op: "copied".into(), chunks: n, from: Some(src_key.to_string()), ..Default::default() }))
 }
 
@@ -748,6 +765,7 @@ pub fn move_doc(old_key: &str, path: &str, fp: &str, state: &mut State, store: &
     docs_mut(state).insert(key.clone(), Value::Object(entry));
     failed_pop(state, &key);
     save_state(state)?;
+    crate::meta::hook::moved(old_key, &key);
     Ok(SyncResult { ok: true, op: "moved".into(), chunks, from: Some(old_key.to_string()), ..Default::default() })
 }
 
@@ -792,6 +810,8 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
         store.ensure_loaded()?;
     }
     let plan = plan_changes(doc_dir, &state, recursive, allow_delete, rebuild)?;
+    // 메타데이터의 폴더 토큰은 이 인덱싱 폴더 아래 경로로 잡는다
+    crate::meta::hook::set_base(Some(doc_dir));
     let mut todo = plan.todo.clone();
     if plan.skipped > 0 {
         log(&format!("제외 {}건(확장자·임시 파일 등)", plan.skipped));
@@ -860,6 +880,8 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
         save_state(&state)?;
         log(&format!("BM25 인덱스 {}건 구축 {:.1}s", pyutil::comma(texts.len() as i64), build_s));
     }
+    // ── 메타데이터 마무리 — 빠진 문서 채우기 · 정리 · 템플릿 상속 판정(전체를 봐야 한다) ──
+    crate::meta::hook::finish(&state, log);
     for (name, why) in &sum.failed {
         log(&format!("  ❌ {} — {}", name, why));
     }

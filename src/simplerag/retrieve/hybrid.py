@@ -331,12 +331,27 @@ class HybridRetriever:
         if corpus is not None:
             # 업로드 문서만 — 폴더 한정은 의미가 없다
             extra = {"corpus": corpus}
+
+        # ── 메타데이터 조건(메타데이터 검색 설계서 §1-1 ①②④) — 사람 · 기간 · 형식 · 출처 · 스캔 ──
+        #   조건이 없는 질의는 mp 가 None 이라 아래가 예전과 똑같이 돈다
+        mp = self._meta_plan(query, folder) if corpus is None else None
+        boosts = {}
+        if mp is not None:
+            if mp["meta_only"]:
+                # 본문 검색어가 남지 않았다 — 조건에 맞는 문서를 가산 · 수정일 순으로(§13-2)
+                return self._meta_only(mp, top_k)
+            query = mp["query"]
+            boosts = mp["boosts"]
+            if mp["docs"] is not None:
+                extra["docs"] = mp["docs"]
         if self.reranker is None:
-            return self._search(query, top_k, first_stage, **extra)
+            chunks, timing = self._search(query, top_k, first_stage, **extra)
+            return chunks, self._meta_timing(timing, mp)
 
         # 재정렬할 여지가 있어야 하므로 top_k 보다 넉넉히 뽑는다
         pool = max(top_k, config.RERANK_POOL)
         chunks, timing = self._search(query, pool, first_stage, **extra)
+        timing = self._meta_timing(timing, mp)
         gate = relevance_min()
         # 관련도 문턱을 쓰면 후보가 적어도 점수를 매겨야 한다 — 작은 폴더에서 문턱이 빠지지 않게
         if not chunks or (len(chunks) <= top_k and gate is None):
@@ -351,10 +366,14 @@ class HybridRetriever:
             return chunks[:top_k], timing
         ms = round((time.perf_counter() - t0) * 1000, 1)
 
+        # 관련도 문턱은 리랭커 점수 그대로로 본다(가산 때문에 관련 없는 근거가 문턱을 넘지 않게)
+        top = float(max(scores))
+        if boosts:
+            # 메타데이터 가산 — 필터로 쓰기엔 애매한 조건(작성 역할 · 유형 · 양식 · 기간 안)으로 순위만 올린다(§13-1)
+            scores = [float(s) + boosts.get(c.get("doc_path", ""), 0.0) for s, c in zip(scores, chunks)]
         order = sorted(range(len(chunks)), key=lambda i: -scores[i])
         timing["rerank_ms"] = ms
         timing["total_ms"] = round(timing["total_ms"] + ms, 1)
-        top = float(scores[order[0]])
         timing["rerank_top"] = round(top, 2)
         # ⚠️ 가장 관련 있는 후보조차 질문과 동떨어졌으면 근거를 내지 않는다 — 억지로 붙인 근거로
         #    모델이 엉뚱한 답을 지어낸다(사용자 화면: 비트코인 글만 있는 폴더에서 "출장시 숙박비는").
@@ -397,7 +416,7 @@ class HybridRetriever:
     #        timing = {embed_ms, dense_ms, bm25_ms, fuse_ms, total_ms}
     #                 (+ 폴더를 주면 scope_docs, scope_via · 업로드면 uploads=올린 문서 수)
     #------------------------------------------------------------------
-    def _search(self, query, top_k=None, first_stage=None, folder=None, corpus=None):
+    def _search(self, query, top_k=None, first_stage=None, folder=None, corpus=None, docs=None):
         import time
 
         top_k = top_k or config.TOP_K
@@ -406,8 +425,8 @@ class HybridRetriever:
         bm25_k = first_stage or config.BM25_TOP_K
 
         t0 = time.perf_counter()
-        # 폴더 한정이면 먼저 그 폴더에 문서가 있는지 본다 — 없으면 임베딩도 하지 않는다
-        scope = self._scope(folder) if (folder and corpus is None) else None
+        # 폴더 한정 · 메타데이터 필터면 먼저 그 범위에 문서가 있는지 본다 — 없으면 임베딩도 하지 않는다
+        scope = self._scope(folder, docs) if ((folder or docs is not None) and corpus is None) else None
         if scope is not None and scope["n_docs"] == 0:
             ms = round((time.perf_counter() - t0) * 1000, 1)
             return [], {"embed_ms": 0.0, "dense_ms": 0.0, "bm25_ms": 0.0, "fuse_ms": 0.0,
@@ -488,17 +507,94 @@ class HybridRetriever:
         return chunks, timing
 
     #------------------------------------------------------------------
+    # 메타데이터 조건 계획 (메타데이터 검색 설계서 §12 · §13)
+    #=> 질의에서 사람 · 기간 · 형식 · 출처 · 스캔 조건을 떼어 필터할 문서와 가산을 만든다.
+    #   meta.sqlite 가 없거나 조건이 없으면 None — 검색은 예전과 똑같다.
+    #   SIMPLERAG_META_QUERY=0 이면 끈다(비교 시험용).
+    #
+    # -in: query = 질문 / folder = 폴더 한정 범위
+    #
+    # -out: meta.query.plan() 결과 또는 None
+    # -out: error = 없음 (메타 쪽 예외는 삼키고 None — 검색을 막지 않는다)
+    #------------------------------------------------------------------
+    def _meta_plan(self, query, folder):
+        if os.environ.get("SIMPLERAG_META_QUERY", "1").strip() in ("0", "off", "false"):
+            return None
+        try:
+            from ..meta import query as meta_query
+            from ..meta import store as meta_store
+            from ..meta.hook import data_dir
+            home = data_dir()          # 인덱서가 meta.sqlite 를 두는 곳(상태 파일 옆)
+            return meta_query.plan(query, db=meta_store.default_path(home), folder=folder, root=home)
+        except Exception:  # noqa: BLE001 — 메타데이터 문제로 질문이 죽으면 안 된다
+            return None
+
+    #------------------------------------------------------------------
+    # timing 에 메타데이터 해석 결과를 싣는다 — 화면이 조건 칩 · "조건을 풀어 찾음" 을 보인다(§14)
+    #------------------------------------------------------------------
+    def _meta_timing(self, timing, mp):
+        if mp is None:
+            return timing
+        timing = dict(timing)
+        timing["meta"] = {"chips": mp["chips"], "relaxed": mp["relaxed"], "query": mp["query"],
+                          "docs": None if mp["docs"] is None else len(mp["docs"]), "ms": mp["ms"]}
+        return timing
+
+    #------------------------------------------------------------------
+    # 본문 검색어가 남지 않은 질의 — 조건에 맞는 문서를 근거로 (§13-2)
+    #=> "작년에 고봉수님이 만든 문서" 처럼 조건만 있으면 본문 검색을 하지 않는다. 조건에 맞는 문서를
+    #   가산(작성 > 수정 …) · 수정일 순으로 top_k 개 골라, 문서마다 첫 청크를 근거로 돌려준다.
+    #   본문이 없는 문서(스캔 PDF 등 추출 실패)는 이름만 적은 근거로 둔다.
+    #
+    # -in: mp = _meta_plan 결과 / top_k = 개수
+    #
+    # -out: (chunks, timing) — timing.meta.meta_only = True
+    # -out: error = 저장소 읽기 실패는 예외 전파
+    #------------------------------------------------------------------
+    def _meta_only(self, mp, top_k):
+        import time
+
+        from ..index.indexer import load_state
+        from ..meta import query as meta_query
+
+        t0 = time.perf_counter()
+        from ..meta.hook import data_dir
+        rows, _ = meta_query._rows(meta_query.S.default_path(data_dir()))
+        cand = mp["docs"] if mp["docs"] is not None else set(mp["boosts"])
+        order = sorted(cand, key=lambda k: (-mp["boosts"].get(k, 0.0), -(rows.get(k, (None,) * 5)[4] or 0)))
+        docs = load_state().get("docs", {})
+        picked = order[:top_k]
+        first_ids = [docs[k]["ids"][0] for k in picked if k in docs and docs[k].get("ids")]
+        payloads = self._fetch_payloads(first_ids) if first_ids else {}
+        by_path = {pl.get("doc_path"): (pid, pl) for pid, pl in payloads.items() if pl}
+        chunks = []
+        for k in picked:
+            pid, pl = by_path.get(k, (None, {}))
+            name = os.path.basename(k)
+            chunks.append({"id": pid, "text": pl.get("text") or "[{}] (본문을 읽지 못한 문서 — 이름 · 속성으로 찾음)".format(name),
+                           "doc_name": pl.get("doc_name", name), "doc_path": k, "folder": pl.get("folder", ""),
+                           "chunk_idx": pl.get("chunk_idx", 0), "section_id": pl.get("section_id")})
+        ms = round((time.perf_counter() - t0) * 1000 + mp["ms"], 1)
+        timing = {"embed_ms": 0.0, "dense_ms": 0.0, "bm25_ms": 0.0, "fuse_ms": 0.0, "total_ms": ms}
+        timing = self._meta_timing(timing, mp)
+        timing["meta"]["meta_only"] = True
+        return chunks, timing
+
+    #------------------------------------------------------------------
     # 폴더 범위 준비 (폴더 한정 검색 설계서 §5)
     #=> 1) 벡터 한 벌이 있으면(없으면 지금 만든다) 폴더 표시와 허용 점 id 를 꺼낸다 — 빠른 길
     #   2) 한 벌을 한도 때문에 못 만들었으면 상태 파일로 그 폴더 문서를 골라
     #      Qdrant 필터로 찾는다 — 느리지만 메모리를 안 쓰는 길
     #
-    # -in: folder = 폴더
+    #   메타데이터 필터(only)가 있으면 그 문서들로 더 좁힌다(메타데이터 검색 설계서 §13-1 — 같은 마스크 방식)
+    #
+    # -in: folder = 폴더(None 이면 전체)
+    # -in: only   = 메타데이터 조건에 맞는 문서 경로 집합(None 이면 거르지 않음)
     #
     # -out: dict {via: "matrix"|"filter", n_docs, mask, allow_ids, doc_paths}
     # -out: error = 저장소 읽기 실패는 예외 전파
     #------------------------------------------------------------------
-    def _scope(self, folder):
+    def _scope(self, folder, only=None):
         import numpy as np
 
         from .vector_matrix import norm_dir, under
@@ -506,15 +602,17 @@ class HybridRetriever:
         if self.matrix is not None:
             self.matrix.ensure_built(self.store)
             if self.matrix.ready():
-                m, n_docs = self.matrix.mask(folder)
+                # 메타데이터 필터면 그 문서들만(폴더가 있으면 그 안에서), 아니면 폴더
+                m, n_docs = self.matrix.mask_docs(only, folder) if only is not None else self.matrix.mask(folder)
                 return {"via": "matrix", "n_docs": n_docs, "mask": m,
                         "allow_ids": self.matrix.allowed_ids(m), "doc_paths": None}
 
-        # 느린 길 — 상태 파일에서 그 폴더 문서와 점 id 를 모은다
+        # 느린 길 — 상태 파일에서 그 폴더(· 메타데이터 필터) 문서와 점 id 를 모은다
         from ..index.indexer import load_state
-        f = norm_dir(folder)
+        f = norm_dir(folder) if folder else None
+        want = {os.path.normcase(p) for p in only} if only is not None else None
         docs = {k: v for k, v in load_state().get("docs", {}).items()
-                if under(os.path.normcase(k), f)}
+                if (f is None or under(os.path.normcase(k), f)) and (want is None or os.path.normcase(k) in want)}
         ids, no_range = [], []
         for k, meta in docs.items():
             rng = meta.get("ids")

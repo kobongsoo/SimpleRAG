@@ -139,6 +139,23 @@
   #menu button { display: block; width: 100%; text-align: left; padding: 5px 10px; border-radius: 5px; }
   #menu button:hover { background: var(--hover); }
 
+  /* ── 조건 칩 (메타데이터 검색 설계서 §14) — 실선 = 필터, 점선 = 가산, 흐린 줄 = 끈 조건 ── */
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 5px 10px; background: var(--surface);
+    border-bottom: 1px solid var(--rule); font-size: calc(var(--fs) * .85); }
+  .chips .lbl { color: var(--muted); margin-right: 2px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--brand); color: var(--ink); border-radius: 999px;
+    padding: 1px 4px 1px 9px; background: var(--surface); white-space: nowrap; }
+  .chip.soft { border-style: dashed; border-color: var(--muted); color: var(--ink2); }
+  .chip.off { border-color: var(--rule); color: var(--muted); }
+  .chip.off .lb { text-decoration: line-through; }
+  .chip button { border-radius: 999px; min-width: 18px; height: 18px; line-height: 18px; color: var(--muted); font-size: 11px; }
+  .chip button:hover { background: var(--hover); color: var(--ink); }
+  .chip button.w { padding: 0 6px; font-size: calc(var(--fs) * .78); border: 1px solid var(--rule); }
+  .chips .note { color: var(--muted); }
+  .chips .relax { color: #b26a00; }
+  .who { font-weight: normal; color: var(--muted); font-size: calc(var(--fs) * .82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    flex: 0 3 auto; min-width: 0; max-width: 30%; }
+
   /* ── 좁은 패널 배치 ── */
   body.panel .addr { flex-wrap: wrap; }
   body.panel .phead { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); }
@@ -221,6 +238,7 @@
     <span class="sp"></span>
     <button class="ai" id="askai" title="같은 검색어로 AI 답 받기 (Shift+Enter)">✦ AI에게 묻기</button>
   </div>
+  <div class="chips hidden" id="chips"></div>
   <div class="main" id="main">
     <div class="side" id="side"></div>
     <div class="list" id="list"></div>
@@ -243,6 +261,7 @@
     <button class="ibtn" id="pclose" title="닫기 (Esc)">✕</button>
   </div>
   <div class="psearch"><div class="search"><span>🔍</span><input id="pq" placeholder="찾을 내용 — Enter" autocomplete="off" spellcheck="false"><button class="go" id="pgo">찾기</button></div></div>
+  <div class="chips hidden" id="pchips"></div>
   <div class="cards" id="cards"></div>
   <div class="st"><span id="pst1">이 폴더(하위 포함)에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)">✦ AI에게 묻기</button></div>
 </div>
@@ -276,6 +295,10 @@ let pendingSelect = null;      // 크게 보기로 넘어온 쪽(결과가 오�
 let pvShown = true;
 let ai = null;                 // AI 답 카드 {q, text, ev, info, err}
 let busy = false;
+// 조건 칩 상태 — 같은 검색어 안에서만 유지(새 검색어면 지운다)
+//   off = 끈 조건 종류 · widen = 기간을 넓힌 햇수 · labels = 끈 칩을 다시 보이려고 기억한 글
+let cond = { q: "", off: [], widen: 0, labels: {} };
+const CHIP_ICON = { person: "👤", date: "📅", format: "📄", recv: "📨", scanned: "🖨", type: "🗂", form: "🧾" };
 
 // 최근 검색 — 이 PC 의 이 화면에만 남긴다(지워져도 동작에는 영향 없음)
 //   HTML 글로 띄운 화면은 localStorage 가 막혀 있을 수 있어(실측) 메모리 목록을 함께 둔다
@@ -293,6 +316,8 @@ function remember(q) {
 function runFind(q, push) {
   q = (q || "").trim();
   if (!q || busy) return;
+  // 다른 검색어면 조건 칩에서 고친 것을 버린다
+  if (q !== cond.q) cond = { q, off: [], widen: 0, labels: {} };
   lastQ = q;
   busy = true;
   if (LAYOUT === "window") { $("q").value = q; } else { $("pq").value = q; }
@@ -303,7 +328,7 @@ function runFind(q, push) {
   }
   remember(q);
   setStatus("찾는 중…");
-  send({ type: "find", q, folder: scope });
+  send({ type: "find", q, folder: scope, off: cond.off, widen: cond.widen });
   drawNav();
 }
 
@@ -313,6 +338,7 @@ function onResults(r) {
   if (!r || r.q !== lastQ) { /* 지난 검색의 늦은 결과는 버린다 */ if (r && r.q) return; }
   if (!r.ok) {
     docs = []; done = null;
+    drawChips();
     showMessage("<b>찾지 못했습니다</b><br>" + esc((r.done && r.done.error) || r.why || "워커가 응답하지 않았습니다"));
     setStatus((r.done && r.done.error) || r.why || "찾지 못함", true);
     return;
@@ -329,6 +355,7 @@ function onResults(r) {
     }
   }
   done = r.done || {};
+  drawChips();
   openDocs = new Set();
   moreDocs = new Set();
   const first = docs.find((d) => d.pages.length);
@@ -362,6 +389,39 @@ function status() {
     $("pst1").textContent = `문서 ${docs.length}개 · 위치 ${places}곳 · ${sec}`;
   }
 }
+
+// ── 조건 칩 ─────────────────────────────────────────────
+//   ✕ = 그 조건 끄고 다시 찾기 · ↺ = 다시 켜기 · ±1년 = 기간 넓히기(연도가 파일 날짜가 아니라 내용일 때)
+function drawChips() {
+  const box = LAYOUT === "window" ? $("chips") : $("pchips");
+  const m = done && done.meta;
+  if (!m && !cond.off.length) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  let h = `<span class="lbl">조건</span>`;
+  const seen = {};
+  for (const c of (m ? m.chips : [])) {
+    // 같은 종류 칩이 여럿(사람 둘)이면 끈 칩 글은 이어 붙여 기억한다
+    cond.labels[c.kind] = seen[c.kind] ? cond.labels[c.kind] + " · " + c.label : c.label;
+    seen[c.kind] = true;
+    const tip = c.mode === "filter" ? "이 조건에 맞는 문서만 찾습니다" : "이 조건에 맞는 문서를 위로 올립니다";
+    const wide = c.kind === "date" && cond.widen < 3 ? `<button class="w" data-widen="1" title="기간을 앞뒤 1년 더 넓혀 다시 찾기">±1년</button>` : "";
+    h += `<span class="chip ${c.mode === "filter" ? "" : "soft"}" title="${tip}"><span class="lb">${CHIP_ICON[c.kind] || ""} ${esc(c.label)}</span>${wide}<button data-off="${esc(c.kind)}" title="이 조건을 끄고 다시 찾기">✕</button></span>`;
+  }
+  for (const k of cond.off) {
+    h += `<span class="chip off" title="끈 조건 — ↺ 로 다시 켭니다"><span class="lb">${CHIP_ICON[k] || ""} ${esc(cond.labels[k] || k)}</span><button data-on="${esc(k)}" title="다시 켜기">↺</button></span>`;
+  }
+  if (m && m.docs != null) h += `<span class="note">· 문서 ${m.docs}개에서</span>`;
+  if (m && m.relaxed && m.relaxed.length) h += `<span class="relax">· 맞는 문서가 없어 조건을 풀어 찾음: ${esc(m.relaxed.join(", "))}</span>`;
+  box.innerHTML = h;
+  box.classList.remove("hidden");
+  const again = () => { if (lastQ) runFind(lastQ, false); };
+  box.querySelectorAll("[data-off]").forEach((b) => { b.onclick = () => { cond.off.push(b.dataset.off); again(); }; });
+  box.querySelectorAll("[data-on]").forEach((b) => { b.onclick = () => { cond.off = cond.off.filter((k) => k !== b.dataset.on); again(); }; });
+  box.querySelectorAll("[data-widen]").forEach((b) => { b.onclick = () => { cond.widen += 1; again(); }; });
+}
+// 문서 줄 관련인 — "👤 고봉수 · 조강래" (작성 → 수정 순, 최대 3명)
+function whoOf(m) { return m.people && m.people.length ? "👤 " + m.people.join(" · ") : ""; }
+// 문서 줄 풍선 도움말 — 경로 + (파일 이름과 다르면) 문서 제목
+function tipOf(m) { return m.doc_path + (m.title && !m.doc_name.includes(m.title) ? "\n제목: " + m.title : ""); }
 
 function setStatus(t, err) {
   const el = LAYOUT === "window" ? $("st1") : $("pst1");
@@ -428,6 +488,8 @@ function render() {
   let h = aiCard() + `<div class="cols"><span>이름 · 위치 · 내용</span><span>쪽</span><span>관련도</span><span>수정한 날짜</span></div>`;
   const byName = docs.filter((d) => d.meta.name_hit);
   const content = docs.filter((d) => d.pages.length);
+  // 조건만 있는 질의(본문 검색어 없음) — 조건에 맞는 문서 줄만 온다
+  const byMeta = docs.filter((d) => d.meta.meta_hit && !d.pages.length && !d.meta.name_hit);
   const places = content.reduce((n, d) => n + d.pages.length, 0);
   if ($("group").value === "page") {
     // 쪽 목록 — 모든 쪽 줄을 관련도 순으로 한 줄씩(문서 이름을 함께)
@@ -437,6 +499,10 @@ function render() {
     h += `<div class="grp">내용 일치 — 위치 ${all.length}곳</div>`;
     for (const { d, p } of all) h += pageRow(d, p, true);
   } else {
+    if (byMeta.length) {
+      h += `<div class="grp">조건 일치 (${byMeta.length})</div>`;
+      for (const d of sortedDocs(byMeta)) h += docRow(d, true, "조건 일치");
+    }
     if (byName.length) {
       h += `<div class="grp">파일 이름 일치 (${byName.length})</div>`;
       for (const d of sortedDocs(byName)) h += docRow(d, true);
@@ -470,14 +536,15 @@ function render() {
   });
   if (selIdx >= 0 && selIdx < rows.length) markSel();
 }
-function docRow(d, nameGroup) {
+function docRow(d, nameGroup, why) {
   const i = rows.push({ kind: "doc", doc: d }) - 1;
   const m = d.meta;
   const open = openDocs.has(m.doc_path);
   const tw = d.pages.length && !nameGroup ? `<span class="tw" data-tw="${i}">${open ? "▾" : "▸"}</span>` : `<span class="tw"></span>`;
-  const cnt = nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length}곳`;
-  return `<div class="r doc ${m.low ? "low" : ""}" data-row="${i}" title="${esc(m.doc_path)}">
-    <span class="n">${tw}${docIcon(m.doc_path)}<span class="t">${esc(m.doc_name)}</span><span class="cnt">${cnt}</span></span>
+  const cnt = why ? `· ${why}` : nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length}곳`;
+  const who = whoOf(m);
+  return `<div class="r doc ${m.low ? "low" : ""}" data-row="${i}" title="${esc(tipOf(m))}">
+    <span class="n">${tw}${docIcon(m.doc_path)}<span class="t">${esc(m.doc_name)}</span><span class="cnt">${cnt}</span>${who ? `<span class="who">${esc(who)}</span>` : ""}</span>
     <span></span><span>${bars(m.score, m.low)}</span><span class="date">${dateOf(m)}</span></div>`;
 }
 function pageRow(d, p, withDoc) {
@@ -711,8 +778,8 @@ function renderCards() {
       `<button class="${k === pick ? "on" : ""}" data-chip="${di}:${k}" title="${esc(p.section || "")}">${p.page != null ? "p." + p.page : "·"}</button>`).join("")
       + (d.pages.length > 8 ? `<button data-big="1">+${d.pages.length - 8}</button>` : "");
     const p = d.pages[pick];
-    h += `<div class="card ${m.low ? "low" : ""}" data-row="${di}"><div class="t">${docIcon(m.doc_path)}<span title="${esc(m.doc_path)}">${esc(m.doc_name)}</span></div>
-      <div class="m">${m.name_hit && !d.pages.length ? "이름에 검색어" : d.pages.length + "곳"} · ${bars(m.score, m.low)}</div>
+    h += `<div class="card ${m.low ? "low" : ""}" data-row="${di}"><div class="t">${docIcon(m.doc_path)}<span title="${esc(tipOf(m))}">${esc(m.doc_name)}</span></div>
+      <div class="m">${m.meta_hit && !d.pages.length ? "조건 일치" : m.name_hit && !d.pages.length ? "이름에 검색어" : d.pages.length + "곳"} · ${bars(m.score, m.low)}${whoOf(m) ? " · " + esc(whoOf(m)) : ""}</div>
       ${d.pages.length ? `<div class="pgs">${chips}</div>` : ""}
       ${p ? `<div class="sn">${p.section ? `<b>${esc(p.section)}</b>` : ""}${marked(p.snippet, p.marks)}
         <div class="acts"><button data-open="${di}:${pick}">${p.page != null ? p.page + "쪽 " : ""}열기 ↗</button><button data-reveal="${di}">폴더에서 보기</button></div></div>` : ""}

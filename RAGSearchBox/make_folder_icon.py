@@ -4,7 +4,8 @@
 #     moai-folder.ico — Windows 11 노란 폴더 + 오른쪽 아래 빨간 M 배지
 #     moai-drive.ico  — 회색 드라이브 + 같은 배지
 #   폴더 모양을 지켜야 폴더로 읽히므로 배지만 덧붙인다.
-#   작은 크기(16 · 20 · 24)는 배지를 크게 키운 별도 그림이다 — 큰 그림을 줄이면 M 이 뭉개진다.
+#   작은 크기(폴더 16~48 · 드라이브 16~24)는 배지를 크게 키운 별도 그림이다 — 큰 그림을 줄이면 M 이 뭉개지고
+#   탐색기 목록의 작은 아이콘에서 눈에 띄지 않는다.
 #   그림 파일을 따로 관리하지 않고 코드로 그려 두면 색 · 크기를 바꿀 때 다시 돌리기만 하면 된다.
 #
 #   사용: .venv\Scripts\python.exe RAGSearchBox\make_folder_icon.py
@@ -80,7 +81,9 @@ def _badge(d, s, grid, outer, inner, m, w):
 
 #------------------------------------------------------------------
 # 폴더 한 장 그리기
-#=> 32px 이상은 64칸 설계(배지가 폴더의 오른쪽 아래 절반), 그보다 작으면 16칸 설계(배지를 더 크게).
+#=> 64px 이상은 64칸 설계(배지가 폴더의 오른쪽 아래 절반), 그보다 작으면 16칸 설계(배지를 더 크게).
+#   탐색기 목록 · 자세히 보기의 작은 아이콘은 화면 배율 200% 에서 32~40px 장을 쓴다 — 64칸 설계로는
+#   배지가 폴더의 절반이라 눈에 잘 띄지 않았다(사용자 화면). 그래서 48px 까지 큰 배지 설계를 쓴다.
 #    1) 뒤판(탭 있는 모양) → 앞판 → 앞판 윗선
 #    2) M 배지
 #    3) LANCZOS 로 줄인다
@@ -94,7 +97,7 @@ def draw_folder(size):
     s = size * SUPER
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    if size >= 32:
+    if size >= 64:
         g = 64
         k = s / g
         # 뒤판 — 왼쪽 위에 탭이 솟은 모양(탭과 몸통 두 사각을 겹친다)
@@ -108,11 +111,12 @@ def draw_folder(size):
     else:
         g = 16
         k = s / g
-        d.rounded_rectangle(_sc([1, 2.5, 7.5, 6], s, g), radius=1 * k, fill=BACK)
-        d.rounded_rectangle(_sc([1, 4, 15, 14], s, g), radius=1 * k, fill=BACK)
-        d.rounded_rectangle(_sc([1, 5.5, 15, 14], s, g), radius=1 * k, fill=FRONT)
-        _badge(d, s, g, [6.5, 6, 16, 15.5], [7.3, 6.8, 15.3, 14.8],
-               [(9, 13.2), (9, 8.6), (11.3, 11.2), (13.6, 8.6), (13.6, 13.2)], 1.25)
+        d.rounded_rectangle(_sc([0, 2, 6.5, 5.5], s, g), radius=1 * k, fill=BACK)
+        d.rounded_rectangle(_sc([0, 3.5, 13, 12.5], s, g), radius=1 * k, fill=BACK)
+        d.rounded_rectangle(_sc([0, 5, 13, 12.5], s, g), radius=1 * k, fill=FRONT)
+        # 배지를 폴더의 2/3 크기로 — 작은 아이콘에서도 빨간 M 이 먼저 눈에 들어오게
+        _badge(d, s, g, [4.6, 4.6, 16, 16], [5.4, 5.4, 15.2, 15.2],
+               [(7.6, 13.2), (7.6, 7.6), (10.3, 10.9), (13, 7.6), (13, 13.2)], 1.6)
     return img.resize((size, size), Image.LANCZOS)
 
 

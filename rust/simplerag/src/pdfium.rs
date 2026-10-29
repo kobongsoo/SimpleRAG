@@ -29,6 +29,11 @@ struct Api {
     get_text: unsafe extern "C" fn(TextPage, i32, i32, *mut u16) -> i32,
     text_index_from_char: unsafe extern "C" fn(TextPage, i32) -> i32,
     font_size: unsafe extern "C" fn(TextPage, i32) -> f64,
+    // 메타데이터 · 책갈피 · 오류 코드 (meta::extract 의 pdf_meta 용)
+    get_meta_text: unsafe extern "C" fn(Doc, *const i8, *mut c_void, u32) -> u32,
+    bm_first_child: unsafe extern "C" fn(Doc, *mut c_void) -> *mut c_void,
+    bm_next_sibling: unsafe extern "C" fn(Doc, *mut c_void) -> *mut c_void,
+    last_error: unsafe extern "C" fn() -> u32,
 }
 
 // Api 는 잠금 안에서만 쓰므로 스레드 사이로 옮겨도 안전하다
@@ -77,6 +82,10 @@ fn load() -> Result<Mutex<Api>, String> {
             get_text: sym!(b"FPDFText_GetText\0"),
             text_index_from_char: sym!(b"FPDFText_GetTextIndexFromCharIndex\0"),
             font_size: sym!(b"FPDFText_GetFontSize\0"),
+            get_meta_text: sym!(b"FPDF_GetMetaText\0"),
+            bm_first_child: sym!(b"FPDFBookmark_GetFirstChild\0"),
+            bm_next_sibling: sym!(b"FPDFBookmark_GetNextSibling\0"),
+            last_error: sym!(b"FPDF_GetLastError\0"),
             _lib: lib,
         };
         Ok(Mutex::new(api))
@@ -196,6 +205,125 @@ unsafe fn text_range(a: &Api, tp: TextPage, count_all: i32) -> String {
     let out_count = (a.get_text)(tp, index, count, buf.as_mut_ptr());
     let used = if out_count > 0 { (out_count as usize - 1).min(buf.len()) } else { 0 };
     char::decode_utf16(buf[..used].iter().copied()).filter_map(|r| r.ok()).collect()
+}
+
+//------------------------------------------------------------------
+// PDF 속성 묶음 (meta::extract::pdf_meta 용 — pypdfium2 로 읽던 값과 같다)
+// -필드: info       = Info 사전 (키, 값) — 값이 빈 것은 뺀다(get_metadata_dict(skip_empty=True))
+// -필드: pages      = 쪽 수 / toc = 책갈피 수(깊이 2까지, get_toc(max_depth=2))
+// -필드: text_chars = 앞 3쪽 글자 중 공백이 아닌 글자 수(스캔 판정)
+//------------------------------------------------------------------
+pub struct PdfMeta {
+    pub info: Vec<(String, String)>,
+    pub pages: i64,
+    pub toc: i64,
+    pub text_chars: i64,
+}
+
+// pypdfium2 ErrorToStr 와 같은 오류 이름
+fn err_str(code: u32) -> &'static str {
+    match code {
+        0 => "Success",
+        1 => "Unknown error",
+        2 => "File access error",
+        3 => "Data format error",
+        4 => "Incorrect password error",
+        5 => "Unsupported security scheme error",
+        6 => "Page not found or content error",
+        _ => "Unknown error",
+    }
+}
+
+//------------------------------------------------------------------
+// PDF 속성 읽기 — Info 사전 · 쪽 수 · 책갈피 수 · 앞 3쪽 글자 수
+//=> pypdfium2 판과 같은 순서 · 같은 실패 문구로 읽는다.
+//    1) 문서 열기 — 쪽 수가 1 미만이면 "Failed to load document (PDFium: …)."
+//    2) Title · Author · Subject · Keywords · Creator · Producer · CreationDate · ModDate 중
+//       Python 이 쓰는 여섯 개만 FPDF_GetMetaText 로(UTF-16LE 엄격 풀기 — 틀리면 실패)
+//    3) 책갈피 — 같은 책갈피를 다시 만나면 멈춘다(순환 참조), 깊이 0 · 1 만 센다
+//    4) 앞 3쪽 get_text_range() 에서 공백(파이썬 \s)을 뺀 글자 수
+//
+// -in: path = PDF 경로
+//
+// -out: Ok(PdfMeta)
+// -out: error = DLL 적재 실패 · 열기 실패 · 쪽 열기 실패면 Err("PdfiumError: …" 꼴)
+//------------------------------------------------------------------
+pub fn meta_info(path: &str) -> Result<PdfMeta, String> {
+    let data = std::fs::read(path).map_err(|e| format!("OSError: {}", e))?;
+    let m = api()?;
+    let a = m.lock().unwrap_or_else(|p| p.into_inner());
+    unsafe {
+        let doc = (a.load_mem)(data.as_ptr() as *const c_void, data.len(), std::ptr::null());
+        if doc.is_null() || (a.page_count)(doc) < 1 {
+            let code = (a.last_error)();
+            if !doc.is_null() {
+                (a.close_doc)(doc);
+            }
+            return Err(format!("PdfiumError: Failed to load document (PDFium: {}).", err_str(code)));
+        }
+        let res = (|| -> Result<PdfMeta, String> {
+            let mut info = vec![];
+            for key in ["Title", "Author", "Creator", "Producer", "CreationDate", "ModDate"] {
+                let k = format!("{}\0", key);
+                let n = (a.get_meta_text)(doc, k.as_ptr() as *const i8, std::ptr::null_mut(), 0);
+                if n <= 2 {
+                    continue;
+                }
+                let mut buf = vec![0u8; n as usize];
+                (a.get_meta_text)(doc, k.as_ptr() as *const i8, buf.as_mut_ptr() as *mut c_void, n);
+                let units: Vec<u16> = buf[..n as usize - 2].chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect();
+                if (n as usize - 2) % 2 != 0 {
+                    return Err("UnicodeDecodeError: 'utf-16-le' codec can't decode byte: truncated data".into());
+                }
+                let s: String = char::decode_utf16(units.iter().copied()).collect::<Result<String, _>>()
+                    .map_err(|_| "UnicodeDecodeError: 'utf-16-le' codec can't decode bytes: illegal UTF-16 surrogate".to_string())?;
+                if !s.is_empty() {
+                    info.push((key.to_string(), s));
+                }
+            }
+            let pages = (a.page_count)(doc) as i64;
+            // 책갈피 수 — get_toc(max_depth=2)
+            let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            fn walk(a: &Api, doc: Doc, parent: *mut c_void, level: i32, seen: &mut std::collections::HashSet<usize>) -> i64 {
+                let mut n = 0;
+                let mut bm = unsafe { (a.bm_first_child)(doc, parent) };
+                while !bm.is_null() {
+                    if !seen.insert(bm as usize) {
+                        break;
+                    }
+                    n += 1;
+                    if level < 1 {
+                        n += walk(a, doc, bm, level + 1, seen);
+                    }
+                    bm = unsafe { (a.bm_next_sibling)(doc, bm) };
+                }
+                n
+            }
+            let toc = walk(&a, doc, std::ptr::null_mut(), 0, &mut seen);
+            let mut chars = 0i64;
+            for i in 0..pages.min(3) {
+                let page = (a.load_page)(doc, i as i32);
+                if page.is_null() {
+                    return Err("PdfiumError: Failed to load page.".into());
+                }
+                let tp = (a.text_load)(page);
+                if tp.is_null() {
+                    (a.close_page)(page);
+                    return Err("PdfiumError: Failed to load text page.".into());
+                }
+                let n = (a.count_chars)(tp);
+                let t = text_range(&a, tp, n);
+                // 공백만 있는 글자층은 스캔본과 같으니 공백을 빼고 센다
+                chars += t.chars().filter(|c| !crate::pyutil::is_space(*c)).count() as i64;
+                (a.text_close)(tp);
+                (a.close_page)(page);
+            }
+            Ok(PdfMeta { info, pages, toc, text_chars: chars })
+        })();
+        (a.close_doc)(doc);
+        res
+    }
 }
 
 //------------------------------------------------------------------

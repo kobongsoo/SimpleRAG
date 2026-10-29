@@ -14,6 +14,7 @@ mod jobs;
 mod log;
 mod monitor;
 mod panel;
+mod people;
 mod precision;
 mod scope;
 mod settings;
@@ -90,6 +91,10 @@ struct InfoWin {
     syn_msg: String,
     syn_done: Arc<Mutex<Option<String>>>,
     syn_running: Arc<std::sync::atomic::AtomicBool>,
+    // 사람 탭 마지막 결과 글 · meta people 명령 뒤 스레드가 남긴 소식 · 도는 중인가 (동의어 칸과 같은 방식)
+    ppl_msg: String,
+    ppl_done: Arc<Mutex<Option<String>>>,
+    ppl_running: Arc<std::sync::atomic::AtomicBool>,
     // 마지막 정밀 모드 바꾸기 결과(체크 아래 안내 줄)
     prec_msg: String,
     // 마지막 이어서 묻기(멀티턴) 바꾸기 결과
@@ -389,7 +394,9 @@ impl App {
                             return true;
                         }
                         w.ensure_started();
-                        let req = json!({"q": q, "folder": folder});
+                        // 조건 칩에서 끈 조건 · 넓힌 기간(메타데이터 검색 설계서 §14)을 함께 넘긴다
+                        let req = json!({"q": q, "folder": folder, "off": m["off"].as_array().cloned().unwrap_or_default(),
+                                         "widen": m["widen"].as_i64().unwrap_or(0)});
                         let qq = q.clone();
                         w.command(format!("/find {}", worker::ascii_json(&req)), Box::new(move |mut r: Value| {
                             r["q"] = json!(qq);
@@ -1213,6 +1220,11 @@ impl App {
             let (n_miss, n_ok) = synonyms::counts(&home);
             info["syn"] = json!({"rows": rows, "n_left": n_left, "approved": synonyms::approved_pairs(&home),
                                  "note": synonyms::note(n_miss, n_left, n_ok, &self.info.syn_msg)});
+            // 사람 탭 — meta people 명령이 끝났으면 그 소식을 결과 글로 옮긴다
+            if let Some(m) = self.info.ppl_done.lock().unwrap().take() {
+                self.info.ppl_msg = m;
+            }
+            info["people"] = people::info(&home, &self.info.ppl_msg);
         }
         info
     }
@@ -1280,6 +1292,64 @@ impl App {
             }
         };
         format!("후보를 만드는 중입니다 ({})", how)
+    }
+
+    //------------------------------------------------------------------
+    // 설정 창 사람 탭 — "simplerag-rs meta people …" 를 뒤에서 돌린다 (메타데이터 검색 설계서 §7-2 · 6단계)
+    //=> people.yaml 쓰기와 다시 정규화(문서 2천여 개에 1초 안팎)는 SimpleRAG 가 한다 — 글 모양 · 규칙을 한 곳에.
+    //   meta.sqlite 만 고치고 벡터 인덱스는 건드리지 않으므로 워커가 떠 있어도 함께 돌려도 된다.
+    //   끝나면 명령의 첫 줄을 소식으로 남긴다(다음 갱신 때 사람 탭 안내 줄에 보인다).
+    //
+    // -in: args = meta people 뒤 인자들(예: ["approve", "bong9", "고봉수"])
+    // -out: 지금 보일 안내 글
+    //------------------------------------------------------------------
+    fn people_cmd(&mut self, args: Vec<String>) -> String {
+        use std::sync::atomic::Ordering;
+        if self.cmd.is_empty() {
+            return "SimpleRAG 를 찾지 못했습니다".into();
+        }
+        if self.info.ppl_running.load(Ordering::SeqCst) {
+            return "앞 명령을 처리하는 중입니다 — 잠시 뒤 다시 누르세요".into();
+        }
+        self.info.ppl_running.store(true, Ordering::SeqCst);
+        let mut cmd = self.cmd.clone();
+        cmd.push("meta".into());
+        cmd.push("people".into());
+        cmd.extend(args.iter().cloned());
+        crate::info!("app", "사람 사전: {}", args.join(" "));
+        let (done, running) = (self.info.ppl_done.clone(), self.info.ppl_running.clone());
+        let suggest = args.first().map(|a| a == "suggest").unwrap_or(false);
+        std::thread::spawn(move || {
+            let mut c = std::process::Command::new(&cmd[0]);
+            c.args(&cmd[1..]).stdin(std::process::Stdio::null());
+            if let Some(d) = std::path::Path::new(&cmd[0]).parent() {
+                c.current_dir(d);
+            }
+            {
+                use std::os::windows::process::CommandExt;
+                c.creation_flags(0x0800_0000);
+            }
+            let msg = match c.output() {
+                Ok(o) => {
+                    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+                    let first = out.lines().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("").to_string();
+                    if !o.status.success() {
+                        let err = String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("").trim().to_string();
+                        format!("처리하지 못했습니다: {}", if first.is_empty() { err } else { first })
+                    } else if suggest {
+                        // "별칭 후보 N개 (점수 순 …)" → 짧게
+                        format!("{} — 아래에서 고르세요", first.split(" (").next().unwrap_or(&first))
+                    } else {
+                        first
+                    }
+                }
+                Err(e) => format!("SimpleRAG 를 실행하지 못했습니다: {}", e),
+            };
+            crate::info!("app", "사람 사전 결과: {}", msg);
+            *done.lock().unwrap() = Some(msg);
+            running.store(false, Ordering::SeqCst);
+        });
+        if suggest { "별칭 후보를 찾는 중입니다…".into() } else { "적는 중입니다…".into() }
     }
 
     fn refresh_info(&mut self) {
@@ -1405,6 +1475,22 @@ impl App {
             }
             "syn_msg" => self.info.syn_msg = m["msg"].as_str().unwrap_or("").to_string(),
             "syn_suggest" => self.info.syn_msg = self.suggest_synonyms(),
+            // 사람 탭 — [맞음] · [아님] · [빼기] · [나 저장] · [후보 만들기]
+            "ppl_approve" | "ppl_reject" | "ppl_remove" | "ppl_me" | "ppl_suggest" => {
+                let a = |k: &str| m[k].as_str().unwrap_or("").trim().to_string();
+                let args: Vec<String> = match m["type"].as_str().unwrap_or("") {
+                    "ppl_approve" => vec!["approve".into(), a("alias"), a("name")],
+                    "ppl_reject" => vec!["reject".into(), a("alias"), a("name")],
+                    "ppl_remove" => vec!["remove".into(), a("alias")],
+                    "ppl_me" => vec!["me".into(), a("name")],
+                    _ => vec!["suggest".into()],
+                };
+                self.info.ppl_msg = if args.iter().skip(1).any(|x| x.is_empty()) {
+                    "별칭과 이름을 모두 적으세요".into()
+                } else {
+                    self.people_cmd(args)
+                };
+            }
             "open" => self.on_tray("open"),
             "hide" => {
                 self.info.visible = false;
@@ -1659,6 +1745,7 @@ fn main() {
         panel: Panel::new(pwin, pview, &s),
         info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
                        syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                       ppl_msg: String::new(), ppl_done: Arc::new(Mutex::new(None)), ppl_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                        prec_msg: String::new(), mt_msg: String::new() },
         history: history::load(&history_path),
         history_path,

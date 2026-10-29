@@ -21,6 +21,7 @@ import time
 from .. import config
 from ..chunk import split_structured, split_text
 from ..extract import build_extractor, extract_text
+from ..meta import hook as meta_hook      # 문서 메타데이터(meta.sqlite)를 색인과 함께 고친다
 
 
 # 인덱싱 대상 확장자. 여기 없는 것은 조용히 건너뛴다.
@@ -343,6 +344,8 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
         prev["mtime"] = int(os.stat(path).st_mtime)
         state.get("failed", {}).pop(key, None)
         save_state(state)
+        # 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
+        meta_hook.synced(key, chash)
         return {"ok": True, "op": "same", "chunks": prev.get("chunks", 0)}
     # 처음 보는 경로인데 같은 파일이 다른 자리에서 사라졌다 — 옮긴 것이다(경로만 바꾼다)
     if not prev:
@@ -385,6 +388,8 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
         # 같은 실패를 되풀이하지 않도록). 파일이 다시 바뀌면 지문이 달라져 다시 시도한다.
         state.setdefault("failed", {})[key] = {"fingerprint": fp, "why": why, "name": name}
         save_state(state)
+        # 본문을 못 뽑은 문서(스캔 PDF 등)도 이름 · 날짜 · 사람으로는 찾을 수 있게 메타는 남긴다
+        meta_hook.synced(key, chash)
         return {"ok": False, "op": op, "chunks": 0, "why": why, "kept_old": bool(prev)}
 
     # 회귀 감지(결정12): 문자 수 대비 청크가 비정상적으로 적으면 경고한다.
@@ -428,6 +433,7 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
     state.get("failed", {}).pop(key, None)
     mark_changed(state)
     save_state(state)
+    meta_hook.synced(key, chash)
     return {"ok": True, "op": op, "chunks": len(chunks), "n_rows": n_rows}
 
 
@@ -451,6 +457,7 @@ def remove_doc(key, state, store):
     state.get("failed", {}).pop(key, None)
     mark_changed(state)
     save_state(state)
+    meta_hook.removed(key)
     return meta.get("chunks", 0)
 
 
@@ -741,6 +748,8 @@ def copy_doc(src_key, path, fp, state, store):
     state.get("failed", {}).pop(key, None)
     mark_changed(state)
     save_state(state)
+    # 메타도 원본을 베끼고 경로 · 파일 시스템 정보만 새로 읽는다
+    meta_hook.copied(src_key, key, entry.get("content_hash"))
     return {"ok": True, "op": "copied", "chunks": len(payloads), "from": src_key}
 
 
@@ -777,6 +786,7 @@ def move_doc(old_key, path, fp, state, store):
     state["docs"][key] = entry
     state.get("failed", {}).pop(key, None)
     save_state(state)
+    meta_hook.moved(old_key, key)
     return {"ok": True, "op": "moved", "chunks": entry.get("chunks", 0), "from": old_key}
 
 
@@ -824,6 +834,8 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     plan = plan_changes(doc_dir, state, recursive=recursive, allow_delete=allow_delete,
                         rebuild=rebuild)
+    # 메타데이터의 폴더 토큰은 이 인덱싱 폴더 아래 경로로 잡는다
+    meta_hook.set_base(doc_dir)
     files, todo, removed = plan["files"], plan["todo"], plan["removed"]
     delete_blocked = plan["delete_blocked"]
     if plan["skipped"]:
@@ -897,6 +909,9 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
         state["bm25_built_at"] = time.time()
         save_state(state)
         log("BM25 인덱스 {:,}건 구축 {:.1f}s".format(len(all_chunks), build_s))
+
+    # ── 메타데이터 마무리 — 빠진 문서 채우기 · 정리 · 템플릿 상속 판정(전체를 봐야 한다) ──
+    meta_hook.finish(state, log)
 
     for name, why in failed:
         log("  ❌ {} — {}".format(name, why))

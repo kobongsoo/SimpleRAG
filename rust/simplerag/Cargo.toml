@@ -35,4 +35,4 @@ calamine = { version = "0.30", features = ["dates"] }
 libloading = "0.8"
 unicode-normalization = "0.1"
 html-escape = "0.2"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_WindowsProgramming"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_WindowsProgramming", "Win32_System_Registry"] }

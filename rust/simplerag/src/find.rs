@@ -56,10 +56,29 @@ struct Hit {
 // -out: error = 검색 실패 문자열
 //------------------------------------------------------------------
 pub fn find(r: &Retriever, query: &str, folder: Option<&str>, limit: usize) -> Result<(Vec<Value>, Value), String> {
+    find_with(r, query, folder, limit, &crate::meta::query::PlanOpts::default())
+}
+
+//------------------------------------------------------------------
+// 찾기 — 화면 조건 칩에서 끈 조건 · 넓힌 기간을 반영(opts)
+//------------------------------------------------------------------
+pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
+                 opts: &crate::meta::query::PlanOpts) -> Result<(Vec<Value>, Value), String> {
     let t0 = Instant::now();
     let pool = if limit == 0 { POOL } else { limit };
+    // 메타데이터 조건(메타데이터 검색 설계서 §13) — 조건이 없는 질의는 mp 가 None 이라 예전과 똑같다
+    let mp = crate::retrieve::meta_plan_opts(query, folder, opts);
+    let meta_rows = mp.as_ref().and_then(|_| {
+        let home = crate::meta::hook::data_dir();
+        crate::meta::query::rows(&crate::meta::store::default_path(&home)).ok()
+    });
+    if let Some(p) = mp.as_ref().filter(|p| p.meta_only) {
+        return Ok(find_meta_only(p, meta_rows.as_deref(), folder, t0));
+    }
+    let query: &str = mp.as_ref().map(|p| p.query.as_str()).unwrap_or(query);
+    let docs = mp.as_ref().and_then(|p| p.docs.as_ref());
     // dense · BM25 후보도 pool 만큼 넓힌다(설정의 답용 후보 수로는 한 문서에 몰린다)
-    let (chunks, timing) = r.search_rrf_k(query, pool, folder, None, pool)?;
+    let (chunks, timing) = r.search_rrf_docs(query, pool, folder, None, pool, docs)?;
     let ids: Vec<i64> = chunks.iter().map(|c| c.id).collect();
     let payloads = r.store.payloads(&ids)?;
 
@@ -92,7 +111,11 @@ pub fn find(r: &Retriever, query: &str, folder: Option<&str>, limit: usize) -> R
             continue;
         }
         // 리랭커 점수가 없으면 RRF 순위로 줄 세울 값을 만든다(리랭킹한 것보다 항상 아래)
-        let score = scores[i].unwrap_or(-100.0 - i as f64);
+        let mut score = scores[i].unwrap_or(-100.0 - i as f64);
+        // 메타데이터 가산(작성 역할 · 유형 · 양식 · 기간 안) — 문턱(low) 판정은 리랭커 점수 그대로로
+        if let Some(p) = &mp {
+            score += p.boosts.get(pl_str(&pl, "doc_path")).copied().unwrap_or(0.0);
+        }
         let low = match (scores[i], gate) {
             (Some(s), Some(g)) => s < g,
             // 리랭킹하지 않은 후보는 낮다고 단정하지 않는다(점수 순으로 아래에 놓일 뿐)
@@ -138,7 +161,9 @@ pub fn find(r: &Retriever, query: &str, folder: Option<&str>, limit: usize) -> R
         if all_low {
             n_low += 1;
         }
-        lines.push(doc_line(no, key, &name, &kws, query, docs_state.get(key), Some(doc_score(v)), all_low, v.len()));
+        let mut dl = doc_line(no, key, &name, &kws, query, docs_state.get(key), Some(doc_score(v)), all_low, v.len());
+        add_meta(&mut dl, key, meta_rows.as_deref());
+        lines.push(dl);
         seen.push(key.clone());
         // 같은 쪽 청크는 한 줄로 — 가장 점수 높은 청크의 발췌를 쓰고 나머지는 more 로 센다
         let mut page_order: Vec<Option<i64>> = vec![];
@@ -177,6 +202,10 @@ pub fn find(r: &Retriever, query: &str, folder: Option<&str>, limit: usize) -> R
         if name_only >= 5 || seen.contains(key) {
             continue;
         }
+        // 메타데이터 조건이 문서를 좁혔으면 이름 일치도 그 안에서만
+        if docs.map_or(false, |d| !d.contains(key)) {
+            continue;
+        }
         if let Some(f) = folder {
             if !crate::commands::under_any(key, &[f.to_string()]) {
                 continue;
@@ -201,7 +230,81 @@ pub fn find(r: &Retriever, query: &str, folder: Option<&str>, limit: usize) -> R
     if let Some(s) = timing.get("synonyms") {
         done["synonyms"] = s.clone();
     }
+    if let Some(p) = &mp {
+        done["meta"] = p.to_json();
+    }
     Ok((lines, done))
+}
+
+//------------------------------------------------------------------
+// 조건만 있는 질의 — 본문 검색 없이 조건에 맞는 문서 줄만 (§13-2)
+//=> 계획의 순서(가산 · 수정일)로 MAX_DOCS 개. 쪽 줄은 없다(어느 쪽이 맞았는지 알 수 없으므로).
+//
+// -in: mp = 계획 / rows = 읽어 둔 meta.sqlite / folder = 범위 폴더 / t0 = 시작 시각
+// -out: (문서 줄들, 마침 줄 — meta.meta_only = true)
+//------------------------------------------------------------------
+fn find_meta_only(mp: &crate::meta::query::Plan, rows: Option<&crate::meta::query::Cached>, folder: Option<&str>,
+                  t0: Instant) -> (Vec<Value>, Value) {
+    let state = indexer::load_state();
+    let docs_state = indexer::docs(&state);
+    let mut lines = vec![];
+    for key in mp.order.iter() {
+        if lines.len() >= MAX_DOCS {
+            break;
+        }
+        // 폴더 한정은 계획에서 이미 걸렀지만, 인덱스에 없는 문서(메타만 남은 것)는 상태 파일 이름으로 보인다
+        if let Some(f) = folder {
+            if !crate::commands::under_any(key, &[f.to_string()]) {
+                continue;
+            }
+        }
+        let meta = docs_state.get(key);
+        let name = meta.and_then(|m| m.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string())
+            .unwrap_or_else(|| pyutil::basename(key).to_string());
+        let mut dl = doc_line(lines.len() + 1, key, &name, &[], "", meta, None, false, 0);
+        dl["meta_hit"] = json!(true);
+        if dl["mtime"].is_null() {
+            // 인덱스 상태에 없는 문서(추출 실패 등) — 메타의 수정일로
+            if let Some(m) = rows.and_then(|c| c.rows.get(key)).and_then(|r| r.modified) {
+                dl["mtime"] = json!(m);
+            }
+        }
+        add_meta(&mut dl, key, rows);
+        lines.push(dl);
+    }
+    let n = lines.len();
+    let mut m = mp.to_json();
+    m["meta_only"] = json!(true);
+    let done = json!({
+        "ms": (t0.elapsed().as_secs_f64() * 1000.0).round(), "docs": n, "places": 0, "low": 0,
+        "rerank_ms": 0, "reranked": 0, "meta": m,
+    });
+    (lines, done)
+}
+
+// 문서 줄에 메타 표시 칸 — 제목(파일 이름과 다를 때) · 관련인(작성 → 수정 순 최대 3명)
+fn add_meta(dl: &mut Value, key: &str, rows: Option<&crate::meta::query::Cached>) {
+    let c = match rows {
+        Some(c) => c,
+        None => return,
+    };
+    if let Some(t) = c.rows.get(key).and_then(|r| r.title.clone()) {
+        dl["title"] = json!(t);
+    }
+    if let Some(ps) = c.by_path.get(key) {
+        let rank = |r: &str| match r { "author" => 0, "editor" => 1, _ => 2 };
+        let mut v: Vec<&(String, String)> = ps.iter().collect();
+        v.sort_by_key(|(_, r)| rank(r));
+        let mut names: Vec<String> = vec![];
+        for (n, _) in v {
+            if !names.contains(n) && names.len() < 3 {
+                names.push(n.clone());
+            }
+        }
+        if !names.is_empty() {
+            dl["people"] = json!(names);
+        }
+    }
 }
 
 // 소수 둘째 자리

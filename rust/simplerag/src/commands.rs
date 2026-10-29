@@ -181,6 +181,8 @@ fn rebuild_bm25(app: &App) -> Result<Map<String, Value>, String> {
     let build_s = if texts.is_empty() { 0.0 } else { app.bm25.build(&texts, &ids, &tok)? };
     st.insert("bm25_built_at".into(), pyutil::jf(pyutil::now_ts()));
     indexer::save_state(&st)?;
+    // 자동 인덱싱은 문서 여러 건을 반영한 뒤 /bm25 를 한 번 부른다 — 메타데이터 마무리도 이때
+    crate::meta::hook::finish(&st, &mut |_| {});
     let mut out = obj(json!({"ok": true, "chunks": texts.len(), "orphans": n_orphans}));
     out.insert("build_s".into(), pyutil::jf(pyutil::round_to(build_s, 2)));
     if !logs.is_empty() {

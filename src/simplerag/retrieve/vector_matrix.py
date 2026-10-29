@@ -246,6 +246,33 @@ class VectorMatrix:
             return m, n_docs
 
     #--------------------------------------------------------------
+    # 문서 집합 표시 만들기 (메타데이터 필터 — 메타데이터 검색 설계서 §13-1)
+    #=> 메타데이터 조건에 맞는 문서들의 행에만 True. 폴더를 주면 그 폴더 아래로 더 좁힌다.
+    #   질의마다 집합이 달라 캐시하지 않는다(수천 문서에서 1ms 안쪽).
+    #
+    # -in: paths  = 문서 경로 집합(상태 파일 키와 같은 절대경로)
+    # -in: folder = 폴더(None 이면 전체)
+    #
+    # -out: (마스크 bool 배열, 문서 수)
+    # -out: error = 없음 (행렬이 없으면 (None, 0))
+    #--------------------------------------------------------------
+    def mask_docs(self, paths, folder=None):
+        with self._lock:
+            if not self.ready():
+                return None, 0
+            want = {os.path.normcase(p) for p in paths}
+            f = norm_dir(folder) if folder else None
+            m = np.zeros(len(self.ids), dtype=bool)
+            n_docs = 0
+            for doc, rows in self._doc_rows.items():
+                nd = self._doc_norm.get(doc) or os.path.normcase(doc)
+                if os.path.normcase(doc) in want and (f is None or under(nd, f)):
+                    m[rows] = True
+                    n_docs += 1
+            m &= self.alive
+            return m, n_docs
+
+    #--------------------------------------------------------------
     # 표시 안에서 가장 가까운 청크 찾기
     #
     # -in: qvec = 질의 벡터 (dim,)

@@ -19,6 +19,7 @@ pub mod generate;
 pub mod htmlparse;
 pub mod indexer;
 pub mod legacy;
+pub mod meta;
 pub mod pdfium;
 pub mod pickle;
 pub mod pyutil;

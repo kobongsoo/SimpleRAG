@@ -509,6 +509,14 @@ def render_answer(app, query, top_k=None, max_tokens=None, show_timing=True,
                 elif folder:
                     scope = " · 범위 {}(문서 {}건)".format(
                         os.path.basename(folder.rstrip("\\/")) or folder, timing.get("scope_docs", "?"))
+                # 메타데이터 조건(메타데이터 검색 설계서 §1-1) — "고봉수 (작성) · 2025년 · 작성일 문서 12개에서"
+                meta = timing.get("meta")
+                if meta:
+                    scope += " · 조건 {}{}".format(
+                        " · ".join(c["label"] for c in meta["chips"]),
+                        "(문서 {}개)".format(meta["docs"]) if meta.get("docs") is not None else "")
+                    if meta.get("relaxed"):
+                        scope += " — 조건을 풀어 찾음: " + ", ".join(meta["relaxed"])
                 print("\n── 근거 {}건 ({:.0f}ms){} ─────────────────────".format(
                     len(chunks), timing["total_ms"], scope))
                 # RAGSearchBox 가 근거 [...] 팝업에 전체 본문을 보여 주려고 켠다(콘솔에서는 꺼져 있다)
@@ -928,6 +936,111 @@ def cmd_suggest(args):
 
 
 #------------------------------------------------------------------
+# 메타데이터 명령 (메타데이터 검색 설계서 §17 1단계)
+#=> 문서 속성을 뽑아 정규화하고 <데이터 루트>/meta.sqlite 에 둔다. 모델을 올리지 않는다.
+#    scan    — 폴더 아래 모든 파일의 속성을 읽고(바뀐 파일만) 끝에 다시 정규화
+#    rebuild — 파일을 다시 읽지 않고 raw 로 다시 정규화(규칙 · 별칭 사전을 바꾼 뒤)
+#    stats   — 채움률 · 상속 · 형식 · 사람 상위
+#    show    — 문서 하나의 정규화 값 · 관련인 · 원본 값
+#
+# -in: args = argparse 결과 (meta_cmd, dir, path, db)
+#
+# -out: 0 = 성공, 1 = 실패
+# -out: error = 없음 (폴더 없음 · 문서 없음은 1 로 알림)
+#------------------------------------------------------------------
+def cmd_meta(args):
+    from simplerag.meta import store
+
+    db = args.db or store.default_path()
+    # --db 를 주면 규칙 · 사람 사전도 그 파일 옆에서 읽고 쓴다(시험용 DB 가 데이터 루트를 건드리지 않게)
+    root = os.path.dirname(os.path.abspath(db)) if args.db else config.ROOT
+    conn = store.connect(db)
+    try:
+        if args.meta_cmd == "people":
+            return _meta_people(args, conn, root)
+        if args.meta_cmd == "scan":
+            try:
+                res = store.scan(conn, args.dir, root)
+            except FileNotFoundError as e:
+                print("폴더가 없습니다: {}".format(e))
+                return 1
+            print("메타데이터: 파일 {files}개 · 읽음 {read} · 그대로 {skipped} · 빠짐 {removed} · 실패 {failed} "
+                  "/ 문서 {docs} · 상속 {inherited} · 관련인 {people} / {sec}초".format(**res))
+            print("저장: {}".format(db))
+        elif args.meta_cmd == "rebuild":
+            t0 = time.time()
+            res = store.renormalize(conn, root)
+            print("다시 정규화: 문서 {docs} · 상속 {inherited} · 관련인 {people} / {sec:.1f}초".format(
+                sec=time.time() - t0, **res))
+        elif args.meta_cmd == "stats":
+            print(json.dumps(store.stats(conn), ensure_ascii=False, indent=1))
+        elif args.meta_cmd == "show":
+            got = store.show(conn, args.path)
+            if got is None:
+                print("meta.sqlite 에 없는 문서입니다: {}".format(args.path))
+                return 1
+            print(json.dumps(got, ensure_ascii=False, indent=1))
+        return 0
+    finally:
+        conn.close()
+
+
+#------------------------------------------------------------------
+# 사람 별칭 사전 명령 (메타데이터 검색 설계서 §7-2 · 3단계)
+#=> suggest 로 후보를 만들고, approve · reject 로 고른다. 사전을 바꾸면 곧바로 다시 정규화한다.
+#    suggest              — 후보 만들기(people_candidates.json) · 상위 후보 출력
+#    list                 — 승인한 별칭 · 무시한 짝 · 나
+#    approve <별칭> <이름> — 승인(직접 추가도 같다)  ·  reject <별칭> <이름> — 다시 제안하지 않음
+#    remove <별칭>         — 승인한 별칭 빼기  ·  me <이름> — "나" 정하기(이 PC 계정도 별칭으로)
+#
+# -in: args = argparse 결과 (people_cmd, alias, name) / conn = meta.sqlite / root = 사전 폴더
+#
+# -out: 0 = 성공, 1 = 잘못된 입력
+# -out: error = 사전 쓰기 실패는 OSError 전파
+#------------------------------------------------------------------
+def _meta_people(args, conn, root):
+    from simplerag.meta import people, store
+
+    pc = args.people_cmd
+    if pc == "suggest":
+        cands = people.suggest(conn, root)
+        print("별칭 후보 {}개 (점수 순 — 이름 모양 로마자 5 · 이름 일부 3 · 이니셜 2 + 같은 문서×2 + 파일명)".format(len(cands)))
+        for c in cands[:40]:
+            why = [c["kind"]]
+            if c["cooc"]:
+                why.append("같은 문서 {}건".format(c["cooc"]))
+            if c["path"]:
+                why.append("파일명 {}건".format(c["path"]))
+            print("  {:>3}  {:<22} → {:<6} ({}) 예: {}".format(
+                c["score"], c["alias"][:22], c["name"], " · ".join(why), " / ".join(e[:28] for e in c["examples"][:2])))
+        print("승인: simplerag meta people approve <별칭> <이름>   무시: ... reject <별칭> <이름>")
+        return 0
+    if pc == "list":
+        d = people.load_user(root)
+        print(json.dumps(d, ensure_ascii=False, indent=1))
+        return 0
+    if pc in ("approve", "reject") and not (args.alias and args.name):
+        print("별칭과 이름을 모두 적으세요: meta people {} <별칭> <이름>".format(pc))
+        return 1
+    if pc == "approve":
+        msg = people.approve(root, args.alias, args.name)
+    elif pc == "reject":
+        msg = people.reject(root, args.alias, args.name)
+    elif pc == "remove":
+        msg = people.remove(root, args.alias or "")
+    elif pc == "me":
+        # me 는 이름 하나만 받는다(첫 칸에 적어도 된다)
+        msg = people.set_me(root, args.name or args.alias or "")
+    else:
+        print("알 수 없는 명령: {}".format(pc))
+        return 1
+    print(msg)
+    res = store.renormalize(conn, root)
+    print("다시 정규화: 문서 {docs} · 관련인 {people}".format(**res))
+    return 0
+
+
+#------------------------------------------------------------------
 # 상태 명령
 #=> 인덱스 규모와 마지막 갱신 상황을 보여 준다.
 #------------------------------------------------------------------
@@ -1306,6 +1419,21 @@ def main(argv=None):
     pw.add_argument("--model", default=None, choices=list(config.USER_GEN_MODELS))
     pw.add_argument("--precise", action="store_true", help="정밀 모드(1.7B) 예열")
     pw.set_defaults(func=cmd_warmup)
+
+    pm = sub.add_parser("meta", help="문서 메타데이터(사람 · 날짜 · 제목 · 형식 · 출처) — meta.sqlite")
+    pm.add_argument("--db", default=None, help="meta.sqlite 경로(기본: 데이터 루트)")
+    msub = pm.add_subparsers(dest="meta_cmd", required=True)
+    pms = msub.add_parser("scan", help="폴더 아래 파일 속성 읽기 + 정규화")
+    pms.add_argument("--dir", required=True)
+    msub.add_parser("rebuild", help="파일을 다시 읽지 않고 다시 정규화(규칙 · 별칭 사전 변경 뒤)")
+    msub.add_parser("stats", help="채움률 · 상속 · 형식 · 사람 상위")
+    pmw = msub.add_parser("show", help="문서 하나의 메타데이터")
+    pmw.add_argument("path")
+    pmp = msub.add_parser("people", help="사람 별칭 사전 — suggest · list · approve · reject · remove · me")
+    pmp.add_argument("people_cmd", choices=["suggest", "list", "approve", "reject", "remove", "me"])
+    pmp.add_argument("alias", nargs="?", help="별칭(계정 ID · 영문 이름). me 에서는 이름")
+    pmp.add_argument("name", nargs="?", help="대표 이름(한글)")
+    pm.set_defaults(func=cmd_meta)
 
     _force_utf8_output()       # cp949 로 못 쓰는 문자 때문에 죽지 않게(리다이렉트 대비)
     for w in config.CONFIG_WARNINGS:

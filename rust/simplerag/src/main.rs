@@ -27,6 +27,8 @@ const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,cle
   warmup   예열만 수행                 [--model M] [--precise]
   import   Python 판 인덱스 가져오기   --from <Python 데이터 폴더(예: dist\\simplerag)>
   suggest-synonyms  놓친 질문으로 동의어 사전 후보 뽑기  [--from <질문 jsonl>] [--out <결과 json>] [--no-llm]
+  meta     문서 메타데이터(meta.sqlite)  [--db P] scan --dir <폴더> | rebuild | stats | show <경로>
+           | people suggest|list|approve <별칭> <이름>|reject <별칭> <이름>|remove <별칭>|me <이름>
 ";
 
 // 인자 오류 — argparse 처럼 사용법과 함께 2 로 끝낸다
@@ -178,6 +180,13 @@ fn main() {
         }
     };
     simplerag::embed::ensure_dylib();
+    // 메타데이터 명령은 하위 명령 · 인자 모양이 달라 따로 푼다(모델을 올리지 않는다)
+    if argv.first().map(|s| s == "meta").unwrap_or(false) {
+        for w in &cfg.warnings {
+            eprintln!("설정 경고: {}", w);
+        }
+        std::process::exit(simplerag::meta::cmd::run(&argv[1..]));
+    }
     let args = parse(&argv);
     for w in &cfg.warnings {
         eprintln!("설정 경고: {}", w);

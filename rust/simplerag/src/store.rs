@@ -306,6 +306,31 @@ impl VectorStore {
     }
 
     //------------------------------------------------------------------
+    // 문서 집합 범위 — (그 문서들 중 인덱스에 있는 문서 수, 허용 id 집합)
+    //=> 메타데이터 조건에 맞는 문서만 찾게 한다(메타데이터 검색 설계서 §13-1 — 폴더 한정과 같은 방식).
+    //   폴더를 주면 그 폴더 아래로 더 좁힌다. 경로는 normcase 로 비교한다.
+    //
+    // -in: docs = 문서 경로 집합 / folder = 폴더(None 이면 전체)
+    // -out: (문서 수, 허용 id 집합)
+    //------------------------------------------------------------------
+    pub fn docs_scope(&self, docs: &HashSet<String>, folder: Option<&str>) -> Result<(usize, HashSet<i64>), String> {
+        let want: HashSet<String> = docs.iter().map(|d| pyutil::normcase(d)).collect();
+        let f = folder.map(norm_dir);
+        self.with(|inn| {
+            let mut seen = HashSet::new();
+            let mut ids = HashSet::new();
+            for (i, p) in &inn.points {
+                let d = pyutil::normcase(pl_str(&p.payload, "doc_path"));
+                if want.contains(&d) && f.as_ref().map_or(true, |f| under(&d, f)) {
+                    seen.insert(d);
+                    ids.insert(*i);
+                }
+            }
+            Ok((seen.len(), ids))
+        })
+    }
+
+    //------------------------------------------------------------------
     // 한 절의 청크 payload (chunk_idx 순)
     //------------------------------------------------------------------
     pub fn section_chunks(&self, doc_path: &str, section_id: i64) -> Result<Vec<Payload>, String> {
