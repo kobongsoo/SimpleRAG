@@ -132,6 +132,10 @@ fn normalize_one(conn: &Connection, cache: &(Rules, HashMap<String, String>), pa
         None => return Ok(()),
     };
     let raw: Value = j.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null);
+    // 본문 첫머리(색인이 채움)는 정규화 때만 붙인다
+    let head: Option<Option<String>> = conn.query_row("SELECT head FROM doc_body WHERE doc_path = ?1", params![path],
+                                                      |r| r.get(0)).optional()?;
+    let raw = store::with_body_head(&raw, head.flatten().as_deref());
     let (rules, aliases) = cache;
     // 이미 상속으로 판정된 문서는 그 판정을 유지한다(다음 finish 까지)
     let (meta, people) = norm::normalize(path, &raw, rules, Some(aliases), inh.unwrap_or(0) != 0, base.as_deref());
@@ -242,6 +246,7 @@ pub fn moved(old: &str, path: &str) {
         store::delete(&tx, &key).map_err(|e| e.to_string())?;
         tx.execute("UPDATE doc_meta SET doc_path = ?1 WHERE doc_path = ?2", params![key, old]).map_err(|e| e.to_string())?;
         tx.execute("UPDATE doc_people SET doc_path = ?1 WHERE doc_path = ?2", params![key, old]).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE doc_body SET doc_path = ?1 WHERE doc_path = ?2", params![key, old]).map_err(|e| e.to_string())?;
         store::put_raw(&tx, &key, &Value::Object(raw), h.base.as_deref()).map_err(|e| e.to_string())?;
         normalize_one(&tx, h.cache.as_ref().unwrap(), &key).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
@@ -296,6 +301,7 @@ pub struct Finish {
 //   3) 전체를 다시 정규화한다 — 템플릿 상속은 모든 문서를 봐야 판정할 수 있다
 //
 // -in: state = 인덱서 상태(index_state.json) / log = 진행 출력 함수
+//   (본문 첫머리는 <index_dir>/points.sqlite 에서 읽는다 — 파이썬 fetch=store.payloads_of 자리)
 //
 // -out: Some(Finish) / 꺼져 있거나 실패하면 None
 // -out: error = 없음 (실패는 경고만)
@@ -364,6 +370,16 @@ pub fn finish(state: &Map<String, Value>, log: &mut dyn FnMut(&str)) -> Option<F
         for p in &pruned {
             store::delete(conn, p).map_err(|e| e.to_string())?;
         }
+        // 본문 첫머리 — 인덱스(points.sqlite)의 청크를 바로 읽는다(본문 첫 제목 · 양식 빈칸 판정).
+        // 인덱스가 아직 없으면 건너뛰고, 실패해도 나머지 정규화는 한다(경고만)
+        let pts = pyutil::join(&crate::config::cfg().index_dir, "points.sqlite");
+        if std::path::Path::new(&pts).is_file() {
+            match fill_bodies_from(conn, state, &pts) {
+                Ok(nb) if nb > 0 => log(&format!("메타데이터 본문 첫머리: {}건", nb)),
+                Ok(_) => {}
+                Err(e) => warn(&format!("본문 첫머리 실패 — {}", pyutil::head(&e, 100))),
+            }
+        }
         if let Some(t) = tx.take() {
             t.commit().map_err(|e| e.to_string())?;
         }
@@ -378,5 +394,187 @@ pub fn finish(state: &Map<String, Value>, log: &mut dyn FnMut(&str)) -> Option<F
             warn(&format!("마무리 실패 — {}", pyutil::head(&e, 120)));
             None
         }
+    }
+}
+
+//------------------------------------------------------------------
+// 청크 읽개 — 인덱스의 points.sqlite 를 읽기 전용으로 연다
+//=> 색인 저장소(store.rs)를 통째로 올리지 않고 id 로 payload 만 꺼낸다(워커가 열어 둔 중이어도 된다 — WAL).
+//
+// -in: path = points.sqlite 경로
+//
+// -out: Ok(Connection)
+// -out: error = 열기 실패는 Err(오류문)
+//------------------------------------------------------------------
+pub fn open_points(path: &str) -> Result<Connection, String> {
+    use rusqlite::OpenFlags;
+    let c = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| format!("OperationalError: {}", e))?;
+    let _ = c.busy_timeout(std::time::Duration::from_secs(5));
+    Ok(c)
+}
+
+//------------------------------------------------------------------
+// id 목록 → payload 목록 (파이썬 fetch(ids) 의 {id: payload} 를 넣은 순서대로)
+//=> 같은 id 가 두 번 나오면 한 번만(파이썬 dict 키처럼). 없는 id · 깨진 JSON 은 뺀다.
+//
+// -in: pc = points.sqlite 연결 / ids = 상태 파일의 청크 id 들(JSON 값)
+//
+// -out: Ok(payload 들)
+// -out: error = sqlite 오류는 Err(오류문)
+//------------------------------------------------------------------
+pub fn fetch_payloads(pc: &Connection, ids: &[Value]) -> Result<Vec<Value>, String> {
+    let mut st = pc.prepare_cached("SELECT payload FROM points WHERE id = ?1").map_err(|e| e.to_string())?;
+    let mut seen: Vec<String> = vec![];
+    let mut out = vec![];
+    for id in ids {
+        let k = id.to_string();
+        if seen.contains(&k) {
+            continue;
+        }
+        let pl: Option<String> = st.query_row(params![store::json_to_sql(id)], |r| r.get(0)).optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(pl) = pl {
+            seen.push(k);
+            if let Ok(v) = serde_json::from_str::<Value>(&pl) {
+                out.push(v);
+            }
+        }
+    }
+    Ok(out)
+}
+
+//------------------------------------------------------------------
+// 본문 첫머리 채우기 (7단계, 파이썬 fill_bodies) — 인덱스의 첫 청크 본문을 doc_body 에 넣는다
+//=> 문서를 다시 읽지 않고 색인이 이미 만든 청크를 쓴다. 내용 해시가 같으면 건너뛴다.
+//    1) 상태 파일 문서마다 doc_body 의 chash 와 비교
+//    2) 바뀐 문서는 앞 청크 id 8개의 payload 를 읽어 그 문서의 가장 앞 청크(chunk_idx 최소, 같으면 먼저 것)를 고른다
+//    3) "[문서 > 절]" 머리 줄을 떼고 앞 600자(바이트가 아니라 글자)를 넣는다
+//
+// -in: conn  = meta.sqlite 연결 / state = 인덱서 상태(index_state.json)
+// -in: fetch = id 목록 → payload 목록 함수
+//
+// -out: Ok(채운 문서 수)
+// -out: error = fetch · sqlite 오류는 Err(부르는 쪽이 경고로 삼킨다)
+//------------------------------------------------------------------
+pub fn fill_bodies(conn: &Connection, state: &Map<String, Value>,
+                   fetch: &mut dyn FnMut(&[Value]) -> Result<Vec<Value>, String>) -> Result<usize, String> {
+    let have: HashMap<String, Option<String>> = {
+        let mut st = conn.prepare("SELECT doc_path, chash FROM doc_body").map_err(|e| e.to_string())?;
+        let it = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))).map_err(|e| e.to_string())?;
+        it.collect::<rusqlite::Result<_>>().map_err(|e| e.to_string())?
+    };
+    let docs = match state.get("docs").and_then(|v| v.as_object()) {
+        Some(d) => d,
+        None => return Ok(0),
+    };
+    let mut n = 0;
+    for (k, v) in docs {
+        let key = pyutil::abspath(k);
+        // 내용 해시가 없거나 이미 같은 해시로 채웠으면 건너뛴다
+        let ch = match v.get("content_hash").and_then(|x| x.as_str()).filter(|c| !c.is_empty()) {
+            Some(c) => c,
+            None => continue,
+        };
+        if have.get(&key).map(|h| h.as_deref() == Some(ch)).unwrap_or(false) {
+            continue;
+        }
+        let ids: Vec<Value> = v.get("ids").and_then(|x| x.as_array())
+            .map(|a| a.iter().take(8).cloned().collect()).unwrap_or_default();
+        if ids.is_empty() {
+            continue;
+        }
+        // 이 문서의 청크만(앞 id 가 이웃 문서 것일 수도 있다)
+        let nk = pyutil::normcase(&key);
+        let pls: Vec<Value> = fetch(&ids)?.into_iter().filter(|pl| {
+            pl.as_object().map(|m| !m.is_empty()).unwrap_or(false)
+                && pyutil::normcase(pl.get("doc_path").and_then(|x| x.as_str()).unwrap_or("")) == nk
+        }).collect();
+        // chunk_idx 가 가장 작은 청크(파이썬 min — 같으면 먼저 것, 없으면 0)
+        let idx = |pl: &Value| pl.get("chunk_idx").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let mut first: Option<&Value> = None;
+        for pl in &pls {
+            if first.map(|f| idx(pl) < idx(f)).unwrap_or(true) {
+                first = Some(pl);
+            }
+        }
+        let first = match first {
+            Some(f) => f,
+            None => continue,
+        };
+        let text = first.get("text").and_then(|x| x.as_str()).unwrap_or("");
+        let head = pyutil::head(body_text(text), 600);
+        store::put_body(conn, &key, ch, head).map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+//------------------------------------------------------------------
+// points.sqlite 로 본문 첫머리 채우기 — finish · meta bodies 가 함께 쓴다
+//
+// -in: conn = meta.sqlite 연결 / state = 인덱서 상태 / points = points.sqlite 경로
+//
+// -out: Ok(채운 문서 수)
+// -out: error = 열기 · 읽기 실패는 Err(오류문)
+//------------------------------------------------------------------
+pub fn fill_bodies_from(conn: &Connection, state: &Map<String, Value>, points: &str) -> Result<usize, String> {
+    let pc = open_points(points)?;
+    let mut fetch = |ids: &[Value]| fetch_payloads(&pc, ids);
+    fill_bodies(conn, state, &mut fetch)
+}
+
+//------------------------------------------------------------------
+// 청크 글에서 "[문서 > 절]" 머리 줄을 뗀 본문 (파이썬 body_text)
+//=> "[" 로 시작하고 앞 300자 안에 "]\n" 이 있으면 첫 "]\n" 뒤부터.
+//
+// -in: text = 청크 글
+//
+// -out: 본문 조각
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn body_text(text: &str) -> &str {
+    if text.starts_with('[') && pyutil::head(text, 300).contains("]\n") {
+        if let Some(i) = text.find("]\n") {
+            return &text[i + 2..];
+        }
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 머리 줄 떼기 — "[문서 > 절]\n" 이 앞 300자 안에 있을 때만
+    #[test]
+    fn body_text_strip() {
+        assert_eq!(body_text("[a > b]\n본문"), "본문");
+        assert_eq!(body_text("본문 [x]\n"), "본문 [x]\n");
+        let long = format!("[{}]\n본문", "가".repeat(400));
+        assert_eq!(body_text(&long), long.as_str());
+    }
+
+    // 첫 청크 고르기 — 이웃 문서 청크는 빼고 chunk_idx 가 가장 작은 것, 600자로 자름
+    #[test]
+    fn fill_pick_first() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(store::SCHEMA).unwrap();
+        let state: Map<String, Value> = serde_json::from_value(json!({"docs": {
+            "C:\\d\\a.docx": {"content_hash": "h1", "ids": [5, 6, 7]},
+            "C:\\d\\b.docx": {"content_hash": "", "ids": [1]},
+        }})).unwrap();
+        let mut fetch = |ids: &[Value]| -> Result<Vec<Value>, String> {
+            Ok(ids.iter().map(|i| match i.as_i64().unwrap() {
+                5 => json!({"doc_path": "c:\\D\\A.docx", "chunk_idx": 2, "text": "둘"}),
+                6 => json!({"doc_path": "C:\\d\\a.docx", "chunk_idx": 1, "text": format!("[a]\n{}", "가".repeat(700))}),
+                _ => json!({"doc_path": "C:\\d\\other.docx", "chunk_idx": 0, "text": "남"}),
+            }).collect())
+        };
+        assert_eq!(fill_bodies(&conn, &state, &mut fetch).unwrap(), 1);
+        let h: String = conn.query_row("SELECT head FROM doc_body", [], |r| r.get(0)).unwrap();
+        assert_eq!(h, "가".repeat(600));
+        // 같은 해시면 다시 채우지 않는다
+        assert_eq!(fill_bodies(&conn, &state, &mut fetch).unwrap(), 0);
     }
 }

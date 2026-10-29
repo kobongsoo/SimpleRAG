@@ -494,6 +494,8 @@ def _mode(chips, kind, mode):
 #=> 작성일은 신뢰도 0.7 이상인 문서만 작성일로, 나머지는 수정일로 본다(결정 D3).
 #   날짜를 믿을 수 없는 문서(상속 · 없음)는 필터로 떨어뜨리지 않고 가산도 주지 않는다 —
 #   단, 수정일은 항상 있으므로 작성일이 없으면 수정일로 대신하는 데서 끝난다.
+#   "만든"이어도 수정일이 기간 안이면 남긴다(가산은 절반) — 사람이 기억하는 날짜는 파일 날짜(수정일)인
+#   경우가 많다(메타 골든셋 t01: 작성 2009 · 수정 2014 문서를 "2014년에 만든" 으로 찾음).
 #------------------------------------------------------------------
 def _date_sets(rows, d, field):
     lo, hi = d["from"], d["to"]
@@ -512,6 +514,10 @@ def _date_sets(rows, d, field):
         if lo <= ts < hi:
             keep.add(k)
             boost[k] = BOOST_DATE
+        elif field == "created" and mod is not None and lo <= mod < hi:
+            # 작성일은 밖이지만 수정일(파일 날짜)이 기간 안 — 남기되 가산은 절반
+            keep.add(k)
+            boost[k] = BOOST_DATE / 2
     return keep, boost
 
 

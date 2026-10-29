@@ -62,6 +62,8 @@ CREATE INDEX IF NOT EXISTS ix_meta_mod ON doc_meta(modified_ts);
 CREATE INDEX IF NOT EXISTS ix_meta_hash ON doc_meta(content_hash);
 CREATE INDEX IF NOT EXISTS ix_meta_ver ON doc_meta(version_key);
 CREATE TABLE IF NOT EXISTS meta_info (key TEXT PRIMARY KEY, value TEXT);
+-- 본문 첫머리(7단계) — 인덱스의 첫 청크 본문. 본문 첫 제목 · 양식 빈칸 판정에 쓴다(chash 가 바뀌면 다시 채움)
+CREATE TABLE IF NOT EXISTS doc_body (doc_path TEXT PRIMARY KEY, chash TEXT, head TEXT);
 ";
 
 pub const META_COLS: &[&str] = &["doc_path", "base", "content_hash", "version_key", "format", "size", "pages",
@@ -131,12 +133,62 @@ pub fn put_raw(conn: &Connection, path: &str, raw: &Value, base: Option<&str>) -
 }
 
 //------------------------------------------------------------------
-// 문서 빼기(색인에서 지운 문서)
+// 문서 빼기(색인에서 지운 문서) — 메타 · 관련인 · 본문 첫머리
 //------------------------------------------------------------------
 pub fn delete(conn: &Connection, path: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM doc_meta WHERE doc_path = ?1", params![path])?;
     conn.execute("DELETE FROM doc_people WHERE doc_path = ?1", params![path])?;
+    conn.execute("DELETE FROM doc_body WHERE doc_path = ?1", params![path])?;
     Ok(())
+}
+
+//------------------------------------------------------------------
+// 본문 첫머리 읽기 — {경로: 첫머리}
+//
+// -in: conn = meta.sqlite 연결
+//
+// -out: HashMap (첫머리가 NULL 인 행은 빈 글)
+// -out: error = sqlite 오류는 Err (표가 없던 옛 DB 도 connect 가 표를 만든다)
+//------------------------------------------------------------------
+pub fn body_heads(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
+    let mut st = conn.prepare("SELECT doc_path, head FROM doc_body")?;
+    let it = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+    let mut m = HashMap::new();
+    for x in it {
+        let (p, h) = x?;
+        m.insert(p, h.unwrap_or_default());
+    }
+    Ok(m)
+}
+
+//------------------------------------------------------------------
+// 본문 첫머리 넣기
+//
+// -in: conn = 연결 / path = 문서 경로 / chash = 내용 해시 / head = 첫 청크 본문(앞 600자)
+//
+// -out: 없음
+// -out: error = sqlite 오류는 Err
+//------------------------------------------------------------------
+pub fn put_body(conn: &Connection, path: &str, chash: &str, head: &str) -> rusqlite::Result<()> {
+    conn.prepare_cached("INSERT OR REPLACE INTO doc_body VALUES (?1, ?2, ?3)")?.execute(params![path, chash, head])?;
+    Ok(())
+}
+
+//------------------------------------------------------------------
+// 원본 값에 본문 첫머리 붙이기 — raw_json 에는 저장하지 않고 정규화 때만 쓴다
+//=> 파이썬 raw["body_head"] = head 와 같다(첫머리가 비었으면 붙이지 않음).
+//
+// -in: raw = 원본 값 / head = 첫머리(없으면 None)
+//
+// -out: 붙인 값(붙일 것이 없으면 그대로 복사본)
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn with_body_head(raw: &Value, head: Option<&str>) -> Value {
+    let mut raw = raw.clone();
+    if let (Some(h), Value::Object(m)) = (head.filter(|h| !h.is_empty()), &mut raw) {
+        m.insert("body_head".into(), Value::from(h));
+    }
+    raw
 }
 
 // JSON 값 → sqlite 값 (파이썬 sqlite3 가 넣는 형식과 같게: bool 은 정수)
@@ -269,6 +321,7 @@ pub fn renormalize(conn: &Connection, root: &str, paths: Option<&HashSet<String>
     };
     let pairs: Vec<(String, Value)> = rows.iter().map(|(p, r, _)| (p.clone(), r.clone())).collect();
     let inh = inherited_paths(&pairs);
+    let heads = body_heads(conn)?;
     let tx = conn.unchecked_transaction()?;
     let mut n_people = 0;
     for (path, raw, base) in &rows {
@@ -278,7 +331,9 @@ pub fn renormalize(conn: &Connection, root: &str, paths: Option<&HashSet<String>
                 continue;
             }
         }
-        let (meta, people) = norm::normalize(path, raw, &rules, Some(&aliases), inh.contains(path), base.as_deref());
+        // 본문 첫머리는 원본 값(raw_json)에 저장하지 않고 정규화 때만 붙인다 — 색인이 따로 채운다
+        let raw = with_body_head(raw, heads.get(path).map(|s| s.as_str()));
+        let (meta, people) = norm::normalize(path, &raw, &rules, Some(&aliases), inh.contains(path), base.as_deref());
         n_people += write_norm(&tx, path, &meta, &people)?;
     }
     tx.commit()?;

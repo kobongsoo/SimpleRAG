@@ -64,6 +64,11 @@ pub const DOC_TYPES: &[&str] = &[
     "계획서", "정의서", "명세서", "설계서", "견적서", "요청서", "결과서", "기안서", "품의서",
     "가이드", "교육자료", "사용자설명서", "점검표",
 ];
+// 유형어가 아니지만 그 유형을 가리키는 말(7단계 · 시험 ③) — (낱말, 유형)
+pub const TYPE_ALIASES: &[(&str, &str)] = &[
+    ("제도", "규정"), ("취업규칙", "규정"), ("정관", "규정"), ("해설", "가이드"), ("안내문", "가이드"),
+    ("설치가이드", "가이드"), ("증명서", "확인서"), ("증서", "확인서"), ("주의사항", "지침"), ("관리계획", "계획서"),
+];
 pub const FORM_WORDS: &[&str] = &["양식", "서식", "신청서", "의뢰서", "일지", "별지", "템플릿", "template"];
 pub const FORM_FOLDER_WORDS: &[&str] = &["템플릿", "양식", "서식"];
 pub const FORM_SHEETS: &[&str] = &["표지", "작성방법", "작성 방법", "입력"];
@@ -85,6 +90,7 @@ pub const TITLE_JUNK: &[&str] = &[
 // -필드: junk_people · junk_people_patterns · org_suffix · titles  = 사람 정리용 목록
 // -필드: origin_apps  = [(값, 단서 낱말들)] 앞에서부터 / recv_domains = [(종류, 도메인들)] 순서 유지
 // -필드: doc_types · form_* · template_exts · plain_templates · title_junk = 유형 · 양식 · 제목 판정
+// -필드: type_aliases = [(낱말, 유형)] — 제목에 낱말이 있으면 그 유형 +3 (7단계)
 // -필드: re_*         = 위 정규식 목록을 컴파일해 둔 것(잘못된 사용자 정규식은 건너뜀)
 //------------------------------------------------------------------
 #[derive(Debug, Clone)]
@@ -103,6 +109,7 @@ pub struct Rules {
     pub template_exts: Vec<String>,
     pub plain_templates: Vec<String>,
     pub title_junk: Vec<String>,
+    pub type_aliases: Vec<(String, String)>,
     pub(crate) re_junk_people: Vec<FRegex>,
     pub(crate) re_title_junk: Vec<FRegex>,
     // 직함 떼기 — 긴 직함부터 (뒤에 붙은 것 · 앞에 붙은 것)
@@ -165,6 +172,7 @@ impl Rules {
             template_exts: v(TEMPLATE_EXTS),
             plain_templates: v(PLAIN_TEMPLATES),
             title_junk: v(TITLE_JUNK),
+            type_aliases: TYPE_ALIASES.iter().map(|(w, t)| (w.to_string(), t.to_string())).collect(),
             re_junk_people: vec![],
             re_title_junk: vec![],
             re_titles: vec![],
@@ -258,6 +266,17 @@ pub fn load_rules(root: &str) -> Rules {
                         if pair.len() == 2 {
                             let words = yaml_strs(&pair[1]).unwrap_or_default();
                             rules.origin_apps.push((yaml_str(&pair[0]), words));
+                        }
+                    }
+                }
+            }
+        } else if key == "type_aliases" {
+            // [[낱말, 유형], …] 모양만 받는다(파이썬은 두 칸짜리로 풀어 쓴다)
+            if let Some(seq) = val.as_sequence() {
+                for item in seq {
+                    if let Some(pair) = item.as_sequence() {
+                        if pair.len() == 2 {
+                            rules.type_aliases.push((yaml_str(&pair[0]), yaml_str(&pair[1])));
                         }
                     }
                 }

@@ -911,7 +911,8 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
         log("BM25 인덱스 {:,}건 구축 {:.1f}s".format(len(all_chunks), build_s))
 
     # ── 메타데이터 마무리 — 빠진 문서 채우기 · 정리 · 템플릿 상속 판정(전체를 봐야 한다) ──
-    meta_hook.finish(state, log)
+    # 본문 첫머리(본문 첫 제목 · 양식 빈칸 판정)는 인덱스의 첫 청크에서 읽는다
+    meta_hook.finish(state, log, fetch=store.payloads_of)
 
     for name, why in failed:
         log("  ❌ {} — {}".format(name, why))

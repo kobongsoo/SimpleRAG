@@ -235,6 +235,23 @@ class VectorStore:
         return np.array([p.vector for p in pts], dtype="float32"), [dict(p.payload) for p in pts]
 
     #------------------------------------------------------------------
+    # 점 id 로 payload 만 읽기 — 메타데이터 본문 첫머리(7단계)가 문서의 첫 청크를 찾을 때
+    #
+    # -in: ids = 점 id 목록
+    #
+    # -out: {id: payload dict} (없는 id 는 빠진다)
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def payloads_of(self, ids):
+        self.ensure_collection()
+        got = {}
+        for i in range(0, len(ids), 1000):
+            for p in self._client.retrieve(collection_name=COLLECTION, ids=[int(x) for x in ids[i:i + 1000]],
+                                           with_vectors=False, with_payload=True):
+                got[int(p.id)] = dict(p.payload)
+        return got
+
+    #------------------------------------------------------------------
     # 점 id 로 지우기 (고아 청소용)
     #
     # -in: ids = 지울 점 id 목록

@@ -353,6 +353,9 @@ def clean_prop_title(title, rules, inherited):
     if not isinstance(title, str) or inherited:
         return None
     t = title.strip()
+    # 편지 머리 · 회사 · 저작권 · 서식 번호(별지 제16호서식)는 속성 제목이어도 버린다(7단계)
+    if _NOT_TITLE.search(t):
+        return None
     m = re.fullmatch(r"<([0-9A-Fa-f]{4,})>", t)
     if m:
         try:
@@ -398,7 +401,47 @@ def body_title(raw, rules):
         if 4 <= len(t) <= 60 and t.lower() not in ("목차", "contents", "agenda") \
                 and not any(re.search(p, t, re.I) for p in rules["title_junk"]):
             return t
+    # PPT 가 아니면 본문 첫머리(인덱스 첫 청크)의 첫 "제목다운 줄" (§9-2 · 7단계)
+    for line in (raw.get("body_head") or "").split("\n")[:15]:
+        t = _title_line(line)
+        if t and not any(re.search(p, t, re.I) for p in rules["title_junk"]):
+            return t
     return None
+
+
+# 조항 · 번호 머리(1. 목적, 제1조(목적), 가. ) — 문서 제목이 아니다
+_NUMBERED = re.compile(r"^(?:제\s*\d+\s*[조장절]|\d+(?:\.\d+)*[.)]?\s|[가-하]\.\s|[①-⑳]|\[?목\s*차\]?$|contents$)", re.I)
+# 편지 머리(수신: …) · 영문 칸 이름(Author: …) · 회사 · 저작권 줄 · 서식 번호(별지 제16호서식) — 본문 첫 줄이어도 제목이 아니다
+_NOT_TITLE = re.compile(r"^(?:수\s*신|발\s*신|참\s*조|경\s*유|[a-z][a-z ]{0,15})\s*[:：]\s|corporation|\binc\b|co\.,?\s*ltd|copyright"
+                        r"|all rights reserved|[ⓒ©]|별지\s*제?\s*\d+\s*호", re.I)
+# 결재란 · 머리글 같은 짧은 칸
+_TITLE_SKIP = ("결재", "결 재", "담당", "대외비", "internal use", "목 차", "목차", "page")
+
+
+#------------------------------------------------------------------
+# 한 줄이 제목다운가 — 4~60자, 문장 어미로 끝나지 않음, 숫자 · 기호 40% 미만, 표 줄 · 조항 머리 아님
+#
+# -in: line = 줄
+#
+# -out: 다듬은 제목 / 아니면 None
+# -out: error = 없음
+#------------------------------------------------------------------
+def _title_line(line):
+    t = re.sub(r"\s+", " ", (line or "").replace("*", "").replace("#", "")).strip(" -<>[]【】")
+    if not (4 <= len(t) <= 60) or "|" in t or "http" in t.lower():
+        return None
+    # 문장 어미 · 칸 이름(회의 주제:) · 조항 머리는 제목이 아니다
+    if re.search(r"(?:다|요|니다|음|함)[.!?]?$", t) or t.endswith((":", "：")) or _NUMBERED.search(t):
+        return None
+    if any(w in t.lower() for w in _TITLE_SKIP) or _NOT_TITLE.search(t):
+        return None
+    sym = sum(1 for ch in t if not (ch.isalpha() or ch == " "))
+    if sym / len(t) >= 0.4:
+        return None
+    # 띄어 쓴 제목(출 장 여 비 규 정)은 붙인다
+    if re.fullmatch(r"(?:[가-힣] ){2,}[가-힣]", t):
+        t = t.replace(" ", "")
+    return t
 
 
 # 비교용 — 공백 · 기호를 뺀 소문자
@@ -506,7 +549,7 @@ def template_of(doc, rules):
 # -out: (유형, 유형 점수, 양식인가, 양식 점수)
 # -out: error = 없음
 #------------------------------------------------------------------
-def type_scores(texts, folders, template, sheets, ext, rules):
+def type_scores(texts, folders, template, sheets, ext, rules, body=None, name=""):
     title_txt = " ".join(t for t in texts if t).lower()
     folder_txt = " ".join(folders).lower()
     tmpl = (template or "").lower()
@@ -517,6 +560,10 @@ def type_scores(texts, folders, template, sheets, ext, rules):
             # 메뉴얼 · 매뉴얼은 같은 유형
             key = "매뉴얼" if w == "메뉴얼" else w
             scores[key] = max(scores.get(key, 0), s)
+    # 유형어가 아니지만 그 유형을 가리키는 말(제도 → 규정, 해설 → 가이드 …) — 제목에 있을 때만 +3
+    for w, t in rules.get("type_aliases", []):
+        if w in title_txt:
+            scores[t] = max(scores.get(t, 0), 3)
     dtype, dscore = (None, 0)
     if scores:
         dtype, dscore = max(scores.items(), key=lambda kv: kv[1])
@@ -531,7 +578,58 @@ def type_scores(texts, folders, template, sheets, ext, rules):
         form += 1
     if ext in rules["template_exts"]:
         form += 5
+    form += _form_body(body, name)
     return (dtype if dscore >= 3 else None), float(dscore), form >= 3, float(form)
+
+
+#------------------------------------------------------------------
+# 본문 첫머리 · 파일 이름으로 본 양식 점수 (§10-4 · 7단계)
+#=> 빈칸이 많으면 빈 서식(+3), 금액 · 사람 이름이 채워져 있으면 작성본(-3).
+#   "구입의뢰서_박규영.doc" 처럼 이름에 양식어가 있어도 채워 쓴 문서는 양식이 아니다(시험 ③).
+#    1) 작성본 증거: 큰 금액(1,850,000) · 이름 칸(신청인 : 박규영, 성명 | 고봉수) · 사람 이름만 든 표 칸
+#       · 프로젝트명 칸의 글 · 파일 이름 속 사람 이름(_박규영)
+#    2) 빈 서식 증거: 빈 표 칸 6개 이상 · YYYY · 밑줄 칸 · □ · (   )
+#
+# -in: body = 본문 첫머리(None 이면 본문 증거 없음) / name = 파일 이름
+#
+# -out: 점수 가감(int)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _form_body(body, name=""):
+    stem = os.path.splitext(name or "")[0]
+    # 파일 이름의 "_박규영" 같은 사람 이름 — 양식을 채워 저장한 사본에 붙는다
+    filled = any(_person_like(t) for t in re.split(r"[_\s\-()]+", stem))
+    if not body:
+        return -3 if filled else 0
+    # 큰 금액(천 단위 쉼표 두 번 이상 또는 다섯 자리 이상) — "1,000 만원 미만" 같은 안내 글은 빼고
+    filled = filled or bool(re.search(r"\d{1,3}(?:,\d{3}){2,}|\d{2,3},\d{3}(?![,\d])", body))
+    # 이름 칸이 채워짐(신청인 : 박규영 · 성명 | 고봉수) — 자리표시(이름 · 홍길동)는 빈칸이다
+    for m in re.finditer(r"(?:신청인|성\s*명|작성자|의뢰인)[ \t]*[:：|][ \t]*([가-힣]{2,4})(?![가-힣])", body):
+        if m.group(1) not in _PLACEHOLDER:
+            filled = True
+    # 표 칸에 사람 이름만 들어 있음(|  | 남상혁 |)
+    filled = filled or any(_person_like(c) for c in re.findall(r"\|\s*([가-힣]{3})\s*(?=\|)", body))
+    # 프로젝트명 칸에 글이 있음(근무일지 작성본)
+    # 칸 뒤 공백은 줄을 넘지 않는다("사용프로젝트명 :\n품 명" 은 빈칸)
+    filled = filled or bool(re.search(r"프로젝트\s*명[ \t]*[:：|][ \t]*[가-힣A-Za-z(]", body))
+    if filled:
+        return -3
+    empty_cells = len(re.findall(r"\|\s+(?=\|)", body))
+    blank = empty_cells >= 6 or "YYYY" in body or len(re.findall(r"_{3,}|□|\(\s{2,}\)", body)) >= 3
+    return 3 if blank else 0
+
+
+# 이름 칸의 자리표시 글 — 빈 서식에 들어 있다
+_PLACEHOLDER = {"이름", "성명", "홍길동", "부서명", "담당자", "담당자명", "작성자"}
+# 흔한 성 — 사람 이름처럼 보이는 세 글자를 가릴 때만 쓴다
+_SURNAME = set("김이박최정강조윤장임한오서신권황안송류전홍고문양손배백허유남심노하곽성차주우구민진나지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용")
+# 성으로 시작해도 이름이 아닌 칸 · 낱말(끝 글자로 거른다)
+_NOT_NAME_END = set("서식지표록집본안부팀장사원실소과국청처회단자명일액량호수권증위건")
+
+
+# 세 글자 한글이 사람 이름처럼 보이는가(흔한 성으로 시작, 칸 이름 끝 글자가 아님)
+def _person_like(t):
+    return len(t) == 3 and "가" <= t[0] <= "힣" and all("가" <= ch <= "힣" for ch in t)         and t[0] in _SURNAME and t[-1] not in _NOT_NAME_END
 
 
 #------------------------------------------------------------------
@@ -564,7 +662,8 @@ def normalize(path, raw, rules, aliases=None, inherited=False, base=None):
     display, _ = pick_title(prop, body, fname, name)
     tmpl = template_of(doc, rules)
     sheets = doc.get("sheets") or []
-    dtype, dscore, is_form, fscore = type_scores([prop, body, fname], folders, tmpl, sheets, raw.get("ext"), rules)
+    dtype, dscore, is_form, fscore = type_scores([prop, body, fname], folders, tmpl, sheets, raw.get("ext"), rules,
+                                                 raw.get("body_head"), name)
     origin = origin_app(doc, fmt, rules)
     pages = doc.get("pages") or doc.get("slides") or (len(sheets) if sheets else None)
     try:

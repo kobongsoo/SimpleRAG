@@ -1,6 +1,6 @@
 //------------------------------------------------------------------
 // 메타데이터 명령 (메타데이터 검색 설계서 §17, Python cli.cmd_meta · _meta_people)
-//=> simplerag-rs meta [--db P] scan --dir D | rebuild | stats | show <경로> | people <하위 명령>
+//=> simplerag-rs meta [--db P] scan --dir D | rebuild | bodies [--index I] [--state S] | stats | show <경로> | people <하위 명령>
 //   문서 속성을 뽑아 정규화하고 <데이터 루트>/meta.sqlite 에 둔다. 모델을 올리지 않는다.
 //   출력 글자는 Python 판과 같다.
 //------------------------------------------------------------------
@@ -9,12 +9,12 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 
-use super::{people, pyfmt, store};
+use super::{hook, people, pyfmt, store};
 use crate::cli::outln;
 use crate::config::cfg;
 use crate::pyutil;
 
-const USAGE: &str = "usage: simplerag-rs meta [--db DB] {scan,rebuild,stats,show,people} ...";
+const USAGE: &str = "usage: simplerag-rs meta [--db DB] {scan,rebuild,bodies,stats,show,people} ...";
 
 // 인자 오류 — argparse 처럼 사용법과 함께 2
 fn arg_error(msg: &str) -> i32 {
@@ -27,6 +27,9 @@ fn arg_error(msg: &str) -> i32 {
 // meta 명령 진입점
 //    scan    — 폴더 아래 모든 파일의 속성을 읽고(바뀐 파일만) 끝에 다시 정규화
 //    rebuild — 파일을 다시 읽지 않고 raw 로 다시 정규화(규칙 · 별칭 사전을 바꾼 뒤)
+//    bodies  — 인덱스(points.sqlite)의 첫 청크로 본문 첫머리(doc_body)를 채우고 다시 정규화(7단계)
+//              --index = rag_index 폴더(기본: --db 옆 rag_index, 없으면 설정의 인덱스 폴더)
+//              --state = index_state.json(기본: --db 옆, 없으면 설정의 상태 파일)
 //    stats   — 채움률 · 상속 · 형식 · 사람 상위
 //    show    — 문서 하나의 정규화 값 · 관련인 · 원본 값
 //    people  — 사람 별칭 사전(suggest · list · approve · reject · remove · me)
@@ -39,6 +42,8 @@ fn arg_error(msg: &str) -> i32 {
 pub fn run(argv: &[String]) -> i32 {
     let mut db: Option<String> = None;
     let mut dir: Option<String> = None;
+    let mut index: Option<String> = None;
+    let mut state_arg: Option<String> = None;
     let mut pos: Vec<String> = vec![];
     let mut i = 0;
     while i < argv.len() {
@@ -61,6 +66,20 @@ pub fn run(argv: &[String]) -> i32 {
                     None => return arg_error("argument --dir: expected one argument"),
                 }
             }
+            "--index" => {
+                i += 1;
+                match argv.get(i) {
+                    Some(v) => index = Some(v.clone()),
+                    None => return arg_error("argument --index: expected one argument"),
+                }
+            }
+            "--state" => {
+                i += 1;
+                match argv.get(i) {
+                    Some(v) => state_arg = Some(v.clone()),
+                    None => return arg_error("argument --state: expected one argument"),
+                }
+            }
             s if s.starts_with("--") => return arg_error(&format!("unrecognized arguments: {}", s)),
             s => pos.push(s.to_string()),
         }
@@ -70,9 +89,9 @@ pub fn run(argv: &[String]) -> i32 {
         Some(s) => s.clone(),
         None => return arg_error("the following arguments are required: meta_cmd"),
     };
-    let valid = ["scan", "rebuild", "stats", "show", "people", "plan"];
+    let valid = ["scan", "rebuild", "bodies", "stats", "show", "people", "plan"];
     if !valid.contains(&sub.as_str()) {
-        return arg_error(&format!("argument meta_cmd: invalid choice: '{}' (choose from 'scan', 'rebuild', 'stats', 'show', 'people')", sub));
+        return arg_error(&format!("argument meta_cmd: invalid choice: '{}' (choose from 'scan', 'rebuild', 'bodies', 'stats', 'show', 'people')", sub));
     }
     if sub == "scan" && dir.is_none() {
         return arg_error("the following arguments are required: --dir");
@@ -114,6 +133,33 @@ pub fn run(argv: &[String]) -> i32 {
                 let res = store::renormalize(&conn, &root, None).map_err(|e| e.to_string())?;
                 outln(&format!("다시 정규화: 문서 {} · 상속 {} · 관련인 {} / {:.1}초", res.docs, res.inherited, res.people,
                     t0.elapsed().as_secs_f64()));
+            }
+            "bodies" => {
+                // --db 를 주면 인덱스 · 상태 파일도 그 옆에서(시험용 DB), 아니면 설정 값
+                let index_dir = index.clone().unwrap_or_else(|| if db.is_some() { pyutil::join(&root, "rag_index") } else { cfg().index_dir.clone() });
+                let state_path = state_arg.clone().unwrap_or_else(|| if db.is_some() { pyutil::join(&root, "index_state.json") } else { cfg().state_path.clone() });
+                let pts = pyutil::join(&index_dir, "points.sqlite");
+                if !std::path::Path::new(&pts).is_file() {
+                    outln(&format!("인덱스가 없습니다: {}", pts));
+                    return Ok(1);
+                }
+                let state: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&state_path).ok()
+                    .and_then(|t| serde_json::from_str(&t).ok()) {
+                    Some(m) => m,
+                    None => {
+                        outln(&format!("상태 파일을 읽지 못했습니다: {}", state_path));
+                        return Ok(1);
+                    }
+                };
+                let t0 = Instant::now();
+                // 한 트랜잭션으로(문서마다 디스크 동기화가 일어나지 않게)
+                let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+                let nb = hook::fill_bodies_from(&tx, &state, &pts)?;
+                tx.commit().map_err(|e| e.to_string())?;
+                let t1 = t0.elapsed().as_secs_f64();
+                let res = store::renormalize(&conn, &root, None).map_err(|e| e.to_string())?;
+                outln(&format!("본문 첫머리: 채움 {}건 ({:.1}초) · 다시 정규화: 문서 {} · 상속 {} · 관련인 {} / {:.1}초",
+                    nb, t1, res.docs, res.inherited, res.people, t0.elapsed().as_secs_f64()));
             }
             "stats" => {
                 let s = store::stats(&conn).map_err(|e| e.to_string())?;

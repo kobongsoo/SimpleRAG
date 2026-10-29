@@ -28,6 +28,7 @@ const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,cle
   import   Python 판 인덱스 가져오기   --from <Python 데이터 폴더(예: dist\\simplerag)>
   suggest-synonyms  놓친 질문으로 동의어 사전 후보 뽑기  [--from <질문 jsonl>] [--out <결과 json>] [--no-llm]
   meta     문서 메타데이터(meta.sqlite)  [--db P] scan --dir <폴더> | rebuild | stats | show <경로>
+           | bodies [--index <rag_index 폴더>] [--state <index_state.json>]  (인덱스 첫 청크로 본문 첫머리 채움)
            | people suggest|list|approve <별칭> <이름>|reject <별칭> <이름>|remove <별칭>|me <이름>
 ";
 

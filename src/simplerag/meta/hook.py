@@ -102,6 +102,10 @@ def _normalize_one(conn, path):
     if row is None:
         return
     raw = json.loads(row[0])
+    # 본문 첫머리(색인이 채움)는 정규화 때만 붙인다
+    head = conn.execute("SELECT head FROM doc_body WHERE doc_path = ?", (path,)).fetchone()
+    if head and head[0]:
+        raw["body_head"] = head[0]
     # 이미 상속으로 판정된 문서는 그 판정을 유지한다(다음 finish 까지)
     inh = conn.execute("SELECT inherited FROM doc_meta WHERE doc_path = ?", (path,)).fetchone()
     rules, aliases = _cache
@@ -190,6 +194,7 @@ def moved(old, path):
         S.delete(conn, key)          # 새 경로에 찌꺼기 행이 있으면 먼저 치운다
         conn.execute("UPDATE doc_meta SET doc_path = ? WHERE doc_path = ?", (key, old))
         conn.execute("UPDATE doc_people SET doc_path = ? WHERE doc_path = ?", (key, old))
+        conn.execute("UPDATE doc_body SET doc_path = ? WHERE doc_path = ?", (key, old))
         S.put_raw(conn, key, raw, _base)
         _normalize_one(conn, key)
         conn.commit()
@@ -220,11 +225,12 @@ def removed(key):
 #   3) 전체를 다시 정규화한다 — 템플릿 상속은 모든 문서를 봐야 판정할 수 있다
 #
 # -in: state = 인덱서 상태 dict / log = 진행 출력 함수
+# -in: fetch = 청크 id 목록 → {id: payload} 함수(주면 본문 첫머리도 채운다, 기본 None)
 #
 # -out: {filled, pruned, docs, inherited} / 꺼져 있으면 None
 # -out: error = 없음 (실패는 경고만)
 #------------------------------------------------------------------
-def finish(state, log=None):
+def finish(state, log=None, fetch=None):
     log = log or (lambda m: None)
     conn = _db()
     if conn is None:
@@ -252,6 +258,14 @@ def finish(state, log=None):
         pruned = [p for p in have if p not in want]
         for p in pruned:
             S.delete(conn, p)
+        # 본문 첫머리 — 색인이 청크를 읽을 함수를 넘겼을 때만(본문 첫 제목 · 양식 빈칸 판정)
+        if fetch is not None:
+            try:
+                nb = fill_bodies(conn, state, fetch)
+                if nb:
+                    log("메타데이터 본문 첫머리: {}건".format(nb))
+            except Exception as e:  # noqa: BLE001 — 첫머리를 못 채워도 나머지 정규화는 한다
+                _warn("본문 첫머리 실패 — {}: {}".format(type(e).__name__, str(e)[:80]))
         conn.commit()
         res = S.renormalize(conn, data_dir())
         res.update(filled=filled, pruned=len(pruned))
@@ -260,6 +274,46 @@ def finish(state, log=None):
     except Exception as e:  # noqa: BLE001
         _warn("마무리 실패 — {}: {}".format(type(e).__name__, str(e)[:120]))
         return None
+
+
+#------------------------------------------------------------------
+# 본문 첫머리 채우기 (7단계) — 인덱스의 첫 청크 본문을 doc_body 에 넣는다
+#=> 문서를 다시 읽지 않고 색인이 이미 만든 청크를 쓴다. 내용 해시가 같으면 건너뛴다.
+#    1) 상태 파일 문서마다 doc_body 의 chash 와 비교
+#    2) 바뀐 문서는 앞 청크 몇 개의 payload 를 읽어 그 문서의 가장 앞 청크(chunk_idx 최소)를 고른다
+#    3) "[문서 > 절]" 머리 줄을 떼고 앞 600자를 넣는다
+#
+# -in: conn = meta.sqlite 연결 / state = 인덱서 상태 / fetch = id 목록 → {id: payload} 함수
+#
+# -out: 채운 문서 수
+# -out: error = fetch 예외는 전파(부르는 쪽이 삼킨다)
+#------------------------------------------------------------------
+def fill_bodies(conn, state, fetch):
+    have = {p: h for p, h in conn.execute("SELECT doc_path, chash FROM doc_body")}
+    n = 0
+    for k, v in state.get("docs", {}).items():
+        key = os.path.abspath(k)
+        ch = (v or {}).get("content_hash")
+        if not ch or have.get(key) == ch:
+            continue
+        ids = list((v or {}).get("ids") or [])[:8]
+        if not ids:
+            continue
+        pls = [pl for pl in fetch(ids).values() if pl and os.path.normcase(pl.get("doc_path") or "") == os.path.normcase(key)]
+        if not pls:
+            continue
+        first = min(pls, key=lambda pl: pl.get("chunk_idx") or 0)
+        head = body_text(first.get("text") or "")[:600]
+        S.put_body(conn, key, ch, head)
+        n += 1
+    return n
+
+
+# 청크 글에서 "[문서 > 절]" 머리 줄을 뗀 본문
+def body_text(text):
+    if text.startswith("[") and "]\n" in text[:300]:
+        return text.split("]\n", 1)[1]
+    return text
 
 
 # 채우기 때 폴더 토큰 기준 — 지금 인덱싱 폴더 아래면 그 폴더, 아니면 없음(부모 폴더 이름만 쓰게)

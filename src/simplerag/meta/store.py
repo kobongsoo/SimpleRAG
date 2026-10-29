@@ -58,6 +58,8 @@ CREATE INDEX IF NOT EXISTS ix_meta_mod ON doc_meta(modified_ts);
 CREATE INDEX IF NOT EXISTS ix_meta_hash ON doc_meta(content_hash);
 CREATE INDEX IF NOT EXISTS ix_meta_ver ON doc_meta(version_key);
 CREATE TABLE IF NOT EXISTS meta_info (key TEXT PRIMARY KEY, value TEXT);
+-- 본문 첫머리(7단계) — 인덱스의 첫 청크 본문. 본문 첫 제목 · 양식 빈칸 판정에 쓴다(chash 가 바뀌면 다시 채움)
+CREATE TABLE IF NOT EXISTS doc_body (doc_path TEXT PRIMARY KEY, chash TEXT, head TEXT);
 """
 
 META_COLS = ["doc_path", "base", "content_hash", "version_key", "format", "size", "pages",
@@ -124,6 +126,31 @@ def put_raw(conn, path, raw, base):
 def delete(conn, path):
     conn.execute("DELETE FROM doc_meta WHERE doc_path = ?", (path,))
     conn.execute("DELETE FROM doc_people WHERE doc_path = ?", (path,))
+    conn.execute("DELETE FROM doc_body WHERE doc_path = ?", (path,))
+
+
+#------------------------------------------------------------------
+# 본문 첫머리 읽기 — {경로: 첫머리}
+#
+# -in: conn = meta.sqlite 연결
+#
+# -out: dict
+# -out: error = 없음 (표가 없던 옛 DB 도 connect 가 표를 만든다)
+#------------------------------------------------------------------
+def body_heads(conn):
+    return {p: h for p, h in conn.execute("SELECT doc_path, head FROM doc_body")}
+
+
+#------------------------------------------------------------------
+# 본문 첫머리 넣기
+#
+# -in: conn = 연결 / path = 문서 경로 / chash = 내용 해시 / head = 첫 청크 본문(앞 600자)
+#
+# -out: 없음
+# -out: error = sqlite 예외 전파
+#------------------------------------------------------------------
+def put_body(conn, path, chash, head):
+    conn.execute("INSERT OR REPLACE INTO doc_body VALUES (?, ?, ?)", (path, chash, head))
 
 
 #------------------------------------------------------------------
@@ -166,6 +193,7 @@ def renormalize(conn, root, paths=None):
     aliases = N.load_aliases(root)
     rows = [(p, json.loads(r), b) for p, r, b in conn.execute("SELECT doc_path, raw_json, base FROM doc_meta")]
     inh = inherited_paths([(p, r) for p, r, _ in rows])
+    heads = body_heads(conn)
     want = set(paths) if paths is not None else None
     n_people = 0
     cols = [c for c in META_COLS if c not in ("doc_path", "base", "raw_json", "updated_ts")]
@@ -173,6 +201,9 @@ def renormalize(conn, root, paths=None):
         # 상속 판정은 전체를 보고 하므로, 일부만 다시 할 때도 상속이 바뀐 문서는 함께 고친다
         if want is not None and path not in want and path not in inh:
             continue
+        # 본문 첫머리는 원본 값(raw_json)에 저장하지 않고 정규화 때만 붙인다 — 색인이 따로 채운다
+        if heads.get(path):
+            raw["body_head"] = heads[path]
         meta, people = N.normalize(path, raw, rules, aliases, path in inh, base)
         meta["ext_mismatch"] = int(bool(raw.get("ext_mismatch")))
         conn.execute("UPDATE doc_meta SET " + ", ".join(c + " = ?" for c in cols) + " WHERE doc_path = ?",

@@ -219,6 +219,38 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
             lines.push(doc_line(no, key, &name, &kws, query, Some(meta), None, false, 0));
         }
     }
+    // ── 본문 없이 메타만 있는 문서(스캔 PDF 등 추출 실패) — 조건에 맞고 이름 · 제목이 맞으면 보인다
+    //   인덱스에 청크가 없어 내용 검색으로는 절대 나오지 않는다(메타 골든셋 s01 · s02)
+    if let (Some(d), Some(rows)) = (docs, meta_rows.as_deref()) {
+        let mut extra = 0;
+        let mut keys: Vec<&String> = d.iter().filter(|k| !docs_state.contains_key(*k) && !seen.contains(*k)).collect();
+        // 검색어가 이름에 많이 든 문서부터(같으면 경로 순) — 비슷한 이름의 다른 문서가 앞서지 않게
+        let hits = |k: &String| {
+            let n = pyutil::basename(k).to_lowercase();
+            kws.iter().filter(|w| n.contains(&w.to_lowercase())).count()
+        };
+        keys.sort_by(|a, b| hits(b).cmp(&hits(a)).then(a.cmp(b)));
+        for key in keys {
+            if extra >= 5 {
+                break;
+            }
+            let name = pyutil::basename(key).to_string();
+            let title = rows.rows.get(key).and_then(|r| r.title.clone()).unwrap_or_default();
+            if name_hit(&name, &kws, query) || (!title.is_empty() && name_hit(&title, &kws, query)) {
+                extra += 1;
+                let no = lines.iter().filter(|l| l.get("page").is_none()).count() + 1;
+                let mut dl = doc_line(no, key, &name, &kws, query, None, None, false, 0);
+                dl["name_hit"] = json!(true);
+                dl["meta_hit"] = json!(true);
+                dl["no_text"] = json!(true);
+                if let Some(m) = rows.rows.get(key).and_then(|r| r.modified) {
+                    dl["mtime"] = json!(m);
+                }
+                add_meta(&mut dl, key, Some(rows));
+                lines.push(dl);
+            }
+        }
+    }
     let n_docs = lines.iter().filter(|l| l.get("page").is_none()).count();
     let mut done = json!({
         "ms": (t0.elapsed().as_secs_f64() * 1000.0).round(), "docs": n_docs, "places": n_places, "low": n_low,

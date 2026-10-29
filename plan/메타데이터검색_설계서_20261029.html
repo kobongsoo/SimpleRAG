@@ -1093,6 +1093,49 @@ CREATE INDEX ix_meta_mod    ON doc_meta(modified_ts);</pre>
       <tr><td>빌드 · 시험</td><td class="ok">RAGSearchBox-rs · simplerag-rs 경고 0 · cargo test 통과</td></tr>
     </tbody>
   </table></div>
+  <h3>시험 ④ — 메타 질의 골든셋 30문항 (2026-10-29)</h3>
+  <p><code>bench/meta_golden.jsonl</code> — 분류함에서 고른 문서 하나를 "기억나는 대로" 찾는 질의 30개(사람 10 · 기간 6 · 형식 4 · 받은 경로 4 · 스캔 2 · 양식 2 · 조건만 2).
+  정답은 문서 이름 일부(사본 · 버전 포함). <code>bench/test_meta_golden.py</code> 가 dist-rust 상주 워커(리랭커 적재 뒤)에 <code>/find</code> 를 보내 화면 순서(조건 일치 → 이름 일치 → 내용 일치)로 순위를 잰다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>판</th><th>Top-1</th><th>Top-5</th><th>Top-10</th><th>MRR</th><th>평균 시간</th></tr></thead>
+    <tbody>
+      <tr><td>메타 조건 끔 (SIMPLERAG_META_QUERY=0)</td><td>23</td><td>25</td><td>27</td><td>0.809</td><td>1.29초</td></tr>
+      <tr><td>메타 조건 켬 — 처음</td><td>27</td><td>27</td><td>27</td><td>0.900</td><td>0.91초</td></tr>
+      <tr><td>메타 조건 켬 — 고친 뒤</td><td class="ok">30</td><td class="ok">30</td><td class="ok">30</td><td class="ok">1.000</td><td>0.90초</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>고친 것 ①</b> "2014년에 만든 시큐어디스크 제안서" — 작성일 2009 · 수정일 2014 문서를 작성일로만 걸러 놓쳤다. "만든"이어도 수정일(파일 날짜)이 기간 안이면 남기고 가산은 절반(Python · Rust 같이).</li>
+    <li><b>고친 것 ②</b> 스캔 문서 2문항 — 본문을 못 읽어 인덱스에 청크가 없으니 내용 검색으로는 나올 수 없다. 탐색기 찾기가 조건에 맞는 <b>본문 없는 문서</b> 중 이름 · 제목이 검색어와 맞는 것을 문서 줄(<code>no_text</code>)로 덧붙인다(최대 5개, 검색어가 많이 맞는 순).</li>
+    <li><b>가산 크기</b>는 바꾸지 않았다 — 고친 뒤 30/30 이라 조정할 근거가 없다. 본문 질문 오탐 ⑤ 는 그대로 0/362, 계획 2.6ms.</li>
+    <li><b>한계</b> — 질의에 파일 이름의 낱말이 들어 있는 "아는 문서 찾기"라 조건 없이도 27/30 이 10위 안이다. 이름에 없는 낱말로 기억하는 질의 · 사람이 직접 쓴 질의를 더하면 차이가 더 잘 보인다.</li>
+  </ul>
+  <h3>7단계 — 본문 첫 제목 · 유형 / 양식 판별 다듬기 (2026-10-29)</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>부분</th><th>구현 (Python · Rust 같음)</th></tr></thead>
+    <tbody>
+      <tr><td>본문 첫머리</td><td>문서를 다시 읽지 않고 <b>인덱스의 첫 청크</b>(chunk_idx 최소)의 본문 앞 600자를 meta.sqlite 새 표 <code>doc_body(doc_path, chash, head)</code> 에 넣는다. 인덱싱 · 워커 <code>/bm25</code> 끝(finish)에 내용 해시가 바뀐 문서만 채우고, 이미 있는 인덱스는 <code>simplerag-rs meta bodies</code> 로 한 번에(분류함 1,470건 0.5초). 정규화할 때만 원본 값 옆에 붙이고 raw_json 에는 저장하지 않는다</td></tr>
+      <tr><td>② 본문 첫 제목</td><td>PPT 가 아니면 첫머리 앞 15줄에서 첫 "제목다운 줄"(4~60자 · 문장 어미 아님 · 숫자/기호 40% 미만). 건너뜀: 표 줄 · 조항 머리(1. 목적, 제1조) · 칸 이름(회의 주제:) · 편지 머리(수신:) · 영문 칸 이름(Author:) · 회사 · 저작권 · 서식 번호(별지 제16호). 띄어 쓴 제목(출 장 여 비 규 정)은 붙인다. 속성 제목에도 같은 제외 규칙</td></tr>
+      <tr><td>유형</td><td>유형어가 아닌 말 별칭(+3, <code>type_aliases</code> · meta_rules.yaml 로 덧붙이기): 제도 · 취업규칙 · 정관 → 규정, 해설 · 안내문 · 설치가이드 → 가이드, 증명서 · 증서 → 확인서, 주의사항 → 지침, 관리계획 → 계획서. 본문 첫 제목도 제목 후보라 유형 점수에 들어간다</td></tr>
+      <tr><td>양식</td><td>본문 첫머리로 ± — <b>작성본 증거 −3</b>: 큰 금액(1,850,000) · 이름 칸(신청인 : 박규영, 성명 | 고봉수, 자리표시 "이름 · 홍길동" 제외) · 표 칸에 사람 이름(| 남상혁 |) · 프로젝트명 칸의 글 · 파일 이름 속 사람 이름(_박규영). <b>빈 서식 증거 +3</b>: 빈 표 칸 6개 이상 · YYYY · 밑줄 칸 · □ · (   )</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>시험</th><th>전</th><th>후</th></tr></thead>
+    <tbody>
+      <tr><td>③ 유형 (정답 100개 — <code>bench/meta_type_golden.jsonl</code>, 13_샘플_템플릿 53 · 08_사내규정_인사 47, 초안을 사용자 검토)</td><td>정밀도 100% · 재현율 75.9%</td><td class="ok">100% · 100%</td></tr>
+      <tr><td>③ 양식</td><td>정밀도 63.6% · 재현율 77.8%</td><td class="ok">100% · 88.9%</td></tr>
+      <tr><td>④ 메타 질의 30문항</td><td>30/30</td><td class="ok">30/30 (MRR 1.0)</td></tr>
+      <tr><td>⑤ 본문 질문 오탐 · ⑥ 시간</td><td>0/362</td><td class="ok">0/362 · 계획 1.4ms</td></tr>
+      <tr><td>Python ↔ Rust 대조 (분류함)</td><td colspan="2" class="ok">doc_body 1,470 · doc_meta 2,295(전 칸) · doc_people 883 행 모두 같음. Rust 단위 시험 39개 통과</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>분류함 전체 변화</b> — 대표 제목 924건 · 유형 87건 · 양식 여부 56건이 바뀌었다. 유형이 붙은 문서 513 → 597, 양식 65 → 75.</li>
+    <li><b>남은 실패</b> — 빈 "제품설치확인서.pdf" 1건: PDF 에서 표 칸이 사라지고 칸 이름만 남아 빈 서식인지 알 수 없다.</li>
+    <li><b>주의</b> — 유형 별칭 · 양식 규칙은 이 100개를 보며 만들었으므로 실제보다 좋게 나왔을 수 있다. 다른 폴더(예: 04_고객사_유지보수 · 03_영업_제안자료)로 정답을 더 만들어 확인해야 일반 성능을 안다.</li>
+    <li><b>dist-rust</b> — 새 simplerag-rs.exe 를 넣고 <code>meta bodies</code> 로 첫머리를 채웠다(전 meta.sqlite 는 backup_index_20261029_before_bunryu\meta_before_bodies.sqlite).</li>
+  </ul>
   <ul>
     <li><b>아직</b> — 실제 RAGSearchBox 를 띄워 트레이 · 설정 창에서 끝까지 눌러 보기(시험 페이지는 ipc 를 가짜로 바꿔 끼운 것), 배포 폴더 meta.sqlite(재인덱싱 또는 <code>meta scan</code>), 크게 보기로 넘어갈 때 끈 조건 이어 주기, 시험 ④, 이어서 묻기 조건 이어 쓰기, 7단계(제목 · 유형 다듬기).</li>
   </ul>

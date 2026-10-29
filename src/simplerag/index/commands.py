@@ -296,7 +296,7 @@ class IndexCommands:
         state["bm25_built_at"] = time.time()
         indexer.save_state(state)
         # 자동 인덱싱은 문서 여러 건을 반영한 뒤 /bm25 를 한 번 부른다 — 메타데이터 마무리도 이때
-        meta_hook.finish(state)
+        meta_hook.finish(state, fetch=self.app.store.payloads_of)
         out = {"ok": True, "chunks": len(texts), "orphans": n_orphans,
                "build_s": round(build_s, 2)}
         if logs:

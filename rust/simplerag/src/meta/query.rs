@@ -806,6 +806,8 @@ fn make_plan(c: &Cached, p: &Parsed, folder: Option<&str>) -> Plan {
 //------------------------------------------------------------------
 // 기간 조건 — (필터 집합, 가산). 작성일은 신뢰도 0.7 이상일 때만, 아니면 수정일(결정 D3).
 //   날짜를 모르는 문서는 떨어뜨리지 않는다.
+//   "만든"이어도 수정일(파일 날짜)이 기간 안이면 남기고 가산은 절반 — 사람이 기억하는 날짜는 파일 날짜인
+//   경우가 많다(메타 골든셋 t01: 작성 2009 · 수정 2014 문서를 "2014년에 만든" 으로 찾음).
 //------------------------------------------------------------------
 fn date_sets(rows: &HashMap<&String, &Row>, lo: i64, hi: i64, field: &str) -> (HashSet<String>, HashMap<String, f64>) {
     let mut keep = HashSet::new();
@@ -824,7 +826,12 @@ fn date_sets(rows: &HashMap<&String, &Row>, lo: i64, hi: i64, field: &str) -> (H
                 keep.insert((*k).clone());
                 boost.insert((*k).clone(), BOOST_DATE);
             }
-            _ => {}
+            _ => {
+                if field == "created" && r.modified.map_or(false, |m| lo <= m && m < hi) {
+                    keep.insert((*k).clone());
+                    boost.insert((*k).clone(), BOOST_DATE / 2.0);
+                }
+            }
         }
     }
     (keep, boost)

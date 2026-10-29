@@ -64,6 +64,11 @@ DOC_TYPES = [
     "계획서", "정의서", "명세서", "설계서", "견적서", "요청서", "결과서", "기안서", "품의서",
     "가이드", "교육자료", "사용자설명서", "점검표",
 ]
+# 유형어가 아니지만 그 유형을 가리키는 말(7단계 · 시험 ③) — [낱말, 유형]
+TYPE_ALIASES = [
+    ["제도", "규정"], ["취업규칙", "규정"], ["정관", "규정"], ["해설", "가이드"], ["안내문", "가이드"],
+    ["설치가이드", "가이드"], ["증명서", "확인서"], ["증서", "확인서"], ["주의사항", "지침"], ["관리계획", "계획서"],
+]
 FORM_WORDS = ["양식", "서식", "신청서", "의뢰서", "일지", "별지", "템플릿", "template"]
 FORM_FOLDER_WORDS = ["템플릿", "양식", "서식"]
 FORM_SHEETS = ["표지", "작성방법", "작성 방법", "입력"]
@@ -100,6 +105,7 @@ def load_rules(root=None):
         "doc_types": list(DOC_TYPES), "form_words": list(FORM_WORDS), "form_folder_words": list(FORM_FOLDER_WORDS),
         "form_sheets": list(FORM_SHEETS), "template_exts": list(TEMPLATE_EXTS),
         "plain_templates": list(PLAIN_TEMPLATES), "title_junk": list(TITLE_JUNK),
+        "type_aliases": [list(x) for x in TYPE_ALIASES],
     }
     path = os.path.join(root, "meta_rules.yaml") if root else None
     if not path or not os.path.isfile(path):

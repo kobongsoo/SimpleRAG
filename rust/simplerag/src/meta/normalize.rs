@@ -723,6 +723,10 @@ pub fn clean_prop_title(title: Option<&Value>, rules: &Rules, inherited: bool) -
         return None;
     }
     let mut t = pyutil::strip(title).to_string();
+    // 편지 머리 · 회사 · 저작권 · 서식 번호(별지 제16호서식)는 속성 제목이어도 버린다(7단계)
+    if RE_NOT_TITLE.is_match(&t) {
+        return None;
+    }
     if let Some(m) = RE_HEX.captures(&t) {
         let hx = m[1].to_string();
         if hx.len() % 2 != 0 {
@@ -766,23 +770,109 @@ fn join_spaced(t: &str) -> String {
 }
 
 //------------------------------------------------------------------
-// 본문 첫 제목 (§9-1 ② · §9-2) — 1단계는 원본 값에 있는 것만(PPT 1번 슬라이드 제목)
+// 본문 첫 제목 (§9-1 ② · §9-2)
+//=> 1) PPT 면 1번 슬라이드 제목
+//   2) 아니면(또는 그 제목이 쓰레기면) 본문 첫머리(인덱스 첫 청크, raw["body_head"])의
+//      앞 15줄 중 첫 "제목다운 줄" (7단계)
+//
+// -in: raw = 원본 값(정규화 때 body_head 가 붙어 있을 수 있음) / rules
+//
+// -out: Some(제목) / 없으면 None
+// -out: error = 없음
 //------------------------------------------------------------------
 pub fn body_title(raw: &Value, rules: &Rules) -> Option<String> {
     let doc = obj(raw.get("doc"));
-    let titles = doc.get("slide_titles").and_then(|v| v.as_array())?;
-    let first = titles.first()?;
-    let t = match first {
-        Value::String(s) => pyutil::strip(s).to_string(),
-        _ => String::new(),
-    };
-    let n = t.chars().count();
-    let low = pyfmt::lower(&t);
-    if (4..=60).contains(&n) && !["목차", "contents", "agenda"].contains(&low.as_str())
-        && !rules.re_title_junk.iter().any(|p| p.is_match(&t).unwrap_or(false)) {
-        return Some(t);
+    let junk = |t: &str| rules.re_title_junk.iter().any(|p| p.is_match(t).unwrap_or(false));
+    if let Some(first) = doc.get("slide_titles").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+        let t = match first {
+            Value::String(s) => pyutil::strip(s).to_string(),
+            _ => String::new(),
+        };
+        let n = t.chars().count();
+        let low = pyfmt::lower(&t);
+        if (4..=60).contains(&n) && !["목차", "contents", "agenda"].contains(&low.as_str()) && !junk(&t) {
+            return Some(t);
+        }
+    }
+    // PPT 가 아니면 본문 첫머리의 첫 "제목다운 줄" — 파이썬 split("\n")[:15] 와 같게 앞 15줄만
+    let head = raw.get("body_head").and_then(|v| v.as_str()).unwrap_or("");
+    for line in head.split('\n').take(15) {
+        if let Some(t) = title_line(line) {
+            if !junk(&t) {
+                return Some(t);
+            }
+        }
     }
     None
+}
+
+// 조항 · 번호 머리(1. 목적, 제1조(목적), 가. ) — 문서 제목이 아니다 (파이썬 _NUMBERED, re.I)
+re!(RE_NUMBERED, r"(?i)^(?:제\s*\d+\s*[조장절]|\d+(?:\.\d+)*[.)]?\s|[가-하]\.\s|[①-⑳]|\[?목\s*차\]?$|contents$)");
+// 편지 머리(수신: …) · 영문 칸 이름(Author: …) · 회사 · 저작권 줄 · 서식 번호(별지 제16호서식) (파이썬 _NOT_TITLE, re.I)
+//   파이썬 \s 는 \x1c~\x1f 도 공백으로 보므로 [\s\x1c-\x1f] 로 쓴다
+re!(RE_NOT_TITLE, r"(?i)^(?:수[\s\x1c-\x1f]*신|발[\s\x1c-\x1f]*신|참[\s\x1c-\x1f]*조|경[\s\x1c-\x1f]*유|[a-z][a-z ]{0,15})[\s\x1c-\x1f]*[:：][\s\x1c-\x1f]|corporation|\binc\b|co\.,?[\s\x1c-\x1f]*ltd|copyright|all rights reserved|[ⓒ©]|별지[\s\x1c-\x1f]*제?[\s\x1c-\x1f]*\d+[\s\x1c-\x1f]*호");
+// 문장 어미로 끝나는 줄
+re!(RE_SENT_END, r"(?:다|요|니다|음|함)[.!?]?$");
+// 한 글자씩 띄운 제목(출 장 여 비 규 정) — 파이썬 re.fullmatch
+re!(RE_SPACED_TITLE, r"^(?:[가-힣] ){2,}[가-힣]$");
+// 파이썬 str.isalpha()(유니코드 문자 범주 L*)도 공백도 아닌 글자 — Rust is_alphabetic 은 Nl · 원 문자까지 넣어 다르다
+re!(RE_NOT_ALPHA_SPACE, r"[^\p{L} ]");
+// 결재란 · 머리글 같은 짧은 칸
+const TITLE_SKIP: &[&str] = &["결재", "결 재", "담당", "대외비", "internal use", "목 차", "목차", "page"];
+
+//------------------------------------------------------------------
+// 한 줄이 제목다운가 (파이썬 _title_line)
+//=> 본문 첫머리 줄에서 문서 제목으로 쓸 만한 줄만 고른다.
+//    1) * · # 를 지우고 공백 덩어리를 한 칸으로, 앞뒤 " -<>[]【】" 를 걷는다
+//    2) 4~60자 · 표 줄(|) · 링크 아님, 문장 어미 · 칸 이름(끝이 :) · 조항 머리 아님
+//    3) 결재란 · 머리글 낱말, 편지 머리 · 저작권 줄 아님
+//    4) 글자(L*) · 공백이 아닌 글자가 40% 미만
+//    5) 띄어 쓴 한글 제목은 붙인다
+//
+// -in: line = 줄
+//
+// -out: Some(다듬은 제목) / 아니면 None
+// -out: error = 없음
+//------------------------------------------------------------------
+fn title_line(line: &str) -> Option<String> {
+    let s = line.replace('*', "").replace('#', "");
+    // 파이썬 re.sub(r"\s+", " ", …) — 파이썬 공백(\x1c~\x1f 포함) 덩어리를 한 칸으로
+    let mut col = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for c in s.chars() {
+        if pyutil::is_space(c) {
+            if !in_ws {
+                col.push(' ');
+            }
+            in_ws = true;
+        } else {
+            col.push(c);
+            in_ws = false;
+        }
+    }
+    let t = pyutil::strip_chars(&col, " -<>[]【】").to_string();
+    let n = t.chars().count();
+    let low = pyfmt::lower(&t);
+    if !(4..=60).contains(&n) || t.contains('|') || low.contains("http") {
+        return None;
+    }
+    // 문장 어미 · 칸 이름(회의 주제:) · 조항 머리는 제목이 아니다
+    if RE_SENT_END.is_match(&t) || t.ends_with(':') || t.ends_with('：') || RE_NUMBERED.is_match(&t) {
+        return None;
+    }
+    if TITLE_SKIP.iter().any(|w| low.contains(w)) || RE_NOT_TITLE.is_match(&t) {
+        return None;
+    }
+    // 숫자 · 기호가 40% 이상이면 제목이 아니다(날짜 · 번호 줄)
+    let sym = RE_NOT_ALPHA_SPACE.find_iter(&t).count();
+    if sym as f64 / n as f64 >= 0.4 {
+        return None;
+    }
+    // 띄어 쓴 제목(출 장 여 비 규 정)은 붙인다
+    if RE_SPACED_TITLE.is_match(&t) {
+        return Some(t.replace(' ', ""));
+    }
+    Some(t)
 }
 
 //------------------------------------------------------------------
@@ -946,13 +1036,17 @@ pub fn template_of(doc: &Map<String, Value>, rules: &Rules) -> Option<String> {
 //=> 유형: 제목 후보 · 파일명 +3, 폴더명 +2, 템플릿명 +2 → 가장 높고 3점 이상인 유형
 //   양식: 양식어(제목 · 파일명 +3, 폴더 +2, 템플릿 +2) · 양식 시트명 +1 · 템플릿 확장자 +5 → 3점 이상
 //
+//   유형 별칭(제도 → 규정 …)이 제목에 있으면 +3, 본문 첫머리 · 파일 이름의 빈칸 · 작성 흔적은 _form_body 로 가감(7단계).
+//
 // -in: texts = 제목 후보 · 파일명 글 / folders = 폴더 이름 목록 / template · sheets · ext / rules
+// -in: body  = 본문 첫머리(없으면 None) / name = 파일 이름
 //
 // -out: (유형, 유형 점수, 양식인가, 양식 점수)
 // -out: error = 없음
 //------------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 pub fn type_scores(texts: &[Option<&str>], folders: &[String], template: Option<&str>, sheets: &[String], ext: &str,
-                   rules: &Rules) -> (Option<String>, f64, bool, f64) {
+                   rules: &Rules, body: Option<&str>, name: &str) -> (Option<String>, f64, bool, f64) {
     let title_txt = pyfmt::lower(&texts.iter().flatten().filter(|t| !t.is_empty()).cloned().collect::<Vec<_>>().join(" "));
     let folder_txt = pyfmt::lower(&folders.join(" "));
     let tmpl = pyfmt::lower(template.unwrap_or(""));
@@ -966,6 +1060,15 @@ pub fn type_scores(texts: &[Option<&str>], folders: &[String], template: Option<
             match scores.iter_mut().find(|(n, _)| *n == k) {
                 Some((_, v)) => *v = (*v).max(s),
                 None => scores.push((k, s)),
+            }
+        }
+    }
+    // 유형어가 아니지만 그 유형을 가리키는 말(제도 → 규정, 해설 → 가이드 …) — 제목에 있을 때만 +3
+    for (w, t) in &rules.type_aliases {
+        if title_txt.contains(w.as_str()) {
+            match scores.iter_mut().find(|(n, _)| n == t) {
+                Some((_, v)) => *v = (*v).max(3),
+                None => scores.push((t.clone(), 3)),
             }
         }
     }
@@ -993,7 +1096,78 @@ pub fn type_scores(texts: &[Option<&str>], folders: &[String], template: Option<
     if rules.template_exts.iter().any(|e| e == ext) {
         form += 5;
     }
+    form += form_body(body, name);
     (if dscore >= 3 { dtype } else { None }, dscore as f64, form >= 3, form as f64)
+}
+
+// 큰 금액(1,850,000 · 12,000) — "1,000 만원 미만" 같은 안내 글은 빼고
+fre!(RE_AMOUNT, r"\d{1,3}(?:,\d{3}){2,}|\d{2,3},\d{3}(?![,\d])");
+// 이름 칸(신청인 : 박규영 · 성명 | 고봉수) — 칸 앞뒤 공백은 줄을 넘지 않는다
+fre!(RE_NAME_FIELD, r"(?:신청인|성[\s\x1c-\x1f]*명|작성자|의뢰인)[ \t]*[:：|][ \t]*([가-힣]{2,4})(?![가-힣])");
+// 표 칸에 세 글자 한글만(|  | 남상혁 |)
+fre!(RE_CELL3, r"\|[\s\x1c-\x1f]*([가-힣]{3})[\s\x1c-\x1f]*(?=\|)");
+// 프로젝트명 칸에 글이 있음("사용프로젝트명 :\n품 명" 은 빈칸)
+re!(RE_PROJECT, r"프로젝트[\s\x1c-\x1f]*명[ \t]*[:：|][ \t]*[가-힣A-Za-z(]");
+// 빈 표 칸(|   |)
+fre!(RE_EMPTY_CELL, r"\|[\s\x1c-\x1f]+(?=\|)");
+// 밑줄 칸 · □ · (   )
+re!(RE_BLANK_MARK, r"_{3,}|□|\([\s\x1c-\x1f]{2,}\)");
+
+// 이름 칸의 자리표시 글 — 빈 서식에 들어 있다
+const PLACEHOLDER: &[&str] = &["이름", "성명", "홍길동", "부서명", "담당자", "담당자명", "작성자"];
+// 흔한 성 — 사람 이름처럼 보이는 세 글자를 가릴 때만 쓴다
+const SURNAME: &str = "김이박최정강조윤장임한오서신권황안송류전홍고문양손배백허유남심노하곽성차주우구민진나지엄채원천방공현함변염여추도소석선설마길연위표명기반왕금옥육인맹제모탁국어은편용";
+// 성으로 시작해도 이름이 아닌 칸 · 낱말(끝 글자로 거른다)
+const NOT_NAME_END: &str = "서식지표록집본안부팀장사원실소과국청처회단자명일액량호수권증위건";
+
+// 세 글자 한글이 사람 이름처럼 보이는가(흔한 성으로 시작, 칸 이름 끝 글자가 아님) — 파이썬 _person_like
+fn person_like(t: &str) -> bool {
+    let cs: Vec<char> = t.chars().collect();
+    cs.len() == 3 && cs.iter().all(|c| ('가'..='힣').contains(c)) && SURNAME.contains(cs[0]) && !NOT_NAME_END.contains(cs[2])
+}
+
+//------------------------------------------------------------------
+// 본문 첫머리 · 파일 이름으로 본 양식 점수 (§10-4 · 7단계, 파이썬 _form_body)
+//=> 빈칸이 많으면 빈 서식(+3), 금액 · 사람 이름이 채워져 있으면 작성본(-3).
+//   "구입의뢰서_박규영.doc" 처럼 이름에 양식어가 있어도 채워 쓴 문서는 양식이 아니다(시험 ③).
+//    1) 작성본 증거: 큰 금액 · 이름 칸(신청인 : 박규영) · 사람 이름만 든 표 칸
+//       · 프로젝트명 칸의 글 · 파일 이름 속 사람 이름(_박규영)
+//    2) 빈 서식 증거: 빈 표 칸 6개 이상 · YYYY · 밑줄 칸 · □ · (   ) 3개 이상
+//
+// -in: body = 본문 첫머리(None · 빈 글이면 본문 증거 없음) / name = 파일 이름
+//
+// -out: 점수 가감(-3 · 0 · +3)
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn form_body(body: Option<&str>, name: &str) -> i64 {
+    let stem = pyutil::splitext(name).0;
+    // 파일 이름의 "_박규영" 같은 사람 이름 — 파이썬 re.split(r"[_\s\-()]+", stem)
+    let mut filled = stem.split(|c: char| c == '_' || c == '-' || c == '(' || c == ')' || pyutil::is_space(c))
+        .any(person_like);
+    let body = match body {
+        Some(b) if !b.is_empty() => b,
+        _ => return if filled { -3 } else { 0 },
+    };
+    filled = filled || RE_AMOUNT.is_match(body).unwrap_or(false);
+    // 이름 칸이 채워짐 — 자리표시(이름 · 홍길동)는 빈칸이다
+    for c in RE_NAME_FIELD.captures_iter(body).flatten() {
+        if let Some(g) = c.get(1) {
+            if !PLACEHOLDER.contains(&g.as_str()) {
+                filled = true;
+            }
+        }
+    }
+    // 표 칸에 사람 이름만 들어 있음
+    filled = filled || RE_CELL3.captures_iter(body).flatten()
+        .any(|c| c.get(1).map(|g| person_like(g.as_str())).unwrap_or(false));
+    // 프로젝트명 칸에 글이 있음(근무일지 작성본)
+    filled = filled || RE_PROJECT.is_match(body);
+    if filled {
+        return -3;
+    }
+    let empty_cells = RE_EMPTY_CELL.find_iter(body).flatten().count();
+    let blank = empty_cells >= 6 || body.contains("YYYY") || RE_BLANK_MARK.find_iter(body).count() >= 3;
+    if blank { 3 } else { 0 }
 }
 
 //------------------------------------------------------------------
@@ -1101,8 +1275,10 @@ pub fn normalize(path: &str, raw: &Value, rules: &Rules, aliases: Option<&HashMa
     };
     let sheets: Vec<String> = sheets_v.iter().map(|s| if truthy(Some(s)) { py_str(s) } else { String::new() }).collect();
     let ext = raw.get("ext").map(py_str).unwrap_or_else(|| "None".into());
+    // 본문 첫머리(store · hook 이 정규화 때만 붙인다)는 양식 빈칸 판정에도 쓴다
+    let body_head = raw.get("body_head").and_then(|v| v.as_str());
     let (dtype, dscore, is_form, fscore) = type_scores(&[prop.as_deref(), body.as_deref(), fname_opt], &folders,
-                                                       tmpl.as_deref(), &sheets, &ext, rules);
+                                                       tmpl.as_deref(), &sheets, &ext, rules, body_head, &name);
     let origin = origin_app(doc, &fmt, rules);
     // pages = doc.pages or doc.slides or len(sheets)
     let pages_v: Option<Value> = if truthy(doc.get("pages")) {
@@ -1314,7 +1490,50 @@ mod tests {
         assert_eq!(recv_kind(Some("10.10.4.10"), &r).as_deref(), Some("intranet"));
         assert_eq!(recv_kind(Some("claude.ai"), &r).as_deref(), Some("ai"));
         assert_eq!(recv_kind(Some("example.com"), &r).as_deref(), Some("web"));
-        let (dtype, _, form, _) = type_scores(&[Some("업무 처리 절차서 양식")], &["13_샘플_템플릿".to_string()], None, &[], "docx", &r);
+        let (dtype, _, form, _) = type_scores(&[Some("업무 처리 절차서 양식")], &["13_샘플_템플릿".to_string()], None, &[], "docx", &r, None, "");
         assert!(dtype.as_deref() == Some("절차서") && form);
+        // 유형 별칭 — "제도 · 해설" 은 유형어가 아니어도 규정(먼저 넣은 것)
+        let (dtype, dscore, _, _) = type_scores(&[Some("인사 제도 해설")], &[], None, &[], "docx", &r, None, "");
+        assert_eq!((dtype.as_deref(), dscore), (Some("규정"), 3.0));
+    }
+
+    // 본문 첫머리의 제목다운 줄 (파이썬 _title_line, 7단계) — 값은 Python 판 실행 결과
+    #[test]
+    fn title_lines() {
+        assert_eq!(title_line("출 장 여 비 규 정").as_deref(), Some("출장여비규정"));
+        assert_eq!(title_line("# 경조사 지원 규정").as_deref(), Some("경조사 지원 규정"));
+        assert_eq!(title_line("WindowsVistaUACDevReqs").as_deref(), Some("WindowsVistaUACDevReqs"));
+        for bad in ["**회의 주제**:", "1. 목적", "제1조(목적)", "본 규정은 직원의 경조사를 지원한다.", "수신: 각 부서",
+                    "Author: Kim", "2024-01-01 12:00", "Copyright 2020 Mocomsys", "| a | b |", "별지 제16호서식",
+                    "Ⅰ. 개요 Ⅱ", "결재 담당 팀장"] {
+            assert_eq!(title_line(bad), None, "{}", bad);
+        }
+        let r = load_rules("");
+        let raw = serde_json::json!({"body_head": "[목차]\n1. 목적\n**회의 주제**:\n경조사 지원 규정\n"});
+        assert_eq!(body_title(&raw, &r).as_deref(), Some("경조사 지원 규정"));
+        // 속성 제목도 회사 · 편지 머리 줄은 버린다
+        assert_eq!(clean_prop_title(Some(&Value::from("Microsoft Corporation")), &r, false), None);
+        assert_eq!(clean_prop_title(Some(&Value::from("수신: 각 부서")), &r, false), None);
+    }
+
+    // 본문 첫머리 · 파일 이름으로 본 양식 점수 (파이썬 _form_body, 7단계) — 값은 Python 판 실행 결과
+    #[test]
+    fn form_body_cases() {
+        let cases: &[(Option<&str>, &str, i64)] = &[
+            (Some("구입의뢰서 신청인 : 사용프로젝트명 :"), "", 0),      // 빈 이름 칸 — 채움 아님
+            (Some("신청인 :박규영"), "", -3),                           // 이름 칸이 채워짐
+            (Some("| 지 원 제 품 |  |  |  |  |  |  |"), "", 3),         // 빈 표 칸 6개 — 빈 서식
+            (Some("작성자 | 이름"), "", 0),                             // 자리표시
+            (Some("의뢰부서 : 신청인 : 사용프로젝트명 :\n품 명"), "", 0), // 줄을 넘는 칸 값은 채움 아님
+            (None, "구입의뢰서_박규영.doc", -3),                        // 파일 이름 속 사람 이름
+            (Some("금액 1,850,000 원"), "", -3),
+            (Some("|  | 남상혁 |"), "", -3),
+            (Some("1,000 만원 미만"), "", 0),
+            (Some("날짜 YYYY"), "", 3),
+            (Some("성명 : 홍길동"), "", 0),
+        ];
+        for (b, n, want) in cases {
+            assert_eq!(form_body(*b, n), *want, "{:?} {}", b, n);
+        }
     }
 }
