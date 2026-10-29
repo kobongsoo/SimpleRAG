@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>폴더 아이콘 · 탐색기 모드 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+.gap { color: var(--bad); font-weight: 600; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.prio { font-family: var(--mono); font-weight: 600; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+
+td.num, th.num { text-align: right; white-space: nowrap; }
+.ok { color: var(--good); font-weight: 600; }
+.ng { color: var(--bad); font-weight: 600; }
+.part { margin-top: 60px; padding: 14px 18px; border-radius: 10px; background: var(--ink); color: var(--ground); font-weight: 700; font-size: 18px; }
+.part small { display: block; font-weight: 400; font-size: 13.5px; opacity: .8; margin-top: 2px; }
+.steps { counter-reset: st; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: st; position: relative; padding-left: 40px; margin: 14px 0; }
+.steps > li::before { content: counter(st); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+.cap { font-size: 13px; color: var(--muted); text-align: center; margin-top: 8px; }
+
+/* ── 아이콘 초안 ── */
+.icons { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; justify-content: center; background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 12px; padding: 22px 16px 14px; margin: 16px 0; }
+.icons figure { margin: 0; text-align: center; font-size: 12.5px; color: var(--muted); }
+.icons figure svg { margin: 0 auto 6px; display: block; }
+.icons .px16 { image-rendering: pixelated; }
+.icons .sep { width: 1px; align-self: stretch; background: var(--rule); }
+.exp-strip { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; background: var(--sunken); border-radius: 12px; padding: 16px; margin: 14px 0; }
+.exp-strip .it { width: 92px; text-align: center; font-size: 12.5px; color: var(--ink-2); line-height: 1.35; }
+.exp-strip .it svg { margin: 0 auto 4px; display: block; }
+
+/* ── 탐색기 모드 창 초안 ── (모든 색은 문서 토큰 + 브랜드 빨강) */
+.mockwrap { overflow-x: auto; margin: 18px 0; padding-bottom: 4px; }
+.xw { --brand: #e5163f; min-width: 900px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 24, 33, .12); font-size: 13px; line-height: 1.45; overflow: hidden; }
+.xw .tb { display: flex; align-items: flex-end; gap: 4px; background: var(--sunken); padding: 6px 8px 0; }
+.xw .tab { display: flex; align-items: center; gap: 7px; background: var(--surface); border-radius: 8px 8px 0 0; padding: 7px 12px; min-width: 210px; }
+.xw .tab.off { background: transparent; color: var(--muted); min-width: 0; }
+.xw .tab .x { margin-left: auto; color: var(--muted); }
+.xw .wc { margin-left: auto; display: flex; gap: 18px; color: var(--muted); padding: 0 8px 8px; }
+.xw .logo { width: 16px; height: 16px; border-radius: 4px; background: var(--brand); color: #fff; font-weight: 800; font-size: 11px; display: grid; place-items: center; }
+.xw .addr { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+.xw .nav { display: flex; gap: 12px; color: var(--muted); padding: 0 4px; }
+.xw .crumb { flex: 0 0 300px; border: 1px solid var(--rule); border-radius: 6px; padding: 5px 10px; color: var(--ink-2); white-space: nowrap; overflow: hidden; }
+.xw .crumb b { font-weight: 400; color: var(--muted); margin: 0 4px; }
+.xw .search { flex: 1; display: flex; align-items: center; gap: 8px; border: 2px solid var(--brand); border-radius: 8px; padding: 5px 10px; background: var(--surface); }
+.xw .search .q { flex: 1; color: var(--ink); font-weight: 600; }
+.xw .search .hint { color: var(--muted); font-size: 12px; }
+.xw .cmd { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+.xw .cmd .b { padding: 3px 9px; border-radius: 6px; }
+.xw .cmd .b.on { background: var(--sunken); }
+.xw .cmd .sp { flex: 1; }
+.xw .cmd .ai { border: 1px solid var(--rule); border-radius: 999px; padding: 3px 12px; }
+.xw .cmd .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; }
+.xw .cmd .seg span { padding: 3px 10px; }
+.xw .cmd .seg span.on { background: var(--brand); color: #fff; font-weight: 600; }
+.xw .main { display: grid; grid-template-columns: 190px 1fr 290px; min-height: 430px; }
+.xw .side { border-right: 1px solid var(--rule); padding: 8px 6px; color: var(--ink-2); }
+.xw .side .h { font-size: 11.5px; color: var(--muted); padding: 8px 8px 3px; }
+.xw .side .i { display: flex; align-items: center; gap: 7px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; }
+.xw .side .i.on { background: var(--accent-soft); color: var(--ink); }
+.xw .side .i.sub { padding-left: 22px; }
+.xw .list { overflow: hidden; }
+.xw .cols, .xw .r { display: grid; grid-template-columns: minmax(0, 1fr) 62px 74px 92px; gap: 8px; align-items: center; padding: 0 12px; }
+.xw .cols { color: var(--muted); font-size: 12px; padding-top: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--rule); }
+.xw .cols .s { color: var(--ink-2); }
+.xw .grp { color: var(--muted); font-size: 12px; padding: 9px 12px 3px; }
+.xw .r { padding-top: 5px; padding-bottom: 5px; }
+.xw .r.doc .n { display: flex; align-items: center; gap: 7px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xw .r.doc .n i { font-style: normal; color: var(--muted); width: 10px; }
+.xw .r.doc .cnt { font-weight: 400; color: var(--muted); font-size: 12px; }
+.xw .r.pg { padding-left: 42px; }
+.xw .r.pg .n { min-width: 0; }
+.xw .r.pg .sec { color: var(--ink-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xw .r.pg .snip { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xw mark { background: #ffe58a; color: inherit; border-radius: 2px; padding: 0 1px; }
+.xw .r.sel { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.xw .r.low { opacity: .5; }
+.xw .pgchip { display: inline-block; border: 1px solid var(--rule); border-radius: 5px; padding: 0 6px; font-family: var(--mono); font-size: 11.5px; background: var(--surface); }
+.xw .rel { display: inline-flex; gap: 2px; }
+.xw .rel i { width: 8px; height: 8px; border-radius: 2px; background: var(--rule); }
+.xw .rel i.f { background: var(--brand); }
+.xw .more { padding: 3px 12px 6px 42px; color: var(--accent); font-size: 12px; }
+.xw .pv { border-left: 1px solid var(--rule); background: var(--sunken); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.xw .pv .ph { display: flex; justify-content: space-between; color: var(--ink-2); font-size: 12px; }
+.xw .page { flex: 1; background: #fff; color: #222; border-radius: 3px; box-shadow: 0 1px 4px rgba(0,0,0,.18); padding: 14px 14px; font-size: 10.5px; line-height: 1.6; }
+.xw .page .t { font-weight: 700; font-size: 11.5px; margin-bottom: 6px; }
+.xw .page .ln { height: 6px; background: #e3e5e8; border-radius: 3px; margin: 6px 0; }
+.xw .page .hlb { background: rgba(255, 214, 64, .45); outline: 2px solid #f2b705; border-radius: 3px; padding: 4px 5px; margin: 6px -5px; }
+.xw .pv .acts { display: flex; gap: 6px; }
+.xw .pv .acts span { flex: 1; text-align: center; border: 1px solid var(--rule); border-radius: 6px; padding: 4px 0; background: var(--surface); color: var(--ink-2); font-size: 12px; }
+.xw .pv .acts span.p { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+.xw .st { display: flex; gap: 14px; padding: 5px 12px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 12px; }
+.xw .st .sp { flex: 1; }
+
+/* 좁은 패널 */
+.narrow { --brand: #e5163f; width: 360px; max-width: 100%; margin: 0 auto; background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 10px; font-size: 13px; line-height: 1.45; box-shadow: 0 10px 30px rgba(20, 24, 33, .12); overflow: hidden; }
+.narrow .hd { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+.narrow .hd b span { color: var(--brand); }
+.narrow .hd .f { color: var(--muted); font-size: 12px; margin-left: auto; }
+.narrow .sb { margin: 10px 12px; border: 2px solid var(--brand); border-radius: 8px; padding: 6px 10px; font-weight: 600; }
+.narrow .d { border-top: 1px solid var(--rule); padding: 9px 12px; }
+.narrow .d .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.narrow .d .m { color: var(--muted); font-size: 12px; }
+.narrow .d .pgs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.narrow .d .pgs span { border: 1px solid var(--rule); border-radius: 5px; padding: 0 6px; font-family: var(--mono); font-size: 11.5px; }
+.narrow .d .pgs span.on { border-color: var(--brand); color: var(--brand); }
+.narrow .d .sn { background: var(--sunken); border-radius: 6px; padding: 6px 8px; margin-top: 6px; font-size: 12px; color: var(--ink-2); }
+.narrow mark { background: #ffe58a; color: inherit; }
+.narrow .ft { border-top: 1px solid var(--rule); padding: 7px 12px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; }
+
+/* 설정 창 초안 */
+.setw { max-width: 520px; margin: 0 auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; font-size: 13.5px; }
+.setw fieldset { border: 1px solid var(--rule); border-radius: 8px; margin: 0 0 10px; padding: 8px 12px 10px; }
+.setw legend { font-weight: 600; padding: 0 4px; }
+.setw .o { margin: 4px 0; }
+.setw .o small { color: var(--muted); display: block; padding-left: 22px; }
+.setw .new { font-size: 11px; font-weight: 700; color: #fff; background: #e5163f; border-radius: 999px; padding: 0 7px; margin-left: 6px; }
+</style>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (SimpleRAG) · 설계서 · 2026-10-29</div>
+  <h1>인덱싱 폴더 아이콘 · 탐색기 모드 설계서</h1>
+  <p class="lede">두 가지를 검토한다. <b>A.</b> 인덱싱 폴더(임베딩 폴더)로 지정한 폴더와 드라이브의 아이콘에 모아이 <b>M</b> 마크를 붙여,
+  탐색기에서 "여기는 MoAI 가 읽은 곳"임을 바로 알게 한다. <b>B.</b> 지금의 대화형 화면(이하 <b>RAG 모드</b>) 옆에
+  <b>탐색기 모드</b>를 더한다 — 자연어로 물으면 답을 지어내지 않고 <b>어느 문서의 몇 쪽에 무엇이 있는지</b>를 탐색기 같은 목록으로 보여 주고,
+  그 쪽을 누르면 문서가 그 쪽에서 열린다. 기본은 탐색기 모드, 설정에서 RAG 모드로 바꿀 수 있다.</p>
+  <div class="meta">대상: RAGSearchBox Rust 판(우선) · SimpleRAG Rust 판 워커 · Python 판은 같은 규칙으로 뒤따름 · 관련: plan/RAGSearchBox_설계서.html · plan/폴더한정검색_설계서.html · plan/구조화추출_청킹_재설계서.html</div>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">결론</a></li>
+  <li><a href="#s2">요구사항 정리</a></li>
+  <li><a href="#s3">A-1 폴더 아이콘 — desktop.ini 원리</a></li>
+  <li><a href="#s4">A-2 적용 · 되돌리기 흐름</a></li>
+  <li><a href="#s5">A-3 볼륨(C:\ · D:\) 아이콘</a></li>
+  <li><a href="#s6">A-4 아이콘 그림 초안</a></li>
+  <li><a href="#s7">A-5 예외와 주의</a></li>
+  <li><a href="#s8">B-1 탐색기 모드란 — RAG 모드와 비교</a></li>
+  <li><a href="#s9">B-2 지금 구조 실측 — 막히는 곳</a></li>
+  <li><a href="#s10">B-3 화면 초안 — MoAI 탐색기 창</a></li>
+  <li><a href="#s11">B-4 화면 초안 — 탐색기 옆 패널(좁은 배치)</a></li>
+  <li><a href="#s12">B-5 검색 · 묶기 규칙</a></li>
+  <li><a href="#s13">B-6 쪽 번호 바로잡기</a></li>
+  <li><a href="#s14">B-7 그 쪽에서 열기</a></li>
+  <li><a href="#s15">B-8 워커 명령 /find</a></li>
+  <li><a href="#s16">B-9 모드 설정(옵션)</a></li>
+  <li><a href="#s17">시험 · 측정 계획</a></li>
+  <li><a href="#s18">구현 단계</a></li>
+  <li><a href="#s19">결정이 필요한 것</a></li>
+  <li><a href="#s20">구현 결과</a></li>
+</ol></nav>
+
+<!-- ───────────────────────── 1. 결론 ───────────────────────── -->
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="verdict">
+    <strong>A. 폴더 아이콘 — 된다. 관리자 권한도 필요 없다.</strong>
+    <ul>
+      <li><b>폴더</b>는 Windows 가 제공하는 <code>SHGetSetFolderCustomSettings</code> 한 번으로 바꾼다. 이 API 가 desktop.ini 쓰기(UTF-16) ·
+        desktop.ini 숨김+시스템 속성 · 폴더 읽기전용 속성 · 탐색기 새로고침 알림을 한꺼번에 처리한다. 손으로 desktop.ini 를 쓰면 이 넷 중 하나를 빠뜨려 아이콘이 안 바뀌는 일이 잦다.</li>
+      <li><b>볼륨(C:\ · D:\)</b>은 desktop.ini 가 "내 PC"의 드라이브 아이콘에 반영되지 <b>않는다</b>. 대신 사용자 레지스트리
+        <code>HKCU\Software\Classes\Applications\Explorer.exe\Drives\&lt;문자&gt;\DefaultIcon</code> 에 아이콘 경로를 쓴다 — 관리자 불필요, 이 사용자에게만 보인다.</li>
+      <li>원래 값은 <b>desktop.ini 안 [MoAI-S] 절</b>과 앱 상태 파일 두 곳에 백업하고, 폴더를 인덱싱에서 빼거나 옵션을 끄면 그대로 되돌린다.</li>
+      <li>아이콘은 Win11 노란 폴더(드라이브는 회색 드라이브) 오른쪽 아래에 <b>빨간 M 배지</b>. 16px 에서는 배지를 크게 그린 별도 그림을 쓴다(§6).</li>
+    </ul>
+    <strong>B. 탐색기 모드 — 된다. 다만 "쪽 번호"를 먼저 바로잡아야 한다.</strong>
+    <ul>
+      <li>검색만 하고 답을 만들지 않으므로 <b>빠르고 가볍다</b> — 실측 top-30 검색 <b>484ms</b>(리랭킹 443ms 포함), 생성 LLM 을 올릴 필요가 없다.</li>
+      <li><span class="gap">막히는 곳:</span> 인덱스의 청크 쪽 정보(<code>page_from·page_to</code>)는 청크가 아니라 <b>절 전체</b>의 범위다.
+        실측 4,616 청크 중 한 쪽으로 딱 떨어지는 것은 <b>15.5%</b>, 10쪽 넘게 퍼진 것이 <b>56%</b>, 최대 69쪽. 이대로는 "그 쪽으로 이동"이 안 된다.
+        → 청킹 때 블록마다 가진 쪽 번호로 <b>청크의 실제 시작 쪽</b>을 남기도록 고치고(재인덱싱 1회), 옛 인덱스는 검색 때 PDF 본문 대조로 보정한다(§13).</li>
+      <li>화면은 Windows 11 탐색기 모양 — 주소줄 · 검색 상자 · 왼쪽 탐색 창 · 가운데 <b>문서 ▸ 쪽</b> 자세히 보기 · 오른쪽 <b>미리 보기 창</b>(그 쪽을 띄우고 청크를 강조) · 아래 상태 표시줄(§10).</li>
+      <li>"그 쪽에서 열기"는 두 갈래: ① 앱 안 미리 보기(WebView2 PDF 뷰어 <code>#page=N</code>) ② 기본 PDF 앱 — 앱을 알아내 앱별 쪽 인자를 붙인다(Edge·Chrome·Whale·Acrobat·SumatraPDF). 모르는 앱이면 파일만 열고 "N쪽" 안내(§14).</li>
+      <li>모드는 <code>RAGSearchBox.ini [UI] Mode = explorer | rag</code>, 기본 <b>explorer</b>. 설정 창 "화면 모드"에서 바꾸고 다시 시작 없이 바로 적용(§16).</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────────────────────── 2. 요구사항 ───────────────────────── -->
+<section id="s2">
+  <h2><span class="no">2</span>요구사항 정리</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>요구</th><th>이 설계의 답</th></tr></thead>
+    <tbody>
+      <tr><td>A1</td><td>인덱싱 폴더를 지정하면 그 폴더 아이콘을 바꾼다</td><td>설정 창 "추가…" 직후 적용, "빼기" 직후 원래대로. 시작할 때 목록과 맞춰 본다(§4)</td></tr>
+      <tr><td>A2</td><td>desktop.ini 변경 방법 검토</td><td>파일 형식 · 속성 조건 · API · 기존 desktop.ini 병합 · 백업(§3 · §4)</td></tr>
+      <tr><td>A3</td><td>C:\ · D:\ 같은 볼륨을 고른 경우</td><td>레지스트리 DriveIcons(HKCU) — 4가지 방법 비교(§5)</td></tr>
+      <tr><td>A4</td><td>모아이 M 마크가 붙은 폴더 아이콘</td><td>폴더용 · 드라이브용 두 벌, 크기별 그림(§6)</td></tr>
+      <tr><td>B1</td><td>RAG 모드 말고 탐색기 모드 추가</td><td>같은 앱 안의 두 번째 화면. 검색 결과만, 답 생성 없음(§8)</td></tr>
+      <tr><td>B2</td><td>자연어 → 비슷한 문서 · 쪽 · 청크 요약</td><td>문서 ▸ 쪽 두 단계 목록 + 조항 경로 + 강조 발췌(§12)</td></tr>
+      <tr><td>B3</td><td>쪽을 누르면 문서가 열리고 그 쪽으로 이동</td><td>미리 보기 창 · 기본 앱 쪽 인자(§14). 전제: 쪽 번호 정밀화(§13)</td></tr>
+      <tr><td>B4</td><td>UI 는 탐색기와 비슷하게, 초안 디자인</td><td>§10 · §11 초안</td></tr>
+      <tr><td>B5</td><td>모드 선택은 옵션, 기본은 탐색기 모드</td><td><code>[UI] Mode</code> 기본 explorer, 설정 창 라디오(§16)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<div class="part">A. 인덱싱 폴더 아이콘<small>폴더는 desktop.ini, 드라이브는 레지스트리</small></div>
+
+<!-- ───────────────────────── 3. desktop.ini ───────────────────────── -->
+<section id="s3">
+  <h2><span class="no">3</span>A-1 폴더 아이콘 — desktop.ini 원리</h2>
+  <p>탐색기는 폴더를 그릴 때 그 폴더 안의 <code>desktop.ini</code> 를 읽는다. 단, <b>폴더에 읽기전용(또는 시스템) 속성이 있을 때만</b> 읽는다 —
+  모든 폴더의 desktop.ini 를 열어 보면 느려지므로 속성을 "읽어 볼 만한 폴더" 표시로 쓰는 것이다. 이 조건 때문에 desktop.ini 만 써 두고 아이콘이 안 바뀌는 일이 가장 흔하다.</p>
+  <h3>바꾼 뒤 desktop.ini 모양</h3>
+<pre>[.ShellClassInfo]
+IconResource=C:\Users\&lt;사용자&gt;\AppData\Local\RAGSearchBox\icons\moai-folder.ico,0
+InfoTip=MoAI-S 인덱싱 폴더 — 자연어로 문서와 쪽을 찾을 수 있습니다
+
+[MoAI-S]
+Managed=1
+Created=0                 ; 1 이면 desktop.ini 를 우리가 새로 만든 것 → 되돌릴 때 파일째 지운다
+Orig.IconResource=        ; 원래 값(비었으면 원래 없던 키)
+Orig.InfoTip=
+IconVersion=1</pre>
+  <div class="tbl"><table>
+    <thead><tr><th>조건</th><th>내용</th><th>누가 처리</th></tr></thead>
+    <tbody>
+      <tr><td>desktop.ini 인코딩</td><td>한글 경로 · InfoTip 이 있으므로 <b>UTF-16 LE (BOM)</b>. ANSI 로 쓰면 cp949 아닌 환경에서 깨진다</td><td>API</td></tr>
+      <tr><td>desktop.ini 속성</td><td>숨김 + 시스템 (사용자 눈에 안 띄게, 탐색기가 시스템 파일로 취급)</td><td>API</td></tr>
+      <tr><td>폴더 속성</td><td>읽기전용(기본) — <code>PathMakeSystemFolder</code> 와 같은 규칙. 폴더 읽기전용은 "안의 파일 쓰기 금지"가 아니라 표식일 뿐이라 인덱싱·감시에 영향 없음</td><td>API</td></tr>
+      <tr><td>탐색기 새로고침</td><td><code>SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, 폴더)</code> — 열린 탐색기 창에 바로 반영</td><td>API(+ 보강 호출)</td></tr>
+      <tr><td>[MoAI-S] 절</td><td>우리 표식 · 원래 값 백업. 앱 상태 파일이 사라져도 desktop.ini 만 보고 되돌릴 수 있다</td><td>직접(<code>WritePrivateProfileStringW</code>)</td></tr>
+    </tbody>
+  </table></div>
+  <h3>쓰는 API</h3>
+<pre>SHFOLDERCUSTOMSETTINGS fcs = { cbSize, dwMask = FCSM_ICONFILE | FCSM_INFOTIP,
+                               pszIconFile = ico 경로, iIconIndex = 0, pszInfoTip = 안내글 };
+SHGetSetFolderCustomSettings(&amp;fcs, 폴더, FCS_FORCEWRITE);   // 적용
+SHGetSetFolderCustomSettings(&amp;fcs, 폴더, FCS_READ);         // 적용 전 원래 값 읽기(백업)</pre>
+  <p>Rust 에서는 이미 쓰는 <code>windows</code> 크레이트의 <code>Win32_UI_Shell</code> 기능에 들어 있다(새 의존성 없음). Python 판은 <code>ctypes</code> 로 같은 함수를 부른다.</p>
+  <div class="note">아이콘 파일은 <b>폴더 안에 넣지 않고</b> <code>%LOCALAPPDATA%\RAGSearchBox\icons\</code> 에 둔다. 폴더 안에 넣으면 사용자 문서 폴더에 우리 파일이 늘고,
+  폴더 감시(watcher)가 변경으로 잡는다. exe 안 리소스(<code>RAGSearchBox.exe,-2</code>)를 가리키는 방법도 있지만 exe 를 옮기거나 업데이트하면 깨지므로,
+  exe 에 그림을 넣어 두고(<code>include_bytes!</code>) 처음 쓸 때 위 폴더로 꺼내 쓴다.</div>
+</section>
+
+<!-- ───────────────────────── 4. 흐름 ───────────────────────── -->
+<section id="s4">
+  <h2><span class="no">4</span>A-2 적용 · 되돌리기 흐름</h2>
+  <div class="flow">
+    <div class="card"><h3>적용 (인덱싱 폴더 추가 · 시작할 때 맞춰 보기)</h3><ol>
+      <li>경로가 드라이브 루트(<code>PathIsRootW</code>)면 §5 볼륨 방식으로, 아니면 아래</li>
+      <li>아이콘 파일이 없거나 버전이 낮으면 exe 에서 꺼내 씀</li>
+      <li>desktop.ini 가 있으면 <code>FCS_READ</code> 로 원래 IconResource · InfoTip 을 읽어 둠. 이미 [MoAI-S] Managed=1 이면 경로만 최신으로 갱신하고 끝</li>
+      <li><code>FCS_FORCEWRITE</code> 로 적용 → [MoAI-S] 절에 백업 기록</li>
+      <li>앱 상태 <code>%LOCALAPPDATA%\RAGSearchBox\folder_icons.json</code> 에 {경로, 종류, 원래 값} 추가</li>
+      <li>실패(권한 · 네트워크 · 읽기 전용 매체)는 로그 한 줄 + 설정 창 폴더 메모 "아이콘을 바꾸지 못함(권한)" — 인덱싱은 그대로 진행</li>
+    </ol></div>
+    <div class="card"><h3>되돌리기 (폴더 빼기 · 옵션 끄기 · 트레이 "아이콘 원래대로")</h3><ol>
+      <li>desktop.ini 의 [MoAI-S] 절을 읽는다(없으면 상태 파일 값)</li>
+      <li>Created=1 → desktop.ini 삭제 + 폴더 읽기전용 해제(<code>PathUnmakeSystemFolder</code>)</li>
+      <li>Created=0 → Orig.* 값으로 되쓰고 [MoAI-S] 절만 지움(다른 키 — LocalizedResourceName 등 — 은 손대지 않음)</li>
+      <li>단, 그 사이 사용자가 아이콘을 직접 바꿨으면(IconResource 가 우리 경로가 아님) <b>건드리지 않는다</b></li>
+      <li><code>SHChangeNotify</code> 로 새로고침, 상태 파일에서 제거</li>
+    </ol></div>
+  </div>
+  <div class="pipe"><span>설정 창 "추가…"</span><b>→</b><span>scope 목록 저장</span><b>→</b><span class="hl">folder_icon::apply</span><b>→</b><span>자동 인덱싱 시작</span></div>
+  <div class="pipe"><span>설정 창 "빼기"</span><b>→</b><span>scope 목록 저장</span><b>→</b><span class="hl">folder_icon::restore</span><b>→</b><span>인덱스에서 그 폴더 문서 정리</span></div>
+  <ul>
+    <li><b>하위 폴더에는 붙이지 않는다</b> — 지정한 뿌리 폴더 하나만. 하위마다 desktop.ini 를 만들면 사용자 폴더를 어지럽히고, 범위는 뿌리만 보여도 충분하다.</li>
+    <li><b>시작할 때 맞춰 보기</b> — ini 를 손으로 고친 경우를 위해, 시작 시 scope 목록과 상태 파일을 비교해 빠진 것은 적용, 남은 것은 되돌린다.</li>
+    <li>폴더 감시는 <code>TEXT_EXTS</code> 확장자만 보므로 desktop.ini 변경은 인덱싱을 일으키지 않는다(watcher.rs 확인).</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 5. 볼륨 ───────────────────────── -->
+<section id="s5">
+  <h2><span class="no">5</span>A-3 볼륨(C:\ · D:\) 아이콘</h2>
+  <p>"내 PC"에 보이는 드라이브 아이콘은 폴더 아이콘과 다른 경로로 정해진다. 드라이브 루트에 desktop.ini 를 두면 <b>그 드라이브를 열었을 때의 폴더 보기</b>에만 영향이 있고
+  "내 PC"의 드라이브 그림은 그대로다. 가능한 방법은 넷이다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>방법</th><th>위치</th><th>권한</th><th>보이는 범위</th><th>판단</th></tr></thead>
+    <tbody>
+      <tr><td><b>① 사용자 레지스트리</b></td><td><code>HKCU\Software\Classes\Applications\Explorer.exe\Drives\D\DefaultIcon</code><br>(기본값) = <code>…\moai-drive.ico,0</code></td><td>불필요</td><td>이 사용자</td><td><span class="tag t-good">채택</span></td></tr>
+      <tr><td>② 컴퓨터 레지스트리</td><td><code>HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\DriveIcons\D\DefaultIcon</code></td><td>관리자</td><td>모든 사용자</td><td><span class="tag t-warn">선택 사항</span> — 관리자 설치판에서만</td></tr>
+      <tr><td>③ 루트 autorun.inf</td><td><code>D:\autorun.inf</code> 의 <code>[autorun] icon=</code></td><td>C:\ 루트는 관리자</td><td>모든 사용자</td><td><span class="tag t-bad">기각</span> — 백신이 autorun.inf 를 막거나 지움, 루트에 파일을 남김</td></tr>
+      <tr><td>④ 루트 desktop.ini</td><td><code>D:\desktop.ini</code></td><td>C:\ 는 관리자</td><td>—</td><td><span class="tag t-bad">기각</span> — 드라이브 아이콘에 반영 안 됨</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>적용</b>: 키가 이미 있으면 원래 기본값을 상태 파일에 백업 → 우리 경로로 씀 → <code>SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0)</code> 와 <code>SHCNE_UPDATEITEM("D:\")</code> 로 새로고침.</li>
+    <li><b>되돌리기</b>: 우리가 만든 키면 <code>DefaultIcon</code> 키째 삭제(빈 <code>Drives\D</code> 도 정리), 원래 값이 있었으면 되씀.</li>
+    <li><b>드라이브 문자 기준</b>이라 USB 를 다른 문자로 꽂으면 아이콘이 따라가지 않는다. 고정 디스크(C:\ · D:\)는 문제없다. 네트워크 드라이브(Z:)에서도 같은 키가 듣는지는 P0 확인(§17).</li>
+    <li>폴더 아이콘과 달리 <b>그 드라이브를 연 뒤 보이는 폴더 아이콘</b>은 바뀌지 않는다 — 드라이브 자체가 "인덱싱 폴더"이므로 "내 PC" 에서 보이는 것으로 충분.</li>
+    <li>참고: 드라이브 전체(C:\)를 인덱싱 폴더로 잡는 것은 아이콘과 별개로 인덱싱 시간 · 용량 부담이 크다. 설정 창에서 루트를 고르면 "드라이브 전체를 인덱싱합니다(문서 N개 예상)" 확인을 한 번 띄우는 것을 권한다.</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 6. 아이콘 그림 ───────────────────────── -->
+<section id="s6">
+  <h2><span class="no">6</span>A-4 아이콘 그림 초안</h2>
+  <p>Windows 11 탐색기 폴더(노란 앞판 · 진한 뒤판)와 드라이브(회색 판)를 따르고, 오른쪽 아래에 MoAI-S 로고의 <b>빨간 사각 M</b>(<code>#e5163f</code>)을
+  흰 테두리로 띄워 붙인다. 원래 폴더 모양을 지켜야 "폴더인데 MoAI 가 읽은 폴더"로 읽힌다 — 폴더 전체를 빨갛게 바꾸면 폴더로 안 보인다.</p>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="fold64" viewBox="0 0 64 64">
+        <path d="M4 15a4 4 0 0 1 4-4h15.5a4 4 0 0 1 2.8 1.2L31 17h25a4 4 0 0 1 4 4v29a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4z" fill="#E3A231"/>
+        <rect x="4" y="22" width="56" height="32" rx="4" fill="#FFC93F"/>
+        <rect x="4" y="22" width="56" height="3" rx="1.5" fill="#FFDA75"/>
+      </symbol>
+      <symbol id="badge64" viewBox="0 0 64 64">
+        <rect x="33" y="29" width="29" height="29" rx="6" fill="#fff"/>
+        <rect x="35.5" y="31.5" width="24" height="24" rx="4.5" fill="#e5163f"/>
+        <path d="M41 50.5V37l6.5 7.5L54 37v13.5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="drive64" viewBox="0 0 64 64">
+        <rect x="5" y="20" width="54" height="28" rx="5" fill="#B9C0CA"/>
+        <rect x="5" y="20" width="54" height="13" rx="5" fill="#D5DAE1"/>
+        <rect x="11" y="38" width="22" height="3.5" rx="1.75" fill="#8D96A3"/>
+        <circle cx="48" cy="39.5" r="2.4" fill="#3FBF6F"/>
+      </symbol>
+      <symbol id="fold16" viewBox="0 0 16 16">
+        <path d="M1 3.5a1 1 0 0 1 1-1h4l1.5 1.5H14a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z" fill="#E3A231"/>
+        <rect x="1" y="5.5" width="14" height="8.5" rx="1" fill="#FFC93F"/>
+        <rect x="6.5" y="6" width="9.5" height="9.5" rx="2" fill="#fff"/>
+        <rect x="7.3" y="6.8" width="8" height="8" rx="1.5" fill="#e5163f"/>
+        <path d="M9 13.2V8.6l2.3 2.6 2.3-2.6v4.6" fill="none" stroke="#fff" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="icons">
+    <figure><svg width="128" height="128"><use href="#fold64"/><use href="#badge64"/></svg>폴더 256 · 128 (큰 아이콘)</figure>
+    <figure><svg width="48" height="48"><use href="#fold64"/><use href="#badge64"/></svg>48 · 32</figure>
+    <figure><svg width="64" height="64" class="px16"><use href="#fold16"/></svg>16 · 20 · 24 전용 그림<br>(4배 확대해 보임)</figure>
+    <figure><svg width="16" height="16"><use href="#fold16"/></svg>16 실제 크기</figure>
+    <div class="sep"></div>
+    <figure><svg width="128" height="128"><use href="#drive64"/><use href="#badge64"/></svg>드라이브 128</figure>
+    <figure><svg width="32" height="32"><use href="#drive64"/><use href="#badge64"/></svg>32</figure>
+  </div>
+  <div class="cap">초안 — 실제 .ico 는 크기마다 따로 그려 한 파일(16·20·24·32·40·48·64·96·256)에 담는다.</div>
+
+  <h3>탐색기에서 보이는 모습(예시)</h3>
+  <div class="exp-strip">
+    <div class="it"><svg width="64" height="64"><use href="#fold64"/></svg>계약서</div>
+    <div class="it"><svg width="64" height="64"><use href="#fold64"/><use href="#badge64"/></svg>회사규정</div>
+    <div class="it"><svg width="64" height="64"><use href="#fold64"/><use href="#badge64"/></svg>ISMS</div>
+    <div class="it"><svg width="64" height="64"><use href="#fold64"/></svg>사진</div>
+    <div class="it"><svg width="64" height="64"><use href="#drive64"/></svg>로컬 디스크 (C:)</div>
+    <div class="it"><svg width="64" height="64"><use href="#drive64"/><use href="#badge64"/></svg>DATA (D:)</div>
+  </div>
+  <ul>
+    <li><b>그리는 법</b>: 지금 트레이 아이콘을 코드로 그리는 <code>RAGSearchBox/make_icon.py</code> 와 같은 방식으로 <code>make_folder_icon.py</code> 를 더해
+      <code>moai-folder.ico</code> · <code>moai-drive.ico</code> 를 만들고 저장소에 넣는다. 작은 크기(16~24)는 배지를 폴더의 60% 크기로 키운 별도 그림 — 줄여서 쓰면 M 이 뭉개진다.</li>
+    <li><b>다른 방법(후순위)</b>: 실행 중 <code>SHGetStockIconInfo(SIID_FOLDER)</code> 로 OS 의 진짜 폴더 그림을 받아 배지만 합성 → Win10/11 · 테마에 꼭 맞지만 코드가 늘고, 결과를 다시 .ico 로 써야 한다. 1차는 미리 그린 Win11 그림.</li>
+    <li><b>기각</b>: 아이콘 오버레이(<code>IShellIconOverlayIdentifier</code>) — 셸 확장 DLL 을 등록해야 하고(관리자), 오버레이 슬롯이 15개뿐인데 OneDrive 등이 먼저 차지해 안 보일 수 있다.</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 7. 예외 ───────────────────────── -->
+<section id="s7">
+  <h2><span class="no">7</span>A-5 예외와 주의</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>상황</th><th>무슨 일이 생기나</th><th>처리</th></tr></thead>
+    <tbody>
+      <tr><td>네트워크 공유(<code>\\서버\공유</code>)</td><td>desktop.ini 는 공유에 써지지만 아이콘 경로가 <b>내 PC 의 %LOCALAPPDATA%</b> 라 다른 사람에게는 기본 폴더로 보인다. 쓰기 권한이 없으면 실패</td><td>실패는 메모만. 다른 사람에게 안 보이는 것은 허용(결정 §19-5)</td></tr>
+      <tr><td>OneDrive · 동기화 폴더</td><td>desktop.ini 가 동기화되어 다른 PC 에서 아이콘 경로가 없으면 기본 폴더로 보임(해 없음)</td><td>그대로 둠</td></tr>
+      <tr><td>특수 폴더(문서 · 바탕 화면 · 다운로드)</td><td>이미 desktop.ini(LocalizedResourceName 등)가 있다</td><td>IconResource · InfoTip 만 병합, 되돌릴 때 그 두 키만 복원</td></tr>
+      <tr><td>사용자가 직접 아이콘을 바꿔 둔 폴더</td><td>덮어쓰면 사용자 설정이 사라짐</td><td>원래 값 백업 → 되돌릴 때 복원. 적용 뒤 사용자가 또 바꿨으면 되돌리지 않음</td></tr>
+      <tr><td>아이콘이 바로 안 바뀜</td><td>탐색기 아이콘 캐시</td><td>SHChangeNotify 두 번(폴더 · 부모). 그래도 안 되면 설정 창 "아이콘 새로고침" 단추(1분 뒤 재시도). <code>ie4uinit.exe -show</code> 는 최후 수단으로만</td></tr>
+      <tr><td>읽기 전용 매체 · CD</td><td>쓰기 불가</td><td>건너뜀</td></tr>
+      <tr><td>앱 삭제</td><td>아이콘 파일이 사라지면 기본 폴더로 보이지만 desktop.ini 는 남는다</td><td>트레이 "아이콘 모두 원래대로" + 제거 안내에 명시. 설치판이 생기면 제거 단계에서 호출</td></tr>
+      <tr><td>폴더 읽기전용 속성</td><td>일부 백업 도구가 "읽기전용 폴더"를 다르게 취급할 수 있음</td><td>되돌릴 때 우리가 켠 속성만 끔(원래 켜져 있었으면 유지)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<div class="part">B. 탐색기 모드<small>답을 짓지 않고, 어느 문서 몇 쪽에 있는지를 찾아 준다</small></div>
+
+<!-- ───────────────────────── 8. 모드 비교 ───────────────────────── -->
+<section id="s8">
+  <h2><span class="no">8</span>B-1 탐색기 모드란 — RAG 모드와 비교</h2>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>RAG 모드 (지금)</th><th>탐색기 모드 (새로)</th></tr></thead>
+    <tbody>
+      <tr><td>입력</td><td>질문(대화, 이어서 묻기)</td><td>자연어 검색어 · 파일 이름 일부도 됨</td></tr>
+      <tr><td>결과</td><td>AI 가 만든 답 + 출처 N건</td><td><b>문서 목록 ▸ 쪽 목록 ▸ 청크 발췌</b>, 관련도 순</td></tr>
+      <tr><td>결과 수</td><td>근거 5~13건(사본 거르기 뒤)</td><td>문서 최대 20 · 쪽 최대 60(더 보기)</td></tr>
+      <tr><td>관련도 낮을 때</td><td>"문서에 없습니다"(리랭커 -6 문턱)</td><td>목록 아래에 <b>흐리게</b> 보여 줌 — 탐색은 "없음"보다 "가까운 것"이 쓸모 있다</td></tr>
+      <tr><td>쓰는 모델</td><td>임베딩 · 리랭커 · <b>생성 LLM</b></td><td>임베딩 · 리랭커만 — 메모리 적고 첫 응답 빠름</td></tr>
+      <tr><td>시간(실측 · 추정)</td><td>근거 0.5초 + 답 수 초</td><td><b>0.5초 안팎</b>(top-30 실측 484ms)</td></tr>
+      <tr><td>여는 방법</td><td>탐색기 옆 패널</td><td>독립 "MoAI 탐색기" 창(트레이 · 단축키) + 탐색기 옆 패널(좁은 배치)</td></tr>
+      <tr><td>건너가기</td><td>근거 → "탐색기 모드에서 보기"</td><td>검색어 → <b>"AI에게 묻기 ✦"</b>(같은 검색어로 RAG 답)</td></tr>
+    </tbody>
+  </table></div>
+  <p>두 모드는 같은 워커 · 같은 인덱스 · 같은 범위 규칙(폴더 한정 검색)을 쓴다. 다른 것은 <b>워커에 보내는 명령</b>(chat 질문 ↔ <code>/find</code>)과 <b>화면</b>뿐이다.</p>
+</section>
+
+<!-- ───────────────────────── 9. 실측 ───────────────────────── -->
+<section id="s9">
+  <h2><span class="no">9</span>B-2 지금 구조 실측 — 막히는 곳</h2>
+  <p>dist-rust 인덱스(문서 30 · 청크 4,616, 전부 PDF)와 <code>simplerag-rs.exe search</code> 로 쟀다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>실측</th><th>탐색기 모드에 주는 뜻</th></tr></thead>
+    <tbody>
+      <tr><td>청크에 쪽 정보가 있나</td><td class="ok">4,616 / 4,616 (100%) — payload <code>page_from · page_to</code></td><td>필드는 있다</td></tr>
+      <tr><td>쪽 범위가 1쪽인 청크</td><td class="ng">15.5%</td><td rowspan="3">청크가 아니라 <b>절 전체 범위</b>를 받는다(<code>chunk.rs chunk_meta</code> — "쪽 범위는 모든 절의 합"). 긴 절(별표 · 해설서 장)을 여러 청크로 자르면 모두 같은 넓은 범위를 갖는다 → <b>§13 에서 바로잡기 필수</b></td></tr>
+      <tr><td>2쪽 이내 / 10쪽 이내</td><td>27.4% / 43.9%</td></tr>
+      <tr><td>가장 넓은 범위</td><td class="ng">69쪽</td></tr>
+      <tr><td>검색만(top-30, 리랭킹 포함)</td><td class="ok">484ms (임베딩 15 · dense 2 · BM25 24 · 리랭킹 443)</td><td>답 생성 없이 바로 목록. 리랭킹이 대부분 — 후보를 늘리면 비례해서 늘어남(§17 측정)</td></tr>
+      <tr><td>결과 개수</td><td>top-30 요청 → 13건(사본 거르기 <code>pick_unique</code> 뒤), 13건 모두 한 문서</td><td>탐색기 모드는 문서별로 묶어 보여 주므로 "한 문서 13곳"이 오히려 자연스럽다. 다른 문서도 보이도록 후보를 넓힘(§12)</td></tr>
+      <tr><td>워커가 화면에 주는 근거</td><td><code>[n] 문서이름</code> + 160자 발췌 + <code>@ev {no, path, text}</code></td><td><b>쪽 · 점수 · 조항 경로가 없다</b> → 새 출력 <code>@find</code>(§15)</td></tr>
+      <tr><td>조항 경로</td><td>청크 본문 앞에 <code>[문서 &gt; 10. 여비지급 및 정산 &gt; 10.1]</code> 접두가 붙어 있음</td><td>목록의 "위치" 열로 그대로 쓸 수 있다(payload <code>path</code> 에도 있음)</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────── 10. 창 초안 ───────────────────────── -->
+<section id="s10">
+  <h2><span class="no">10</span>B-3 화면 초안 — MoAI 탐색기 창</h2>
+  <p>Windows 11 탐색기의 뼈대(탭 · 주소줄 · 검색 상자 · 명령 모음 · 탐색 창 · 자세히 보기 · 미리 보기 창 · 상태 표시줄)를 그대로 따르고,
+  다른 점은 두 가지다 — 검색 상자가 <b>가장 크고 빨간 테두리</b>(이 창의 주인공), 목록이 <b>문서 ▸ 쪽</b> 두 단계.</p>
+
+  <div class="mockwrap"><div class="xw">
+    <div class="tb">
+      <div class="tab"><span class="logo">M</span>출장 여비 정산 방법<span class="x">✕</span></div>
+      <div class="tab off">＋</div>
+      <div class="wc"><span>─</span><span>☐</span><span>✕</span></div>
+    </div>
+    <div class="addr">
+      <div class="nav"><span>←</span><span>→</span><span>↑</span><span>⟳</span></div>
+      <div class="crumb">MoAI 탐색기<b>›</b>인덱싱 폴더<b>›</b>회사규정</div>
+      <div class="search"><span>🔍</span><span class="q">출장 여비 정산 방법</span><span class="hint">Enter 찾기 · Shift+Enter AI 답</span></div>
+    </div>
+    <div class="cmd">
+      <span class="b on">▤ 문서별 묶기 ▾</span><span class="b">↕ 정렬: 관련도 ▾</span><span class="b">⚲ 종류: 모든 문서 ▾</span><span class="b">◫ 미리 보기 창</span>
+      <span class="sp"></span>
+      <span class="ai">✦ AI에게 묻기</span>
+      <span class="seg"><span class="on">탐색기</span><span>RAG</span></span>
+    </div>
+    <div class="main">
+      <div class="side">
+        <div class="h">최근 검색</div>
+        <div class="i">🕘 출장 여비 정산 방법</div>
+        <div class="i">🕘 개인정보 파기 절차</div>
+        <div class="h">인덱싱 폴더</div>
+        <div class="i"><svg width="16" height="16"><use href="#fold16"/></svg>sample_pdf</div>
+        <div class="i sub on"><svg width="16" height="16"><use href="#fold16"/></svg>회사규정</div>
+        <div class="i sub"><svg width="16" height="16"><use href="#fold16"/></svg>ISMS</div>
+        <div class="i sub"><svg width="16" height="16"><use href="#fold16"/></svg>청탁금지법</div>
+        <div class="i"><svg width="16" height="16"><use href="#drive64"/><use href="#badge64"/></svg>DATA (D:)</div>
+        <div class="h">이 대화에 올린 문서</div>
+        <div class="i">📎 없음</div>
+      </div>
+      <div class="list">
+        <div class="cols"><span class="s">이름 · 위치 · 내용</span><span>쪽</span><span>관련도</span><span>수정한 날짜</span></div>
+        <div class="grp">파일 이름 일치 (1)</div>
+        <div class="r doc"><span class="n"><i>▸</i>📕 25.출장여비규정_16.04.01.pdf <span class="cnt">· 이름에 "출장 여비"</span></span><span>9쪽</span><span class="rel"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span><span>2016-04-01</span></div>
+        <div class="grp">내용 일치 — 문서 3개 · 위치 14곳</div>
+        <div class="r doc"><span class="n"><i>▾</i>📕 25.출장여비규정_16.04.01.pdf <span class="cnt">· 9곳</span></span><span>9쪽</span><span class="rel"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span><span>2016-04-01</span></div>
+        <div class="r pg sel"><span class="n"><div class="sec">10. 여비지급 및 정산 › 10.1</div><div class="snip">여비는 출장 전 여비 지급기준에 따라 개산 지급하고 귀임 후 7일 이내에 <mark>정산</mark>하여야 한다…</div></span><span><span class="pgchip">p.5</span></span><span class="rel"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span><span></span></div>
+        <div class="r pg"><span class="n"><div class="sec">3. 여비계산 › 3.1</div><div class="snip"><mark>여비</mark>는 순로에 의하여 계산하며, 천재지변 기타 부득이한 사유로…</div></span><span><span class="pgchip">p.2</span></span><span class="rel"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span><span></span></div>
+        <div class="r pg"><span class="n"><div class="sec">10. 여비지급 및 정산 › 10.2</div><div class="snip">출장지의 교통 편의상 <mark>정산</mark> 기준과 달리 지출한 경우에는 증빙을…</div></span><span><span class="pgchip">p.5</span></span><span class="rel"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span><span></span></div>
+        <div class="more">＋ 6곳 더 보기</div>
+        <div class="r doc"><span class="n"><i>▸</i>📕 16.이사회규정_22.01.25.pdf <span class="cnt">· 2곳</span></span><span>8쪽</span><span class="rel"><i class="f"></i><i class="f"></i><i></i><i></i><i></i></span><span>2022-01-25</span></div>
+        <div class="r doc low"><span class="n"><i>▸</i>📕 21.업무추진비집행지침_22.01.25.pdf <span class="cnt">· 관련 낮음</span></span><span>3쪽</span><span class="rel"><i class="f"></i><i></i><i></i><i></i><i></i></span><span>2022-01-25</span></div>
+      </div>
+      <div class="pv">
+        <div class="ph"><span>📕 25.출장여비규정 …</span><span>5 / 9쪽</span></div>
+        <div class="page">
+          <div class="t">10. 여비지급 및 정산</div>
+          <div class="ln" style="width:92%"></div><div class="ln" style="width:70%"></div>
+          <div class="hlb">10.1 여비는 출장 전 여비 지급기준에 따라 개산 지급하고, 귀임 후 7일 이내에 정산하여야 한다.</div>
+          <div class="ln" style="width:88%"></div><div class="ln" style="width:95%"></div><div class="ln" style="width:60%"></div>
+          <div class="t" style="margin-top:10px">10.2</div>
+          <div class="ln" style="width:90%"></div><div class="ln" style="width:76%"></div><div class="ln" style="width:84%"></div>
+        </div>
+        <div class="acts"><span class="p">5쪽 열기 ↗</span><span>폴더에서 보기</span></div>
+      </div>
+    </div>
+    <div class="st"><span>문서 3개 · 위치 14곳</span><span>검색 0.48초</span><span>범위: 회사규정(문서 19개)</span><span class="sp"></span><span>▤ ▦</span></div>
+  </div></div>
+  <div class="cap">초안 — 내용은 실제 인덱스의 문서 이름 · 조항을 빌린 예시이고, 쪽 번호와 발췌는 설명용이다.</div>
+
+  <h3>화면 부분별 동작</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>부분</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td>탭</td><td>검색마다 탭 하나(탐색기처럼 Ctrl+T 새 탭). 탭 제목 = 검색어. 1차는 탭 1개, 2단계에서 여러 탭</td></tr>
+      <tr><td>주소줄</td><td>지금 검색 범위. 조각을 누르면 범위가 그 폴더로 좁혀짐(폴더 한정 검색 그대로 사용)</td></tr>
+      <tr><td>검색 상자</td><td>Enter = 찾기(<code>/find</code>), Shift+Enter = 같은 검색어로 RAG 답. 입력을 멈추면 0.4초 뒤 자동으로 찾기(옵션, 기본 끔 — 리랭킹이 0.4초라 타자마다 돌리면 무거움)</td></tr>
+      <tr><td>명령 모음</td><td>묶기(문서별 / 쪽 목록 한 줄씩) · 정렬(관련도 · 이름 · 날짜 · 쪽) · 종류(PDF · 한글 · 오피스) · 미리 보기 창 켜기/끄기 · AI에게 묻기 · 모드 전환</td></tr>
+      <tr><td>탐색 창</td><td>최근 검색 · 인덱싱 폴더 트리(M 아이콘 — A 와 같은 그림) · 올린 문서. 폴더를 누르면 범위가 바뀌고 같은 검색어로 다시 찾음</td></tr>
+      <tr><td>목록 — 문서 줄</td><td>▸/▾ 펼치기, 더블클릭 = 가장 관련 높은 쪽으로 열기, 우클릭 = 열기 · 폴더에서 보기 · 경로 복사 · AI에게 이 문서만 묻기</td></tr>
+      <tr><td>목록 — 쪽 줄</td><td>조항 경로 + 발췌(검색어 강조). <b>클릭 = 미리 보기 창에 그 쪽</b>, 더블클릭 · Enter = 기본 앱에서 그 쪽 열기(§14)</td></tr>
+      <tr><td>미리 보기 창</td><td>그 쪽 표시 + 청크 위치 강조(2단계). "N쪽 열기 ↗" · "폴더에서 보기"(탐색기에서 그 파일 선택)</td></tr>
+      <tr><td>상태 표시줄</td><td>문서 · 위치 수, 검색 시간, 범위와 범위 안 문서 수, 보기 전환(자세히/타일)</td></tr>
+    </tbody>
+  </table></div>
+  <h3>키보드</h3>
+  <p><code>Ctrl+F</code>/<code>Ctrl+E</code> 검색 상자 · <code>↑↓</code> 줄 이동 · <code>→←</code> 펼치기/접기 · <code>Space</code> 미리 보기 · <code>Enter</code> 그 쪽 열기 ·
+  <code>Ctrl+Shift+C</code> 경로 복사 · <code>Alt+P</code> 미리 보기 창 · <code>Esc</code> 검색어 지우기 — 탐색기 단축키와 겹치지 않게 맞춘다.</p>
+</section>
+
+<!-- ───────────────────────── 11. 좁은 패널 ───────────────────────── -->
+<section id="s11">
+  <h2><span class="no">11</span>B-4 화면 초안 — 탐색기 옆 패널(좁은 배치)</h2>
+  <p>지금처럼 Windows 탐색기에서 인덱싱 폴더를 열면 옆에 붙는 패널도 탐색기 모드를 따른다. 폭이 좁으므로(기본 ~420px) 한 단으로 접는다:
+  문서 카드 → 쪽 칩 → 고른 쪽의 발췌. 쪽 칩을 누르면 <b>독립 창의 미리 보기</b> 또는 기본 앱에서 그 쪽이 열린다(설정 §16).</p>
+  <div class="narrow">
+    <div class="hd"><b>MoAI<span>-S</span></b><span class="f">📁 회사규정 · 탐색기 모드</span></div>
+    <div class="sb">🔍 출장 여비 정산 방법</div>
+    <div class="d"><div class="t">📕 25.출장여비규정_16.04.01.pdf</div><div class="m">9곳 · ●●●●●</div>
+      <div class="pgs"><span class="on">p.5</span><span>p.2</span><span>p.5</span><span>p.7</span><span>p.3</span><span>+4</span></div>
+      <div class="sn"><b>10. 여비지급 및 정산 › 10.1</b><br>…귀임 후 7일 이내에 <mark>정산</mark>하여야 한다.</div></div>
+    <div class="d"><div class="t">📕 16.이사회규정_22.01.25.pdf</div><div class="m">2곳 · ●●○○○</div>
+      <div class="pgs"><span>p.4</span><span>p.6</span></div></div>
+    <div class="ft"><span>문서 3개 · 0.48초</span><span>⤢ 크게 보기 · ✦ AI에게 묻기</span></div>
+  </div>
+  <p>"⤢ 크게 보기"는 같은 검색 결과를 독립 MoAI 탐색기 창으로 넘긴다. 두 화면은 <b>같은 HTML(반응형)</b>이라 폭에 따라 배치만 바뀐다 — 화면 코드를 두 벌 두지 않는다.</p>
+</section>
+
+<!-- ───────────────────────── 12. 검색·묶기 ───────────────────────── -->
+<section id="s12">
+  <h2><span class="no">12</span>B-5 검색 · 묶기 규칙</h2>
+  <div class="pipe"><span>검색어</span><b>→</b><span>dense + BM25 (후보 60)</span><b>→</b><span>RRF</span><b>→</b><span>사본 거르기</span><b>→</b><span>리랭킹 상위 40</span><b>→</b><span class="hl">문서별 묶기</span><b>→</b><span class="hl">쪽별 합치기</span><b>→</b><span>발췌 · 강조</span></div>
+  <p>RAG 모드의 <code>Retriever::search</code> 를 그대로 쓰되, 답을 위한 단계(부모 절 확장 · 이웃 청크 붙이기 · 관련도 문턱으로 잘라 내기)는 끈다.
+  탐색기 모드에 필요한 것은 "넓게, 정확한 자리"이지 "LLM 이 읽을 긴 문맥"이 아니기 때문이다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>규칙</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>후보 수</td><td>1단계 60 → 리랭킹 40 (설정값, §17 에서 시간 보고 조정)</td><td>지금 13건이 전부 한 문서 — 다른 문서도 보이려면 넓혀야</td></tr>
+      <tr><td>파일 이름 일치</td><td>검색어 낱말(<code>retrieve::keywords</code>)이 문서 이름에 2개 이상 · 또는 이름 전체가 들어 있으면 "파일 이름 일치" 묶음으로 맨 위</td><td>탐색기 사용자는 이름 검색을 기대한다. 인덱스 payload <code>doc_name</code> 으로 공짜</td></tr>
+      <tr><td>문서 점수</td><td>최고 청크 점수 + 0.15 × (둘째 청크 점수, 있으면)</td><td>한 곳만 크게 맞은 문서와 여러 곳이 고루 맞은 문서를 함께 위로</td></tr>
+      <tr><td>쪽 합치기</td><td>같은 문서의 같은 시작 쪽 청크는 한 줄로(가장 높은 청크의 발췌, "이 쪽 2곳")</td><td>목록 줄 = 열 수 있는 단위(쪽)</td></tr>
+      <tr><td>처음 보이는 양</td><td>문서당 쪽 3줄 + "N곳 더 보기", 문서 최대 20</td><td>탐색기 한 화면에 들어오게</td></tr>
+      <tr><td>관련 낮음</td><td>리랭커 점수가 RAG 문턱(-6) 아래면 흐리게 + "관련 낮음", 맨 아래</td><td>숨기지 않고 알려 준다</td></tr>
+      <tr><td>발췌</td><td>조항 경로 접두(<code>[문서 &gt; …]</code>)를 떼어 "위치"로 따로 보이고, 본문에서 검색어가 가장 많이 몰린 120자 창을 고름. 검색어 · 동의어 확장어를 <code>&lt;mark&gt;</code></td><td>"간략한 내용" 요구 — 청크 머리 160자보다 맞은 자리가 낫다</td></tr>
+      <tr><td>관련도 표시</td><td>점수를 5칸 막대로(쿼리 안 상대값: 1등 = 5칸)</td><td>리랭커 점수 숫자는 사용자에게 뜻이 없음</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────── 13. 쪽 번호 ───────────────────────── -->
+<section id="s13">
+  <h2><span class="no">13</span>B-6 쪽 번호 바로잡기</h2>
+  <p>탐색기 모드의 핵심 약속은 "그 쪽으로 간다"인데, §9 처럼 지금 청크의 쪽 범위는 절 전체다. 원인과 고칠 자리는 분명하다.</p>
+  <div class="flow">
+    <div class="card"><h3>지금</h3><ol>
+      <li>PDF 추출(<code>docmodel/pdf.rs</code>) — 블록마다 <b>정확한 쪽</b>(<code>Block.page</code>)이 있다</li>
+      <li>절 만들기(<code>assemble.rs</code>) — 절의 page_from/to = 블록 쪽의 최소/최대</li>
+      <li>청킹(<code>chunk.rs split_blocks → pack_units</code>) — 절 본문을 <b>문자열로 이어 붙인 뒤</b> 예산대로 자른다. 이때 블록↔쪽 연결이 끊긴다</li>
+      <li><code>chunk_meta</code> — 쪽은 "청크가 속한 절들의 합" → 긴 절의 청크는 모두 넓은 범위</li>
+    </ol></div>
+    <div class="card"><h3>고친 뒤 (인덱싱 때)</h3><ol>
+      <li>절마다 <b>블록 지문표</b>를 만든다: 블록 본문 앞 24자(공백 제거) → 쪽</li>
+      <li>청크가 만들어지면 청크 본문(접두 뗀 것)을 같은 방식으로 훑어 <b>처음 만나는 블록의 쪽 = page</b>, 마지막 블록의 쪽 = page_to</li>
+      <li>표 조각처럼 머리글을 다시 붙인 청크는 머리글 다음 첫 행으로 잡는다</li>
+      <li>payload 에 <code>page</code>(시작 쪽) 추가, <code>page_from/to</code> 는 청크 자체 범위로 좁힌다. 못 찾으면 지금 값 유지 + <code>page_exact=false</code></li>
+    </ol></div>
+  </div>
+  <ul>
+    <li><b>재인덱싱 필요</b> — 지금 30문서 기준 수 분. 인덱스에 <code>page</code> 가 없는 옛 청크는 아래 보정으로 동작하게 해 재인덱싱 전에도 기능은 쓸 수 있게 한다.</li>
+    <li><b>옛 인덱스 보정(검색 때)</b>: 쪽 범위가 2쪽 이상인 결과만, 이미 들어 있는 pdfium(<code>pdfium.rs read_pages</code>)으로 그 범위의 쪽 글을 읽어 청크 앞 40자가 나오는 쪽을 찾는다.
+      문서마다 쪽 글을 메모리에 캐시(LRU 5문서). 큰 해설서(282쪽)도 범위 안 쪽만 읽으므로 수십 ms 로 예상 — §17 에서 잰다.</li>
+    <li>PDF 아닌 형식: pptx · xlsx 는 이미 블록 쪽이 <b>슬라이드 · 시트 번호</b>로 들어 있다(같은 고침이 그대로 듣는다).
+      docx · hwp · hwpx 는 "쪽을 뽑을 수 없다"가 아니라 <b>지금 추출기가 뽑지 않는다</b> — docx 추출기(<code>docx.rs para_runs</code>)는 쪽 나누기 <code>&lt;w:br type="page"&gt;</code> 를 일부러 건너뛰고,
+      hwpx 추출기에는 쪽 처리가 없으며, hwp 는 블록 없는 legacy(평문) 경로다. 이 형식들은 쪽이 파일에 고정되지 않고 프로그램이 열 때 배치로 정해지므로,
+      파일에 남은 배치 단서로 <b>근사 쪽</b>을 붙이는 것을 2단계에서 검토 · 시험한다(§14-④). 1차에서는 "쪽" 열이 비고 열기는 파일만 연다.</li>
+    <li>Python 판 <code>chunk.py _chunk_meta</code> 도 같은 구조라 같은 고침을 넣는다(두 판 같은 인덱스 규칙).</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 14. 열기 ───────────────────────── -->
+<section id="s14">
+  <h2><span class="no">14</span>B-7 그 쪽에서 열기</h2>
+  <p>지금 앱은 파일을 <code>ShellExecuteW("open", 경로)</code>(<code>win.rs open_path</code>)로만 연다 — 이 방식으로는 쪽을 넘길 수 없다. 두 갈래를 둔다.</p>
+  <h3>① 앱 안 미리 보기 창 (클릭 · Space)</h3>
+  <ul>
+    <li>미리 보기 영역에 <b>두 번째 WebView2</b>를 두고 <code>file:///D:/…/문서.pdf#page=5</code> 로 이동한다. WebView2 에는 Edge 의 PDF 뷰어가 들어 있어 별도 프로그램이 없어도 되고, 쪽 이동이 표준 URL 조각으로 된다.</li>
+    <li>목록 화면 WebView 안의 <code>&lt;iframe&gt;</code> 으로는 file:// 이 막힐 수 있어 별도 WebView(같은 창의 자식)로 둔다 — P0 확인.</li>
+    <li><b>2단계 — 청크 강조</b>: Edge PDF 뷰어는 글 강조를 URL 로 받지 못한다. 강조가 필요하면 pdfium 으로 그 쪽을 그림으로 그리고(<code>FPDF_RenderPageBitmap</code>) 청크 글자 위치(<code>FPDFText_Find…</code> · <code>GetCharBox</code>)에 노란 상자를 덧그린다 — 초안의 노란 박스가 이것.</li>
+    <li><b>이 미리 보기는 PDF 전용이다.</b> WebView2(Edge 엔진)는 PDF · 이미지 · txt · html 만 직접 그리고, docx · hwp · hwpx · pptx · xlsx 는 못 그린다 — 다른 형식은 §14-③.</li>
+  </ul>
+  <h3>② 기본 앱에서 그 쪽 열기 (더블클릭 · Enter · "N쪽 열기 ↗")</h3>
+  <p><code>AssocQueryStringW(ASSOCSTR_EXECUTABLE, ".pdf", "open")</code> 으로 기본 PDF 앱 실행 파일을 알아낸 뒤, 앱별로 쪽 인자를 붙여 <code>CreateProcessW</code> 로 연다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>기본 앱(실행 파일)</th><th>쪽 지정 명령</th><th>상태</th></tr></thead>
+    <tbody>
+      <tr><td>Microsoft Edge (msedge.exe) · Chrome (chrome.exe) · Whale (whale.exe)</td><td><code>앱 "file:///D:/a.pdf#page=5"</code></td><td><span class="tag t-good">지원</span></td></tr>
+      <tr><td>Adobe Acrobat · Reader (Acrobat.exe · AcroRd32.exe)</td><td><code>앱 /A "page=5" "D:\a.pdf"</code></td><td><span class="tag t-good">지원</span></td></tr>
+      <tr><td>SumatraPDF (SumatraPDF.exe)</td><td><code>앱 -page 5 "D:\a.pdf"</code></td><td><span class="tag t-good">지원</span></td></tr>
+      <tr><td>PDF-XChange (PDFXEdit.exe)</td><td><code>앱 /A "page=5" "D:\a.pdf"</code></td><td><span class="tag t-warn">P0 확인</span></td></tr>
+      <tr><td>Foxit · 알PDF · 이지PDF · 그 밖</td><td>미확인 → 파일만 열고 토스트 "5쪽을 보세요" · "미리 보기에서 열기" 단추</td><td><span class="tag t-warn">폴백</span></td></tr>
+      <tr><td>pptx (PowerPoint)</td><td>명령줄로 슬라이드 지정 불가 → 2단계에 COM(<code>Presentation.Slides(n).Select</code>) 검토</td><td><span class="tag t-acc">2단계</span></td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>앱 표는 코드 상수 + ini <code>[Open] PdfPageArgs</code> 로 덧붙일 수 있게(회사 표준 뷰어 대응).</li>
+    <li>설정 "쪽을 누르면: <b>미리 보기 창</b> / 기본 앱" — 기본은 미리 보기 창(쪽 이동이 항상 되므로). 좁은 패널에서는 미리 보기 창이 없어 "크게 보기 창의 미리 보기"로 연다.</li>
+  </ul>
+  <h3>③ PDF 아닌 문서의 미리 보기</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>방법</th><th>원리</th><th>쪽 이동</th><th>조건 · 단점</th><th>단계</th></tr></thead>
+    <tbody>
+      <tr><td><b>C. 글 미리 보기</b></td><td>인덱스의 그 청크 + 앞뒤 청크 글을 문서 모양 없이 보여 주고 검색어 강조, 머리에 조항 위치</td><td>— (쪽 대신 조항 위치)</td><td>모든 형식에서 바로 되고 가볍다. 원본 모양(표 서식 · 그림)은 안 보인다</td><td><span class="tag t-good">1차</span></td></tr>
+      <tr><td>A. Windows 미리 보기 처리기</td><td>탐색기 미리 보기 창(Alt+P)과 같은 <code>IPreviewHandler</code> 를 우리 창 안의 자식 창으로 띄움</td><td>✗ 첫 쪽부터(쪽 이동 API 없음)</td><td>Office 가 설치돼 있어야 docx · pptx · xlsx 가 보인다. hwp · hwpx 는 한글이 미리 보기 처리기를 등록하는지 <b>확인 필요</b></td><td><span class="tag t-acc">2단계</span></td></tr>
+      <tr><td>B. PDF 로 바꿔 두고 보기</td><td>Word · PowerPoint · 한글 자동화(COM) 또는 LibreOffice 로 PDF 변환 · 캐시 → ① 그대로</td><td>✓ <code>#page=N</code></td><td>변환 프로그램 필요, 문서당 수 초, 캐시 용량. 인덱스 쪽과 맞추려면 인덱싱도 그 PDF 로 해야 한다</td><td><span class="tag t-acc">2단계</span></td></tr>
+    </tbody>
+  </table></div>
+  <p>1차는 <b>PDF = ① · 그 밖 = C</b> 로 미리 보기 창이 비는 형식이 없게 하고, 원본은 "열기"(기본 앱)로 본다. 지금 인덱스는 전부 PDF 라 1차 영향은 없다.</p>
+  <h3>④ 2단계 — PDF 아닌 문서의 쪽 · 열기 검토와 시험</h3>
+  <p>2단계에서 docx · hwp · hwpx · pptx · xlsx 의 <b>쪽 번호 붙이기</b>와 <b>그 쪽에서 열기</b>를 검토하고 실제 문서로 시험한다. 시험 결과에 따라 형식별로 채택 · 근사 표시 · 미지원을 정한다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>형식</th><th>쪽 단서(검토할 것)</th><th>그 쪽에서 열기(검토할 것)</th></tr></thead>
+    <tbody>
+      <tr><td>docx</td><td><code>w:lastRenderedPageBreak</code>(Word 가 마지막 저장 때 기록한 쪽 경계) · <code>w:br type="page"</code>(수동 쪽 나누기) · 구역 나누기. Word 아닌 도구로 만든 파일은 단서가 없을 수 있음</td><td>Word COM: 열고 <code>Selection.GoTo(wdGoToPage, …, n)</code></td></tr>
+      <tr><td>hwpx</td><td><code>hp:linesegarray / hp:lineseg</code> 의 <code>vertpos</code>(한글이 저장한 줄 배치 — 세로 위치가 처음으로 돌아가면 새 쪽) · 문단 <code>pageBreak</code> 속성</td><td>한글 COM(<code>HWPFrame.HwpObject</code>): 열고 쪽 이동</td></tr>
+      <tr><td>hwp</td><td>문단 줄 배치 레코드(PARA_LINE_SEG)의 세로 위치 — 먼저 hwp 를 legacy 평문에서 blocks 추출기로 옮겨야 함</td><td>hwpx 와 같음</td></tr>
+      <tr><td>pptx</td><td>이미 슬라이드 번호(블록 page)</td><td>PowerPoint COM: <code>Presentation.Slides(n).Select</code></td></tr>
+      <tr><td>xlsx</td><td>이미 시트 번호(블록 page)</td><td>Excel COM: 그 시트 <code>Activate</code>(셀 위치까지는 검토)</td></tr>
+      <tr><td>공통 대안</td><td colspan="2">PDF 로 바꿔 두고(③-B) PDF 쪽 · <code>#page</code> 를 쓴다 — 가장 정확하지만 무겁다</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>Word · 한글 · Office 가 없는 PC 에서는 COM 이 없으므로 <b>파일만 열기 + "N쪽" 안내</b>로 떨어진다.</li>
+    <li>근사 쪽은 화면에 "약 5쪽" 처럼 근사임을 표시한다(<code>exact=false</code>, §15).</li>
+    <li>시험 항목은 §17 의 S2-1 ~ S2-5.</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 15. /find ───────────────────────── -->
+<section id="s15">
+  <h2><span class="no">15</span>B-8 워커 명령 /find</h2>
+  <p>chat 워커는 이미 <code>/upload</code> 같은 슬래시 명령과 ASCII JSON 줄(<code>@index</code> · <code>@ev</code>)을 쓴다. 같은 방식으로 하나를 더한다.</p>
+<pre>보냄 → /find {"q":"출장 여비 정산 방법","folder":"D:\\…\\회사규정","limit":40}
+
+받음 ← @find {"doc":1,"doc_path":"D:\\…\\25.출장여비규정_16.04.01.pdf","doc_name":"25.출장여비규정_16.04.01.pdf",
+              "name_hit":true,"score":3.41,"mtime":1459468800,"pages":9}
+      @find {"doc":1,"page":5,"page_to":5,"exact":true,"section":"10. 여비지급 및 정산 &gt; 10.1",
+              "score":3.41,"snippet":"…귀임 후 7일 이내에 정산하여야 한다…","marks":[[24,26]],"more":1}
+      @find {"doc":1,"page":2, …}
+      @find {"doc":2,"doc_path":…}
+      …
+      @find_done {"ms":486,"docs":3,"places":14,"low":1,"scope_docs":19}</pre>
+  <ul>
+    <li>한 질의 = 여러 줄 → 화면이 문서 줄이 오는 대로 그릴 수 있다(검색은 한 번에 끝나지만 줄 단위가 지금 파서와 맞음).</li>
+    <li>생성 LLM 을 쓰지 않는다. 탐색기 모드로 시작하면 워커를 <b>검색 전용</b>으로 올리고(<code>suggest --no-llm</code> 과 같은 길), "AI에게 묻기"를 처음 누를 때 LLM 을 올린다 — 시작이 빠르고 메모리가 적다.</li>
+    <li>이 대화의 올린 문서 범위(<code>/upload</code>)는 RAG 모드 전용으로 두고, 탐색기 모드는 인덱싱 폴더만 찾는다(1차).</li>
+    <li>CLI 에서도 쓰게 <code>simplerag search --json --group</code> 으로 같은 출력을 내면 시험이 쉽다.</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 16. 모드 설정 ───────────────────────── -->
+<section id="s16">
+  <h2><span class="no">16</span>B-9 모드 설정(옵션)</h2>
+<pre>; RAGSearchBox.ini
+[UI]
+Mode = explorer            ; explorer(기본) | rag
+PageClick = preview        ; preview(기본) | app   — 쪽을 눌렀을 때
+FolderIcon = 1             ; 인덱싱 폴더 · 드라이브 아이콘 바꾸기(기본 켬)</pre>
+  <div class="setw">
+    <fieldset><legend>화면 모드<span class="new">새로</span></legend>
+      <div class="o">◉ 탐색기 모드 <small>문서 · 쪽 · 내용을 찾아 목록으로 보여 줍니다. AI 답을 만들지 않아 빠르고 가볍습니다. (기본)</small></div>
+      <div class="o">○ RAG 모드 <small>질문하면 AI 가 문서를 근거로 답합니다.</small></div>
+      <div class="o">쪽을 누르면: ◉ 미리 보기 창 ○ 기본 PDF 앱</div>
+    </fieldset>
+    <fieldset><legend>인덱싱 폴더</legend>
+      <div class="o">☑ 인덱싱 폴더 · 드라이브에 MoAI 아이콘 표시<span class="new">새로</span> <small>폴더의 desktop.ini 와 드라이브 아이콘 설정을 바꿉니다. 끄면 원래대로 돌립니다.</small></div>
+    </fieldset>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>모드에 따라 달라지는 것</th><th>탐색기 모드</th><th>RAG 모드</th></tr></thead>
+    <tbody>
+      <tr><td>트레이 "화면 열기" · 트레이 아이콘 더블클릭</td><td>MoAI 탐색기 창</td><td>지금과 같음(범위 탐색기 옆 패널)</td></tr>
+      <tr><td>탐색기에서 인덱싱 폴더를 열 때 옆 패널</td><td>탐색기 모드 좁은 배치</td><td>지금 대화 패널</td></tr>
+      <tr><td>워커 시작</td><td>검색 전용(LLM 은 필요할 때)</td><td>지금과 같음</td></tr>
+      <tr><td>전환</td><td colspan="2">설정 창에서 바꾸면 즉시 — 패널 HTML 다시 그리기 · 워커는 그대로(LLM 은 RAG 질문 때 올림). 창 안 [탐색기 | RAG] 토글은 이번 창에서만 바꿈(설정은 그대로)</td></tr>
+    </tbody>
+  </table></div>
+  <p>단축키 — 독립 창을 어디서든 부르는 전역 단축키(예: <code>Ctrl+Alt+M</code>)를 1차에 넣을지는 결정 §19-2.</p>
+</section>
+
+<!-- ───────────────────────── 17. 시험 ───────────────────────── -->
+<section id="s17">
+  <h2><span class="no">17</span>시험 · 측정 계획</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>무엇</th><th>어떻게 · 통과 기준</th></tr></thead>
+    <tbody>
+      <tr><td class="prio">P0-1</td><td>폴더 아이콘 적용 · 복원</td><td>한글 경로 · 공백 경로 · 기존 desktop.ini 있는 폴더(문서) · 사용자가 아이콘 바꿔 둔 폴더 · 네트워크 공유. 적용 즉시 열린 탐색기에 반영, 복원 뒤 desktop.ini 원본과 바이트 비교 일치</td></tr>
+      <tr><td class="prio">P0-2</td><td>드라이브 아이콘</td><td>C: · D: · USB · 네트워크 드라이브(Z:) 에서 HKCU DriveIcons 반영 여부, 되돌린 뒤 키 정리</td></tr>
+      <tr><td class="prio">P0-3</td><td>WebView2 PDF <code>#page=N</code></td><td>file:// 로 별도 WebView 에서 5쪽 · 282쪽 문서 200쪽 이동, 한글 경로</td></tr>
+      <tr><td class="prio">P0-4</td><td>기본 앱 쪽 인자</td><td>Edge · Whale · Acrobat Reader · SumatraPDF · PDF-XChange 각각 기본 앱으로 지정하고 5쪽으로 열리는지</td></tr>
+      <tr><td class="prio">M-1</td><td>쪽 정확도</td><td>재인덱싱 전/후, 무작위 청크 100개: 청크 앞 40자가 pdfium 으로 읽은 <code>page</code> 쪽에 있는 비율. 목표 ≥ 95% (지금 1쪽 확정 15.5%)</td></tr>
+      <tr><td class="prio">M-2</td><td>/find 시간</td><td>후보 30 · 40 · 60 리랭킹 시간(지금 30 = 443ms). 목표 전체 ≤ 0.8초(iGPU · CPU 각각)</td></tr>
+      <tr><td class="prio">M-3</td><td>옛 인덱스 보정 시간</td><td>282쪽 문서 69쪽 범위 청크 보정, 캐시 전/후</td></tr>
+      <tr><td class="prio">M-4</td><td>찾기 품질</td><td>골든셋 v2 질문으로 "정답 쪽이 1등 문서의 상위 3쪽 안" 비율 — RAG 근거 적중률과 비교</td></tr>
+      <tr><td class="prio">U-1</td><td>화면</td><td>키보드만으로 검색 → 이동 → 미리 보기 → 열기, 좁은 패널 ↔ 크게 보기, 모드 전환 즉시 반영, 다크 테마</td></tr>
+      <tr><td colspan="3"><b>2단계 — PDF 아닌 문서(§14-④)</b></td></tr>
+      <tr><td class="prio">S2-1</td><td>docx 근사 쪽 정확도</td><td>Word 로 저장한 문서 · 다른 도구로 만든 문서 각 10개: <code>lastRenderedPageBreak</code> 로 붙인 쪽과 Word 에서 실제 연 쪽(또는 PDF 내보내기 쪽) 비교, ±0쪽 · ±1쪽 비율</td></tr>
+      <tr><td class="prio">S2-2</td><td>hwpx · hwp 근사 쪽 정확도</td><td>한글로 저장한 문서 10개: <code>vertpos</code> 로 붙인 쪽과 한글에서 실제 쪽 비교. hwp 는 blocks 추출기 이전 뒤 같은 시험</td></tr>
+      <tr><td class="prio">S2-3</td><td>COM 으로 그 쪽 열기</td><td>Word · 한글 · PowerPoint · Excel 각각 n 쪽(슬라이드 · 시트)으로 열리는지, 이미 열린 문서일 때, 프로그램이 없을 때 폴백</td></tr>
+      <tr><td class="prio">S2-4</td><td>미리 보기 처리기(③-A)</td><td>Office · 한글 설치 PC 에서 docx · pptx · xlsx · hwp · hwpx 가 우리 창 안에 보이는지, 미설치 PC 에서 글 미리 보기로 떨어지는지</td></tr>
+      <tr><td class="prio">S2-5</td><td>PDF 변환 캐시(③-B)</td><td>문서당 변환 시간 · 캐시 용량, 변환 PDF 쪽과 원본 프로그램 쪽 일치 여부</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────── 18. 단계 ───────────────────────── -->
+<section id="s18">
+  <h2><span class="no">18</span>구현 단계</h2>
+  <ol class="steps">
+    <li><b>A1 아이콘 그림</b> — <code>make_folder_icon.py</code> 로 moai-folder.ico · moai-drive.ico, 저장소에 추가</li>
+    <li><b>A2 폴더 · 드라이브 아이콘 모듈</b> — Rust <code>ragsearchbox/src/folder_icon.rs</code>(apply · restore · reconcile), 설정 창 추가/빼기 · 시작 시 맞춰 보기 · 트레이 "아이콘 원래대로" · ini <code>FolderIcon</code>. P0-1 · P0-2</li>
+    <li><b>B1 쪽 번호 정밀화</b> — <code>chunk.rs</code>(+ Python <code>chunk.py</code>) 블록 지문표 · payload <code>page</code>, 재인덱싱, M-1</li>
+    <li><b>B2 워커 /find</b> — <code>retrieve.rs Chunk</code> 에 page · score · section 추가, 묶기 · 발췌 · 이름 일치, 검색 전용 시작, <code>search --json --group</code>. M-2</li>
+    <li><b>B3 MoAI 탐색기 창</b> — <code>ui/browse.html</code>(반응형) + <code>src/browse_win.rs</code>(새 tao 창, 기존 <code>explorer.rs</code> 는 Windows 탐색기 감시라 이름 겹치지 않게), 트레이 "화면 열기" 연결</li>
+    <li><b>B4 쪽 열기</b> — 미리 보기 WebView(<code>#page</code>) · 기본 앱 판별 · 앱별 인자 · 폴백. P0-3 · P0-4</li>
+    <li><b>B5 모드 옵션</b> — ini <code>[UI]</code>, 설정 창 "화면 모드", 옆 패널을 좁은 배치로, AI에게 묻기 연결. U-1</li>
+    <li><b>2단계</b> — <b>PDF 아닌 문서(docx · hwp · hwpx · pptx · xlsx)의 쪽 붙이기 · 그 쪽에서 열기 · 원본 미리 보기 검토와 시험</b>(§14-③④, S2-1~5) · 미리 보기 청크 강조(pdfium 렌더) · 여러 탭 · 전역 단축키 · Python 판 화면 · 옛 인덱스 보정 제거</li>
+  </ol>
+  <p>A(아이콘)와 B(탐색기 모드)는 서로 기대지 않으므로 따로 진행할 수 있다. B 안에서는 B1(쪽 번호)이 먼저다 — B3 화면을 먼저 만들어도 쪽이 틀리면 시연이 안 된다.</p>
+</section>
+
+<!-- ───────────────────────── 19. 결정 ───────────────────────── -->
+<section id="s19">
+  <h2><span class="no">19</span>결정이 필요한 것</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>결정</th><th>제안</th><th>다른 선택</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>드라이브 아이콘 범위</td><td><b>HKCU(이 사용자, 관리자 불필요)</b></td><td>HKLM(모든 사용자, 관리자 필요)</td></tr>
+      <tr><td>2</td><td>탐색기 모드를 띄우는 곳</td><td><b>독립 창 + 탐색기 옆 패널(좁은 배치)</b>, 전역 단축키는 2단계</td><td>독립 창만 / 패널만</td></tr>
+      <tr><td>3</td><td>쪽을 눌렀을 때 기본 동작</td><td><b>앱 안 미리 보기</b>(쪽 이동이 항상 됨)</td><td>기본 PDF 앱(익숙하지만 앱에 따라 쪽 이동 불가)</td></tr>
+      <tr><td>4</td><td>쪽 번호 정밀화 + 재인덱싱</td><td><b>B 의 선행 작업으로 진행</b></td><td>검색 때 보정만(재인덱싱 없음, 느리고 PDF 만)</td></tr>
+      <tr><td>5</td><td>네트워크 공유 폴더 아이콘</td><td><b>내 PC 에서만 보이면 됨</b>(아이콘은 %LOCALAPPDATA%)</td><td>공유 폴더 안에 숨김 .ico 를 복사해 모두에게 보이기</td></tr>
+      <tr><td>6</td><td>Python 판 RAGSearchBox</td><td><b>Rust 판 먼저</b>, Python 판은 인덱스 규칙(B1)만 같이, 화면은 2단계</td><td>두 판 동시</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ───────────────────────── 20. 구현 결과 ───────────────────────── -->
+<section id="s20">
+  <h2><span class="no">20</span>구현 결과 (2026-10-29)</h2>
+  <p>§19 의 결정은 모두 <b>제안대로</b> 구현했다(HKCU · 독립 창 + 옆 패널 · 미리 보기 기본 · 쪽 정밀화 선행 · 공유 폴더는 내 PC 만 · Rust 판 먼저).
+  1차 범위(§18 A1~B5)를 Rust 판에 넣었고, 인덱스 규칙(B1)은 Python 판에도 같이 넣었다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>한 일</th><th>파일</th></tr></thead>
+    <tbody>
+      <tr><td>A1</td><td>폴더용 · 드라이브용 아이콘 두 벌(16~256, 작은 크기는 배지를 키운 별도 그림)</td><td><code>RAGSearchBox/make_folder_icon.py</code> → <code>moai-folder.ico</code> · <code>moai-drive.ico</code></td></tr>
+      <tr><td>A2</td><td>붙이기 · 되돌리기 · 시작할 때 맞춰 보기, 설정 창 체크 · 폴더 추가/빼기 연동, <code>RAGSearchBox-rs.exe --folder-icons restore</code>(앱을 지우기 전에)</td><td><code>ragsearchbox/src/folder_icon.rs</code></td></tr>
+      <tr><td>B1</td><td>청크 쪽을 <b>절 글 대조</b>로 찾아 payload <code>page</code> 추가 · <code>page_from/to</code> 를 청크 자체 범위로</td><td><code>simplerag/src/chunk.rs</code> · <code>src/simplerag/chunk.py</code> · 두 판 indexer</td></tr>
+      <tr><td>B2</td><td>워커 <code>/find</code> · <code>search --group</code>, 문서별 묶기 · 쪽 합치기 · 이름 일치 · 발췌 강조 · 옛 인덱스 쪽 보정</td><td><code>simplerag/src/find.rs</code> · <code>retrieve.rs</code>(<code>search_rrf_k</code>) · <code>embed.rs</code>(<code>score_batched</code>)</td></tr>
+      <tr><td>B3</td><td>MoAI 탐색기 창(주소줄 · 검색 상자 · 묶기/정렬 · 탐색 창 폴더 트리 · 최근 검색 · 자세히 보기 · 상태 표시줄 · 키보드 · 오른쪽 클릭 메뉴 · AI에게 묻기 카드)</td><td><code>ragsearchbox/ui/browse.html</code> · <code>src/browse_win.rs</code></td></tr>
+      <tr><td>B4</td><td>미리 보기 WebView(Edge PDF 뷰어 <code>#page</code>) · 글 미리 보기(PDF 아닌 문서) · 기본 PDF 앱 쪽 인자(Edge · Chrome · Whale · Brave · Acrobat · PDF-XChange · SumatraPDF) · 폴더에서 보기</td><td><code>browse_win.rs</code> · <code>win.rs</code>(<code>open_page</code> · <code>reveal</code>)</td></tr>
+      <tr><td>B5</td><td><code>[UI] Mode · PageClick · FolderIcon</code>, 설정 창 "화면 모드", 패널 화면 바꾸기(탐색기 ↔ RAG, 다시 시작 없이), 트레이 "화면 열기" 가 모드를 따름</td><td><code>settings.rs</code> · <code>main.rs</code> · <code>ui/info.html</code> · <code>ui/panel.html</code> · <code>RAGSearchBox.ini</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>측정 · 시험</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>#</th><th>무엇</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>M-1</td><td>쪽 정확도 — 청크 첫머리가 pdfium 본문에서 나오는 쪽과 맞는가</td><td>옛 인덱스 <code>page_from</code> <span class="ng">38%</span>(66건 중 25) → 새 <code>page</code> <span class="ok">98%</span>(66건 중 65) · 다른 표본 <span class="ok">100%</span>(178건). 쪽 범위 1쪽 이내 청크 15.5% → 86.3%, 최대 범위 69쪽 → 4쪽. <code>page</code> 있는 청크 98.8%</td></tr>
+      <tr><td>B1 두 판</td><td>Python <code>split_blocks</code> 과 Rust 인덱스 청크별 비교</td><td><span class="ok">같음</span> — 출장여비규정 99/99 · 282쪽 통합보고서 1,376/1,376 (본문 · page · page_from · page_to 모두)</td></tr>
+      <tr><td>M-2</td><td>/find 시간(상주 워커, 리랭킹 bge-base int8 CPU)</td><td>리랭킹 40개 한 묶음 <span class="ng">4~7초</span> → 20개/8묶음 1.5~1.9초 → <b>12개/4묶음 0.8~0.95초</b>(기본값). 리랭킹 밖 후보는 RRF 순서로 그 아래. <code>SIMPLERAG_FIND_RERANK</code> · <code>SIMPLERAG_FIND_BATCH</code> 로 바꿔 볼 수 있다</td></tr>
+      <tr><td>M-3</td><td>옛 인덱스 쪽 보정</td><td>PDF 를 읽으므로 문서마다 첫 번엔 느리다(큰 문서 여럿이면 수 초) → 점수 상위 15개만 보정, 문서 8개 캐시. <b>다시 인덱싱하면 필요 없다</b></td></tr>
+      <tr><td>P0-1</td><td>폴더 아이콘(한글 경로 임시 폴더)</td><td><span class="ok">통과</span> — 붙이기(셸이 읽은 IconResource · InfoTip 확인, 폴더 읽기전용 켜짐) · 되돌리기(desktop.ini 삭제 · 속성 원복) · 기존 desktop.ini 병합(LocalizedResourceName 보존, 원래 InfoTip 복원). 실측으로 셸이 InfoTip 을 <code>.ShellClassInfo.A/.W</code> 에도 복사함을 찾아 되돌릴 때 함께 지운다</td></tr>
+      <tr><td>P0-2</td><td>드라이브 아이콘</td><td><span class="ok">통과</span>(레지스트리 값) — Z 키 만들기 · 지우기. 이 PC 에는 다른 프로그램이 만든 <code>Drives\G</code> · <code>Drives\H</code> 가 있어, 하위 키가 있으면 <code>Drives</code> 를 지우지 않는 규칙이 그대로 지켜짐을 확인. <b>탐색기 화면에 그려지는 모습은 눈으로 아직 보지 않았다</b></td></tr>
+      <tr><td>P0-3</td><td>WebView2 PDF <code>#page=N</code></td><td><span class="ok">통과</span> — 한글 경로 PDF 가 3쪽에 열리고 그 쪽에 목록의 "10.1" 절이 있음. 실측으로 <b>같은 문서에서 #page 만 바꾸면 쪽이 안 움직여</b> 주소를 바꾼 뒤 다시 읽게 고침 → 4쪽 이동 확인("10.4")</td></tr>
+      <tr><td>P0-4</td><td>기본 앱 쪽 인자</td><td>이 PC 의 기본 PDF 앱은 Chrome 으로 판별(<code>#page=N</code> 주소). 앱을 실제로 띄우는 시험은 하지 않았다. Acrobat · SumatraPDF · PDF-XChange 인자는 문서 기준이고 실기 미확인</td></tr>
+      <tr><td>U-1</td><td>실제 앱(시험용 ini · 문서 3건 · WebView2 디버그 포트로 조작)</td><td><span class="ok">통과</span> — 시작 → 폴더 아이콘 → 자동 인덱싱 → 탐색기 창 찾기(문서 3 · 위치 18) → 쪽 미리 보기 → 키보드 이동 → 설정 창 RAG ↔ 탐색기(패널 화면 교체 · ini 저장) → 아이콘 끄기/켜기(desktop.ini 삭제/생성). "AI에게 묻기" 는 근거 3건이 카드에 왔고, 답은 시험 환경이 CPU 생성이라 60초 제한에 걸렸다(실 환경 iGPU 에서 미확인)</td></tr>
+      <tr><td>단위</td><td>cargo test</td><td>simplerag 24 · ragsearchbox 6 통과(+ 손으로 돌리는 시험 2: 아이콘 왕복 · 기본 PDF 앱)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>설계와 다르게 한 것</b> — 쪽 찾기는 "블록 지문"이 아니라 <b>절 글 대조</b>(청크 머리 · 꼬리를 절 글에서 앞 청크 자리 뒤부터 찾기)로 했다. 지문 방식은 다른 쪽에 반복된 글귀에 걸려 엉뚱한 쪽을 냈다(실측). 리랭킹 후보는 40 → 12(시간). 설정 <code>[Open] PdfPageArgs</code> 는 넣지 않았다(코드 표만). 쪽 칩을 누를 때 옆 패널은 크게 보기 창의 미리 보기로 넘긴다.</li>
+    <li><b>배포 · 재인덱싱 (2026-10-29)</b> — <code>rust/build_dist.ps1</code> 로 dist-rust 에 새 exe 배치, 옛 인덱스는 <code>backup_index_20261029_before_page</code> 에 백업 후
+      <code>index --rebuild</code>(문서 30 · 청크 4,616 · 240초). 새 인덱스: <code>page</code> 있음 98.8% · 쪽 범위 1쪽 86.3% · 최대 4쪽 · 표본 183건 쪽 <span class="ok">100%</span> 정확.
+      상주 워커 /find 는 리랭킹이 기계 부하에 따라 흔들렸다 — 12개 기준 0.8~0.95초(앞 측정) · 1.2~1.5초 · 1.9~2.1초, 8개면 0.66~0.95초. 기본값은 12 로 두었다.</li>
+    <li><b>인덱스 버전은 올리지 않았다</b> — 청크 본문은 그대로라 재인덱싱을 강제하지 않는다. 지금 인덱스(<code>dist-rust</code>)는 <code>page</code> 가 없어 옛 인덱스 보정으로 동작하므로, 정확한 쪽 · 빠른 찾기를 위해 한 번 <code>simplerag-rs.exe index --dir &lt;폴더&gt; --rebuild</code> 를 권한다.</li>
+    <li><b>남은 것</b> — 탐색기 모드에서 워커를 검색 전용으로 올리기(LLM 을 필요할 때 올림)는 하지 않았다(지금은 RAG 처럼 함께 올림). Python 판 RAGSearchBox 화면 · 전역 단축키 · 여러 탭 · 미리 보기 청크 강조 · PDF 아닌 문서 쪽/열기(§14-④)는 2단계. 배포 폴더(<code>dist-rust</code>)에는 아직 새 exe 를 넣지 않았다(<code>rust/build_dist.ps1</code>).</li>
+  </ul>
+</section>
+
+<footer>작성 2026-10-29 · 구현 반영 2026-10-29 · 보완 2026-10-29: PDF 아닌 문서 미리 보기(§14-③) · 2단계 쪽 · 열기 검토와 시험(§14-④, S2-1~5) ·지금 구조 검토: rust/ragsearchbox (main.rs · panel.rs · win.rs · watcher.rs · worker.rs · ui/panel.html · ui/info.html) · rust/simplerag (chunk.rs · docmodel/assemble.rs · retrieve.rs · cli.rs) · 실측: dist-rust/rag_index/points.sqlite · simplerag-rs.exe search · 관련: plan/RAGSearchBox_설계서.html · plan/폴더한정검색_설계서.html</footer>
+</div>
+</body>
+</html>
