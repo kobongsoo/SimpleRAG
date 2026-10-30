@@ -21,6 +21,8 @@
 #     /index-plan  폴더와 상태 파일을 대조한 할 일 목록(인덱스는 안 건드린다)
 #     /index-outside 지정 폴더 어디에도 속하지 않는 인덱스 문서 목록(폴더 한정 검색 설계서 §0 —
 #                  인덱싱 폴더 = 패널 폴더를 지키려고, 밖 문서는 인덱스에서 뺀다)
+#     /embed-pending {"max": 64} 단계형 인덱싱의 벡터 대기 청크를 최대 64개 채운다(인덱싱 속도 개선
+#                  설계서 §3-5-5). RAGSearchBox 가 질문이 없을 때만 보낸다
 #------------------------------------------------------------------
 
 import json
@@ -31,7 +33,7 @@ from . import indexer
 from ..meta import hook as meta_hook      # 문서 메타데이터 마무리(/bm25 때)
 
 PREFIX = "@index "
-COMMANDS = ("/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside")
+COMMANDS = ("/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside", "/embed-pending")
 
 
 #------------------------------------------------------------------
@@ -147,6 +149,8 @@ class IndexCommands:
                 res = self.rebuild_bm25()
             elif cmd == "/index-plan":
                 res = self.plan(parse_path(arg), allow_delete=parse_flag(arg, "allow_delete"))
+            elif cmd == "/embed-pending":
+                res = self.embed_pending(parse_value(arg, "max"))
             else:
                 res = {"ok": False, "why": "알 수 없는 명령"}
         except Exception as e:
@@ -273,35 +277,58 @@ class IndexCommands:
         return {"ok": True, "path": key, "removed": n, "result": "removed"}
 
     #--------------------------------------------------------------
-    # BM25 다시 만들기 (+ 고아 청소)
-    #=> Bm25Index.build 는 같은 객체의 내용을 바꾼다. 검색기(HybridRetriever)가 그 객체를
+    # BM25 반영 (+ 고아 청소)
+    #=> 바뀐 청크만 덧붙이고 지운 청크는 표시만 한다(덧붙임 · 지움이 5% 를 넘으면 이때 합친다).
+    #   Bm25Index 는 같은 객체의 내용을 바꾼다. 검색기(HybridRetriever)가 그 객체를
     #   들고 있으므로 다음 질문부터 곧바로 새 BM25 로 찾는다(따로 바꿔 끼울 것이 없다).
     #
     # -in: 없음
     #
-    # -out: {ok, chunks, orphans, build_s}
+    # -out: {ok, chunks, orphans, mode("full"|"update"|"same"), pending(벡터 대기 수), build_s}
     # -out: error = 저장소 읽기 실패는 예외(run 이 받는다)
     #--------------------------------------------------------------
     def rebuild_bm25(self):
         state = self._state()
         logs = []
-        texts, ids, n_orphans = indexer.collect_for_bm25(self.app.store, state, logs.append)
+        self.app.embedder.ensure_loaded()
+        # 바뀐 청크만 덧붙이고 지운 청크는 표시만 한다(인덱싱 속도 개선 설계서 §4). 5% 를 넘으면 합친다
+        rep = indexer.refresh_bm25(self.app.store, self.app.bm25, state, self.app.embedder.tokenizer,
+                                   log=logs.append)
         m = getattr(self.app, "matrix", None)
-        if n_orphans and m is not None and m.ready():
+        if rep["orphans"] and m is not None and m.ready():
             # 고아 청크가 지워졌다 — 벡터 한 벌에 남은 그 행을 없애려면 새로 만든다
             m.mat = None
             m.ensure_built(self.app.store)
-        self.app.embedder.ensure_loaded()
-        build_s = self.app.bm25.build(texts, ids, self.app.embedder.tokenizer) if texts else 0.0
         state["bm25_built_at"] = time.time()
         indexer.save_state(state)
         # 자동 인덱싱은 문서 여러 건을 반영한 뒤 /bm25 를 한 번 부른다 — 메타데이터 마무리도 이때
         meta_hook.finish(state, fetch=self.app.store.payloads_of)
-        out = {"ok": True, "chunks": len(texts), "orphans": n_orphans,
-               "build_s": round(build_s, 2)}
+        out = {"ok": True, "chunks": rep["chunks"], "orphans": rep["orphans"], "mode": rep["mode"],
+               "pending": self.app.store.pending_count(), "build_s": round(rep["sec"], 2)}
         if logs:
             out["note"] = " / ".join(l.strip() for l in logs)[:300]
         return out
+
+    #--------------------------------------------------------------
+    # 벡터 대기 청크 채우기 (단계형 인덱싱 2단계)
+    #=> 대기 청크를 먼저 넣은 문서부터 최대 max 개 임베딩한다. 질문을 막지 않게 한 번에 조금씩
+    #   (64개 ≈ 1초). 워커가 벡터 한 벌을 들고 있으면 그 행도 바로 채워 폴더 한정 검색에 넣는다.
+    #
+    # -in: max_n = 최대 채울 수(None 이면 64, 0 이면 남은 수만 센다)
+    #
+    # -out: {ok, filled, pending(남은 수)}
+    # -out: error = 저장소 · 임베딩 실패는 예외(run 이 받는다)
+    #--------------------------------------------------------------
+    def embed_pending(self, max_n=None):
+        max_n = 64 if max_n is None else int(max_n)
+        store = self.app.store
+        if max_n <= 0 or not store.pending_count():
+            return {"ok": True, "filled": 0, "pending": store.pending_count()}
+        self.app.embedder.ensure_loaded()
+        m = getattr(self.app, "matrix", None)
+        on_filled = m.set_vectors if m is not None and m.ready() else None
+        filled, left = indexer.fill_pending(self.app.embedder, store, max_n=max_n, on_filled=on_filled)
+        return {"ok": True, "filled": filled, "pending": left}
 
     #--------------------------------------------------------------
     # 지정 폴더 밖 문서 목록 (인덱스는 안 건드린다)
@@ -353,7 +380,9 @@ class IndexCommands:
         return {"ok": True, "folder": os.path.abspath(folder), "files": len(p["files"]),
                 "add": add, "modify": modify, "move": move, "remove": p["removed"],
                 "delete_blocked": p["delete_blocked"], "retry_skip": p["retry_skip"],
-                "bm25_stale": indexer.bm25_stale(state)}
+                # 옛 형식(v2) · 깨진 BM25 캐시도 "다시 만들 것" 으로 알린다
+                "bm25_stale": indexer.bm25_stale(state)
+                or (bool(state["docs"]) and self.app.bm25.ensure_loaded() < 0)}
 
 
 #------------------------------------------------------------------

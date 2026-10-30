@@ -4,6 +4,8 @@
 //   인덱스 폴더는 한 프로세스만 열 수 있으므로, 인덱스를 쥔 워커가 직접 반영한다.
 //     보내기: /index-doc {"path": "D:\\분류함\\규정.docx"}   (경로만 써도 된다)
 //     받기  : @index {"op": "index-doc", "ok": true, ...}    (한 줄 ASCII JSON)
+//   /embed-pending {"max": 64} — 단계형 인덱싱의 벡터 대기 청크를 최대 64개 채운다(4스레드로 약 1초).
+//   RAGSearchBox 가 질문이 없을 때만 보낸다(인덱싱 속도 개선 설계서 §3-5-5).
 //------------------------------------------------------------------
 
 use std::time::Instant;
@@ -15,7 +17,7 @@ use crate::indexer::{self, docs};
 use crate::pyutil;
 
 pub const PREFIX: &str = "@index ";
-pub const COMMANDS: &[&str] = &["/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside"];
+pub const COMMANDS: &[&str] = &["/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside", "/embed-pending"];
 
 //------------------------------------------------------------------
 // 인자에서 경로 꺼내기 — JSON {"path": …} 이면 그 값, 아니면 글자 그대로(따옴표 제거)
@@ -75,7 +77,8 @@ pub fn run(app: &App, cmd: &str, arg: &str) -> Map<String, Value> {
         "/remove-doc" => remove_doc(app, &parse_path(arg), parse_value(arg, "outside_of")),
         "/index-outside" => Ok(outside(&parse_value(arg, "roots").and_then(|v| v.as_array().cloned()).unwrap_or_default())),
         "/bm25" => rebuild_bm25(app),
-        "/index-plan" => Ok(plan(&parse_path(arg), truthy(parse_value(arg, "allow_delete")))),
+        "/index-plan" => Ok(plan(app, &parse_path(arg), truthy(parse_value(arg, "allow_delete")))),
+        "/embed-pending" => embed_pending(app, parse_value(arg, "max").and_then(|v| v.as_u64()).unwrap_or(64) as usize),
         _ => Ok(obj(json!({"ok": false, "why": "알 수 없는 명령"}))),
     };
     let res = r.unwrap_or_else(|e| {
@@ -171,25 +174,46 @@ fn remove_doc(app: &App, path: &str, outside_of: Option<Value>) -> Result<Map<St
 }
 
 //------------------------------------------------------------------
-// BM25 다시 만들기 + 고아 청소
+// BM25 반영 + 고아 청소
+//=> 바뀐 청크만 덧붙이고 지운 청크는 표시만 한다(인덱싱 속도 개선 설계서 §4 — 운영 36초 → ms 단위).
+//   덧붙임 · 지움이 5% 를 넘으면 이때 합친다(전체 다시 만들기). 남은 벡터 대기 청크 수도 알려 준다.
 //------------------------------------------------------------------
 fn rebuild_bm25(app: &App) -> Result<Map<String, Value>, String> {
     let mut st = state()?;
     let mut logs: Vec<String> = vec![];
-    let (texts, ids, n_orphans) = indexer::collect_for_bm25(&app.store, Some(&st), &mut |m| logs.push(m.to_string()))?;
     let tok = app.embedder.tokenizer()?;
-    let build_s = if texts.is_empty() { 0.0 } else { app.bm25.build(&texts, &ids, &tok)? };
+    let rep = indexer::refresh_bm25(&app.store, &app.bm25, Some(&st), &tok, false, &mut |m| logs.push(m.to_string()))?;
     st.insert("bm25_built_at".into(), pyutil::jf(pyutil::now_ts()));
     indexer::save_state(&st)?;
     // 자동 인덱싱은 문서 여러 건을 반영한 뒤 /bm25 를 한 번 부른다 — 메타데이터 마무리도 이때
     crate::meta::hook::finish(&st, &mut |_| {});
-    let mut out = obj(json!({"ok": true, "chunks": texts.len(), "orphans": n_orphans}));
-    out.insert("build_s".into(), pyutil::jf(pyutil::round_to(build_s, 2)));
+    let mut out = obj(json!({"ok": true, "chunks": rep.chunks, "orphans": rep.orphans, "mode": rep.mode,
+                             "pending": app.store.pending_count()?}));
+    out.insert("build_s".into(), pyutil::jf(pyutil::round_to(rep.sec, 2)));
     if !logs.is_empty() {
         let note = logs.iter().map(|l| pyutil::strip(l)).collect::<Vec<_>>().join(" / ");
         out.insert("note".into(), json!(pyutil::head(&note, 300)));
     }
     Ok(out)
+}
+
+//------------------------------------------------------------------
+// 벡터 대기 청크 채우기 (단계형 인덱싱 2단계)
+//=> 대기 청크를 먼저 넣은 문서부터 최대 max 개 임베딩한다. 질문을 막지 않게 한 번에 조금씩(64개 ≈ 1초).
+//
+// -in: app = 앱 / max = 최대 채울 수(0 이면 남은 수만 센다)
+//
+// -out: {ok, filled, pending(남은 수)}
+// -out: error = 임베딩 · 저장 실패면 Err
+//------------------------------------------------------------------
+fn embed_pending(app: &App, max: usize) -> Result<Map<String, Value>, String> {
+    app.store.ensure_loaded()?;
+    if max == 0 || app.store.pending_count()? == 0 {
+        return Ok(obj(json!({"ok": true, "filled": 0, "pending": app.store.pending_count()?})));
+    }
+    app.embedder.ensure_loaded()?;
+    let (filled, left) = indexer::fill_pending(&app.embedder, &app.store, Some(max), &mut |_, _| {})?;
+    Ok(obj(json!({"ok": true, "filled": filled, "pending": left})))
 }
 
 //------------------------------------------------------------------
@@ -213,7 +237,7 @@ fn outside(roots: &[Value]) -> Map<String, Value> {
 //------------------------------------------------------------------
 // 할 일 목록(인덱스는 안 건드린다)
 //------------------------------------------------------------------
-fn plan(folder: &str, allow_delete: bool) -> Map<String, Value> {
+fn plan(app: &App, folder: &str, allow_delete: bool) -> Map<String, Value> {
     if folder.is_empty() || !std::path::Path::new(folder).is_dir() {
         return obj(json!({"ok": false, "folder": folder, "why": "폴더가 보이지 않습니다"}));
     }
@@ -232,7 +256,8 @@ fn plan(folder: &str, allow_delete: bool) -> Map<String, Value> {
     let modify: Vec<String> = p.todo.iter().filter(|(path, _)| docs(&st).contains_key(&pyutil::abspath(path))).map(|(p, _)| p.clone()).collect();
     obj(json!({"ok": true, "folder": pyutil::abspath(folder), "files": p.files.len(), "add": add, "modify": modify,
                "move": mv, "remove": p.removed, "delete_blocked": p.delete_blocked, "retry_skip": p.retry_skip,
-               "bm25_stale": indexer::bm25_stale(&st)}))
+               // 옛 형식(v2) · 깨진 BM25 파일도 "다시 만들 것" 으로 알린다
+               "bm25_stale": indexer::bm25_stale(&st) || (!docs(&st).is_empty() && app.bm25.ensure_loaded() < 0.0)}))
 }
 
 //------------------------------------------------------------------

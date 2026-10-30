@@ -170,6 +170,23 @@ def _parent_mode(v):
 # -out: check(v)
 # -out: error = 없음
 #------------------------------------------------------------------
+#------------------------------------------------------------------
+# 임베딩 스레드 수 검사 — "auto" 또는 1~64 정수
+#=> auto 는 값을 넣지 않는다(코드 기본값 = auto, 인덱싱 속도 개선 설계서 §3-3).
+#
+# -in: v = YAML 값
+#
+# -out: (정규화 값 또는 None, 오류문 또는 None)
+# -out: error = 없음 (오류는 글로 돌려준다)
+#------------------------------------------------------------------
+def _threads(v):
+    if isinstance(v, str) and v.strip().lower() == "auto":
+        return None, None
+    if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 64:
+        return v, "auto 또는 1~64 정수여야 합니다"
+    return v, None
+
+
 def _optional(inner):
     def check(v):
         return (None, None) if v is None else inner(v)
@@ -207,6 +224,15 @@ SCHEMA = {
         "synonym_extra": _bool,
         # 놓친 질문을 synonym_misses.jsonl 에 기록(동의어 후보 제안 재료)
         "synonym_log": _bool,
+    },
+    # 인덱싱 속도 개선 설계서 §3-3 — 둘 다 벡터를 바꾸지 않으므로 바꿔도 재인덱싱이 필요 없다
+    "embed": {
+        "threads": _threads,                       # 전체 인덱싱 CPU 임베딩 스레드(auto = 8, 코어 수 상한)
+        "prefetch": _bool,                         # 다음 문서 파싱·청킹을 임베딩과 겹친다
+    },
+    "index": {
+        # 새로 임베딩할 청크가 이보다 많으면 BM25 먼저 · 벡터는 나중에(단계형, 0 = 끔)
+        "defer_vectors_over": _int(0, 100_000_000),
     },
     "rerank": {
         "mode": _rerank_mode,

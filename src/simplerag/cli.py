@@ -9,6 +9,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -108,11 +109,22 @@ def _announce_rerank(app):
 #------------------------------------------------------------------
 # 인덱싱 명령
 #=> 폴더의 변경된 문서만 다시 인덱싱한다. --rebuild 면 전부 다시.
+#    1) 전체 인덱싱이므로 CPU 임베딩 스레드를 설정값(기본 8)으로 올린다
+#    2) index_folder — 새로 임베딩할 청크가 많으면 BM25 까지만 먼저 끝내 바로 검색되게 한다(단계형)
+#    3) 벡터 대기 청크가 남았으면 같은 실행에서 이어 채운다(진행률 표시)
+#
+# -in: args = argparse 결과(dir, rebuild, no_recursive, allow_delete, max_add)
+#
+# -out: 종료 코드 0(성공) · 1(폴더 없음 · 청킹 설정 불일치) · 3(대량 삭제를 멈춤)
+# -out: error = 그 밖의 예외는 전파
 #------------------------------------------------------------------
 def cmd_index(args):
     from simplerag.index import commands as index_commands
     app = App()
     try:
+        # 명령줄 index 는 전체 인덱싱이다 — CPU 임베딩 스레드를 설정값(기본 8, 코어 수 상한)으로 올린다
+        #   (인덱싱 속도 개선 설계서 §3-2). 자동 인덱싱은 SIMPLERAG_EMBED_THREADS=4 를 넘겨 4 로 둔다
+        app.embedder.set_threads(config.index_embed_threads())
         # 인덱싱에는 생성 모델도 리랭커도 필요 없다 — 괜히 올리지 않는다.
         app.warmup(wait=True, skip_llm=True, rerank=False)
         try:
@@ -126,6 +138,9 @@ def cmd_index(args):
             print(index_commands.format_result({"op": "index", "ok": False, "why": str(e)[:200]},
                                                prefix="@index-summary "))
             return 1
+        # 단계형 인덱싱 2단계 — 1단계(BM25 까지)가 끝나 이미 검색할 수 있다. 같은 실행에서 벡터를 이어 채운다
+        if summary.get("pending"):
+            summary["pending"] = _fill_with_progress(app, summary["pending"])
         # 자동 인덱싱(RAGSearchBox)이 결과를 읽을 한 줄 — 사람이 읽는 요약은 아래에 따로 있다
         print(index_commands.format_result(dict(
             {k: v for k, v in summary.items() if k != "failed"},
@@ -148,6 +163,47 @@ def cmd_index(args):
         return 0
     finally:
         app.close()
+
+
+#------------------------------------------------------------------
+# 벡터 대기 청크를 모두 채우며 진행률 찍기 (단계형 인덱싱 2단계)
+#=> 30초마다 또는 5% 마다 "벡터 채우는 중 12,345 / 186,919 (약 35분 남음)" 한 줄. 끊겨도(Ctrl+C)
+#   대기 청크는 저장소에 남아 다음 index 나 워커가 이어 채운다.
+#
+# -in: app   = App (임베더 · 저장소)
+# -in: total = 시작할 때의 대기 청크 수
+#
+# -out: 남은 대기 청크 수(다 채우면 0)
+# -out: error = 없음 (실패는 안내만 하고 남은 수를 돌려준다)
+#------------------------------------------------------------------
+def _fill_with_progress(app, total):
+    from simplerag.index.indexer import fill_pending
+
+    print("벡터 채우기 시작 — {:,}청크 (스레드 {})".format(total, app.embedder.num_threads))
+    t0 = last = time.perf_counter()
+    mark = {"last": last, "pct": 0}
+
+    # 64개마다 불린다 — 30초 · 5% 마다 한 줄만 찍는다
+    def progress(done, left):
+        now = time.perf_counter()
+        pct = done * 100 // max(1, total)
+        if now - mark["last"] >= 30 or pct >= mark["pct"] + 5 or left == 0:
+            rate = done / max(now - t0, 1e-9)
+            # 남은 시간 — 1분 넘으면 분, 아니면 초
+            eta = left / rate if rate else 0
+            eta_s = "약 {}분".format(math.ceil(eta / 60)) if eta >= 60 else "약 {}초".format(math.ceil(eta))
+            print("  벡터 채우는 중 {:,} / {:,} ({:.0f} 청크/s, {} 남음) — 지금도 검색할 수 있습니다".format(
+                done, total, rate, eta_s))
+            mark.update(last=now, pct=pct)
+
+    try:
+        done, left = fill_pending(app.embedder, app.store, on_progress=progress)
+        print("벡터 채우기 끝 — {:,}청크 {:.1f}s".format(done, time.perf_counter() - t0))
+        return left
+    except Exception as e:
+        print("⚠️ 벡터 채우기 멈춤 — {}: {} (남은 청크는 다음 index · 워커가 이어 채웁니다)".format(
+            type(e).__name__, str(e)[:120]), file=sys.stderr)
+        return app.store.pending_count()
 
 
 #------------------------------------------------------------------
@@ -1053,8 +1109,22 @@ def cmd_status(args):
         state = load_state()
         print("인덱스   : {:,}청크 / {:.1f}MB".format(stats["count"], stats["disk_mb"]))
         print("문서     : {}건".format(len(state["docs"])))
-        print("BM25캐시 : {}".format(
-            "있음" if os.path.isfile(config.BM25_PATH) else "없음(dense 단독 폴백)"))
+        # 세그먼트형 BM25 — 덧붙임 · 지움이 있으면 함께 보여 준다(인덱싱 속도 개선 설계서 §4-4)
+        cnt = app.bm25.counts() if app.bm25.ensure_loaded() >= 0 else None
+        if cnt and (cnt[1] or cnt[2]):
+            bm_txt = "있음 (본 {:,} · 덧붙임 {:,} · 지움 {:,})".format(*cnt)
+        elif cnt:
+            bm_txt = "있음"
+        elif os.path.isfile(config.BM25_PATH):
+            bm_txt = "옛 형식 — 다음 index 때 새로 만듦(dense 단독 폴백)"
+        else:
+            bm_txt = "없음(dense 단독 폴백)"
+        print("BM25캐시 : {}".format(bm_txt))
+        # 단계형 인덱싱 — 벡터가 아직 없는 청크(BM25 로만 찾힘)
+        pending = app.store.pending_count()
+        if pending:
+            print("벡터대기 : {:,}청크 — 벡터 채우는 중(지금도 검색할 수 있습니다). "
+                  "index 를 다시 돌리거나 워커가 이어 채웁니다".format(pending))
         print("설정파일 : {}".format(config.CONFIG_PATH or "없음(코드 기본값)"))
         print("청킹     : {}토큰 / 겹침 {} / {} / 머리글 상한 {}".format(
             config.CHUNK_TOKENS, config.CHUNK_OVERLAP, config.CHUNK_MODE,

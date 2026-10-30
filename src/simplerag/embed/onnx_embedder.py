@@ -42,6 +42,24 @@ class OnnxEmbedder(Embedder):
         return self._session is not None and self._tokenizer is not None
 
     #------------------------------------------------------------------
+    # 계산 스레드 수 바꾸기
+    #=> 명령줄 전체 인덱싱만 8 로 올린다(질문 · 자동 인덱싱은 4 — 인덱싱 속도 개선 설계서 §3-2).
+    #   이미 올라가 있으면 세션을 내려 다음 ensure_loaded 가 새 스레드 수로 만들게 한다.
+    #   벡터는 스레드 수와 상관없이 같다(실측 코사인 1.0).
+    #
+    # -in: n = 스레드 수(1 이상)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def set_threads(self, n):
+        n = max(1, int(n))
+        if n != self.num_threads:
+            self.num_threads = n
+            with self._load_lock:
+                self._session = None
+
+    #------------------------------------------------------------------
     # 모델 적재 보장(지연 로딩) — 핵심
     #=> 처음 호출 때만 tokenizer.json 과 model.onnx 를 올린다. 락으로 감싸
     #   예열 스레드와 질의 스레드가 동시에 들어와도 실제 로딩은 한 번만 한다.

@@ -1,7 +1,8 @@
 //------------------------------------------------------------------
 // ONNX 임베더 + 리랭커 (Python embed/onnx_embedder.py · retrieve/reranker.py)
 //=> onnxruntime.dll(Python 판과 같은 1.29)을 실행 시점에 적재해 쓴다.
-//    · 임베더: e5-small-ko — "passage: "/"query: " 접두, 평균 풀링 + L2 정규화, 배치 8, 스레드 4
+//    · 임베더: e5-small-ko — "passage: "/"query: " 접두, 평균 풀링 + L2 정규화, 배치 8,
+//             스레드 4(질문 · 자동 인덱싱) — 명령줄 전체 인덱싱은 set_threads 로 8(인덱싱 속도 개선 설계서 §3-2)
 //    · 리랭커: bge-reranker-base int8 크로스인코더 — (질문, 근거) 쌍마다 점수 하나
 //   ensure_loaded() 는 잠금으로 보호돼 예열 스레드와 질문이 겹쳐도 한 번만 올린다.
 //------------------------------------------------------------------
@@ -59,6 +60,8 @@ fn make_session(path: &str, threads: usize, inter_one: bool) -> Result<Session, 
 pub struct Embedder {
     state: Mutex<Option<EmbedState>>,
     load_lock: Mutex<()>,
+    // ONNX 계산 스레드 수(적재 때 쓴다) — 벡터는 스레드 수와 상관없이 같다
+    threads: std::sync::atomic::AtomicUsize,
 }
 
 struct EmbedState {
@@ -75,7 +78,29 @@ impl Default for Embedder {
 
 impl Embedder {
     pub fn new() -> Embedder {
-        Embedder { state: Mutex::new(None), load_lock: Mutex::new(()) }
+        Embedder { state: Mutex::new(None), load_lock: Mutex::new(()), threads: std::sync::atomic::AtomicUsize::new(config::EMBED_THREADS) }
+    }
+
+    //------------------------------------------------------------------
+    // 계산 스레드 수 바꾸기
+    //=> 명령줄 전체 인덱싱만 8 로 올린다(질문 · 자동 인덱싱은 4). 이미 올라가 있으면 다음 적재 때 쓰게 내린다.
+    //
+    // -in: n = 스레드 수(1 이상)
+    //
+    // -out: 없음
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn set_threads(&self, n: usize) {
+        let old = self.threads.swap(n.max(1), std::sync::atomic::Ordering::SeqCst);
+        if old != n.max(1) {
+            // 다른 스레드 수로 만든 세션은 버린다 — 다음 ensure_loaded 가 새로 만든다
+            *self.state.lock().unwrap() = None;
+        }
+    }
+
+    // 지금 계산 스레드 수
+    pub fn threads(&self) -> usize {
+        self.threads.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn is_ready(&self) -> bool {
@@ -105,7 +130,7 @@ impl Embedder {
             return Err(format!("EmbedError: tokenizer.json 없음: {}", tokp));
         }
         let tok = Tok::from_file(&tokp).map_err(|e| format!("EmbedError: {}", e))?;
-        let session = make_session(&onnx, config::EMBED_THREADS, false)
+        let session = make_session(&onnx, self.threads(), false)
             .map_err(|e| format!("EmbedError: onnxruntime 세션 생성 실패: {}", e))?;
         let inputs = session.inputs.iter().map(|i| i.name.clone()).collect();
         *self.state.lock().unwrap() = Some(EmbedState { tok: std::sync::Arc::new(tok), session, inputs });
@@ -253,7 +278,7 @@ impl Reranker {
             }
         }
         let t0 = Instant::now();
-        let session = make_session(&onnx, config::EMBED_THREADS, true)?;
+        let session = make_session(&onnx, config::RERANK_THREADS, true)?;
         let mut tok = tokenizers::Tokenizer::from_file(&tokp).map_err(|e| e.to_string())?;
         tok.with_truncation(Some(tokenizers::TruncationParams {
             max_length: config::RERANK_MAX_TOKENS,

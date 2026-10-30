@@ -60,7 +60,13 @@ pub const EMBED_DIM: usize = 384;
 pub const PASSAGE_PREFIX: &str = "passage: ";
 pub const QUERY_PREFIX: &str = "query: ";
 pub const EMBED_MAX_TOKENS: usize = 512;
+// 질문 임베딩 · 자동(증분) 인덱싱의 스레드 — 사용자가 다른 일을 하는 중에 돌므로 PC 가 무거워지지 않게 4
 pub const EMBED_THREADS: usize = 4;
+// 전체 인덱싱(명령줄 index)의 CPU 임베딩 스레드 기본값 — 2026-10-30 이 PC(i5-1340P) 장시간 측정에서
+//   4스레드 대비 평균 1.30배 · 흔들림 가장 작음(60~66 청크/초). 다른 PC 도 측정 없이 이 값(코어 수 상한)
+pub const INDEX_EMBED_THREADS: usize = 8;
+// 리랭커 스레드 — 예전에는 임베딩 상수를 따라갔다. 질문 응답 속도는 따로 잰 값이라 4 로 떼어 둔다
+pub const RERANK_THREADS: usize = 4;
 pub const EMBED_BATCH: usize = 8;
 pub const CHUNKER_VERSION: i64 = 2;
 pub const RERANK_MAX_TOKENS: usize = 512;
@@ -139,6 +145,12 @@ pub struct Config {
     pub cpu_lib_dir: String,
     pub backend_cache_path: String,
     pub cso_snf: Option<String>,
+    // 전체 인덱싱 CPU 임베딩 스레드(embed.threads) — 0 = auto(8, 물리 코어 수 상한). SIMPLERAG_EMBED_THREADS 가 앞선다
+    pub embed_threads: i64,
+    // 다음 문서의 파싱·청킹을 임베딩과 겹치기(embed.prefetch, 기본 켬)
+    pub embed_prefetch: bool,
+    // 한 번에 새로 임베딩할 청크가 이보다 많으면 단계형 인덱싱(index.defer_vectors_over, 기본 500, 0 = 끔)
+    pub defer_vectors_over: i64,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -364,6 +376,24 @@ fn build() -> Result<Config, ConfigError> {
     }
     let parent_max_tokens = pick_int(&y, "generation.parent_max_tokens", 400, Some("SIMPLERAG_PARENT_MAX_TOKENS"))?;
 
+    // 임베딩 스레드 — auto 는 0 으로 둔다(실제 수는 index_embed_threads() 가 코어 수를 보고 정한다)
+    let embed_threads = match env("SIMPLERAG_EMBED_THREADS") {
+        Some(v) if v.trim().eq_ignore_ascii_case("auto") => 0,
+        Some(v) => match v.trim().parse::<i64>() {
+            Ok(n) if (1..=64).contains(&n) => n,
+            _ => return Err(ConfigError(format!("SIMPLERAG_EMBED_THREADS={:?} — auto 또는 1~64 정수여야 합니다", v))),
+        },
+        None => match y.get("embed.threads") {
+            Some(SVal::Int(i)) => *i,
+            _ => 0,
+        },
+    };
+    let embed_prefetch = match env("SIMPLERAG_EMBED_PREFETCH") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "embed.prefetch", true),
+    };
+    let defer_vectors_over = pick_int(&y, "index.defer_vectors_over", 500, Some("SIMPLERAG_DEFER_VECTORS_OVER"))?;
+
     let gen_backend = std::env::var("SIMPLERAG_GEN_BACKEND").unwrap_or_else(|_| "auto".into()).trim().to_lowercase();
     // Vulkan / CPU 판 llama.cpp DLL 폴더(프로그램 폴더 기준) — 데이터 루트를 옮겨도 iGPU 가 꺼지지 않게
     let vulkan_lib_dir = env("SIMPLERAG_VULKAN_LIB")
@@ -421,6 +451,9 @@ fn build() -> Result<Config, ConfigError> {
         vulkan_lib_dir,
         cpu_lib_dir,
         cso_snf: env("SIMPLERAG_SNF_EXE"),
+        embed_threads,
+        embed_prefetch,
+        defer_vectors_over,
     })
 }
 
@@ -433,6 +466,55 @@ fn sibling_path(sub: &str) -> String {
         }
     }
     pyutil::join(r"D:\Project\MpowerClassify", sub)
+}
+
+//------------------------------------------------------------------
+// 물리 코어 수 (하이퍼스레딩 짝은 하나로 센다)
+//=> 임베딩 · BM25 토큰화 스레드의 상한이다. Windows 의 프로세서 정보에서 "코어" 항목만 센다.
+//    1) 필요한 버퍼 크기를 묻고 2) 항목을 받아 RelationProcessorCore 개수를 센다
+//    3) 실패하면 논리 프로세서 수로 대신한다
+//
+// -in: 없음
+//
+// -out: 코어 수(1 이상)
+// -out: error = 없음 (실패 시 논리 프로세서 수)
+//------------------------------------------------------------------
+pub fn physical_cores() -> usize {
+    use windows_sys::Win32::System::SystemInformation::{GetLogicalProcessorInformation, RelationProcessorCore, SYSTEM_LOGICAL_PROCESSOR_INFORMATION};
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        let logical = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let mut len: u32 = 0;
+        // 첫 부름은 크기만 알려 준다
+        unsafe { GetLogicalProcessorInformation(std::ptr::null_mut(), &mut len) };
+        let sz = std::mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION>();
+        if len == 0 {
+            return logical;
+        }
+        let mut buf: Vec<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> = vec![unsafe { std::mem::zeroed() }; len as usize / sz + 1];
+        if unsafe { GetLogicalProcessorInformation(buf.as_mut_ptr(), &mut len) } == 0 {
+            return logical;
+        }
+        let n = buf[..len as usize / sz].iter().filter(|x| x.Relationship == RelationProcessorCore).count();
+        if n == 0 { logical } else { n }
+    })
+}
+
+//------------------------------------------------------------------
+// 전체 인덱싱의 CPU 임베딩 스레드 수
+//=> 설정(embed.threads · SIMPLERAG_EMBED_THREADS)이 있으면 그 값, auto 면 8. 둘 다 물리 코어 수를 넘지 않게.
+//
+// -out: 스레드 수
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn index_embed_threads() -> usize {
+    let want = if cfg().embed_threads > 0 { cfg().embed_threads as usize } else { INDEX_EMBED_THREADS };
+    want.min(physical_cores()).max(1)
+}
+
+// BM25 토큰화 스레드 수 — 물리 코어 수, 상한 8 (설계서 §4-2)
+pub fn bm25_threads() -> usize {
+    physical_cores().clamp(1, 8)
 }
 
 //------------------------------------------------------------------
@@ -489,6 +571,7 @@ enum Check {
     RerankMode,
     Text(usize),
     ParentMode,
+    Threads,
 }
 
 // 섹션 → 키 → 검사기. 여기에 없는 키는 오타로 보고 오류를 낸다
@@ -519,6 +602,13 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("synonyms", Check::Bool),
             ("synonym_extra", Check::Bool),
             ("synonym_log", Check::Bool),
+        ]),
+        ("embed", vec![
+            ("threads", Check::Threads),
+            ("prefetch", Check::Bool),
+        ]),
+        ("index", vec![
+            ("defer_vectors_over", Check::Int(0, 100_000_000)),
         ]),
         ("rerank", vec![
             ("mode", Check::RerankMode),
@@ -636,6 +726,12 @@ fn run_check(ch: &Check, v: &Y) -> Result<Option<SVal>, String> {
                 }
             }
             _ => Err("글(문자열)이어야 합니다".into()),
+        },
+        Check::Threads => match v {
+            // auto 는 값을 넣지 않는다(코드 기본값 = auto)
+            Y::String(s) if pyutil::strip(s).eq_ignore_ascii_case("auto") => Ok(None),
+            Y::Number(n) if n.is_i64() && (1..=64).contains(&n.as_i64().unwrap()) => Ok(Some(SVal::Int(n.as_i64().unwrap()))),
+            _ => Err("auto 또는 1~64 정수여야 합니다".into()),
         },
         Check::ParentMode => {
             if let Y::Bool(false) = v {

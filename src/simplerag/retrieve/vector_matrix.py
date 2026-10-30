@@ -64,6 +64,8 @@ def under(doc_norm, folder_norm):
 # -필드: ids      = 행 → 점 id (int64)
 # -필드: mat      = 행 → 정규화된 벡터 (float32, n×dim)
 # -필드: alive    = 행이 아직 쓰이는가(문서를 지우거나 고치면 옛 행은 False)
+# -필드: dense_ok = 벡터가 있는 행인가(단계형 인덱싱의 벡터 대기 행은 False — 의미 검색에서 빼고
+#                   폴더 한정 BM25 허용 목록에는 남긴다)
 # -필드: disabled = 만들지 않은 이유(너무 큼 등). 있으면 Qdrant 필터로 찾는다
 # -필드: version  = 고칠 때마다 1 늘어난다(폴더 표시 캐시를 버리는 기준)
 #------------------------------------------------------------------
@@ -81,6 +83,8 @@ class VectorMatrix:
         self.ids = None
         self.mat = None
         self.alive = None
+        self.dense_ok = None
+        self._row_of = None          # {점 id: 행} — 대기 행 채우기 때 만든다
         self.disabled = None
         self.version = 0
         self.build_ms = None
@@ -130,16 +134,18 @@ class VectorMatrix:
             self.disabled = "청크 {:,}개 → 행렬 {:.0f}MB 가 한도 {:.0f}MB 를 넘음".format(n, est_mb, self.max_mb)
             return -1.0
 
-        ids, vecs, doc_rows = [], [], {}
+        ids, vecs, doc_rows, ok = [], [], {}, []
         offset = None
         while True:
             pts, offset = store._client.scroll(
                 collection_name=COLLECTION, limit=2000, offset=offset,
-                with_payload=["doc_path"], with_vectors=True)
+                with_payload=["doc_path", "vec_pending"], with_vectors=True)
             for p in pts:
                 doc_rows.setdefault(p.payload.get("doc_path", ""), []).append(len(ids))
                 ids.append(p.id)
                 vecs.append(p.vector)
+                # 벡터 대기 점은 자리 표시 벡터다 — 의미 검색에서 뺀다
+                ok.append(not p.payload.get("vec_pending"))
             if offset is None:
                 break
 
@@ -150,6 +156,8 @@ class VectorMatrix:
         self.ids = np.asarray(ids, dtype=np.int64)
         self.mat = mat
         self.alive = np.ones(len(ids), dtype=bool)
+        self.dense_ok = np.asarray(ok, dtype=bool)
+        self._row_of = None
         self._doc_rows = doc_rows
         self._doc_norm = {d: os.path.normcase(d) for d in doc_rows}
         self._masks.clear()
@@ -179,7 +187,7 @@ class VectorMatrix:
             if new_ids:
                 from ..index.store import COLLECTION
                 pts = store._client.retrieve(collection_name=COLLECTION, ids=[int(i) for i in new_ids],
-                                             with_payload=False, with_vectors=True)
+                                             with_payload=["vec_pending"], with_vectors=True)
                 if pts:
                     add = np.asarray([p.vector for p in pts], dtype=np.float32)
                     add /= np.maximum(np.linalg.norm(add, axis=1, keepdims=True), 1e-12)
@@ -187,6 +195,9 @@ class VectorMatrix:
                     self.mat = np.vstack([self.mat, add])
                     self.ids = np.concatenate([self.ids, np.asarray([p.id for p in pts], dtype=np.int64)])
                     self.alive = np.concatenate([self.alive, np.ones(len(pts), dtype=bool)])
+                    self.dense_ok = np.concatenate([self.dense_ok, np.asarray(
+                        [not (p.payload or {}).get("vec_pending") for p in pts], dtype=bool)])
+                    self._row_of = None
                     self._doc_rows[doc_path] = list(range(start, start + len(pts)))
                     self._doc_norm[doc_path] = os.path.normcase(doc_path)
             self.version += 1
@@ -290,6 +301,8 @@ class VectorMatrix:
             q = q / max(float(np.linalg.norm(q)), 1e-12)
             scores = self.mat @ q
             keep = self.alive if m is None else m
+            # 벡터 대기 행은 의미 검색에서 뺀다(BM25 로만 찾힌다)
+            keep = keep & self.dense_ok
             scores = np.where(keep, scores, -np.inf)
             n_keep = int(keep.sum())
             if n_keep == 0:
@@ -298,6 +311,30 @@ class VectorMatrix:
             top = np.argpartition(-scores, k - 1)[:k]
             top = top[np.argsort(-scores[top])]
             return [(int(self.ids[i]), float(scores[i])) for i in top]
+
+    #--------------------------------------------------------------
+    # 벡터 대기 행 채우기 (단계형 인덱싱 2단계 — 워커 /embed-pending 뒤)
+    #=> 점 id 로 행을 찾아 벡터를 바꾸고 의미 검색에 넣는다. 행렬에 없는 id 는 건너뛴다.
+    #
+    # -in: ids  = 점 id 목록
+    # -in: vecs = (N, dim) 배열
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def set_vectors(self, ids, vecs):
+        with self._lock:
+            if not self.ready():
+                return
+            if self._row_of is None:
+                self._row_of = {int(i): r for r, i in enumerate(self.ids.tolist())}
+            for i, v in zip(ids, vecs):
+                r = self._row_of.get(int(i))
+                if r is None:
+                    continue
+                v = np.asarray(v, dtype=np.float32)
+                self.mat[r] = v / max(float(np.linalg.norm(v)), 1e-12)
+                self.dense_ok[r] = True
 
     #--------------------------------------------------------------
     # 표시 안 점 id 들 (BM25 에 넘긴다)

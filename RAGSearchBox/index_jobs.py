@@ -34,6 +34,8 @@ SUMMARY_PREFIX = "@index-summary "
 CLI_RETRY_S = 60          # index 명령이 실패했을 때(잠금 등) 다시 해 볼 간격
 NOTIFY_AT_LEAST = 3       # 이보다 적게 바뀐 묶음은 트레이로 알리지 않는다(저장할 때마다 뜨면 귀찮다)
 OUTSIDE_KEY = "(지정 폴더 밖)"   # waiting_delete 에서 "지정 폴더 밖 문서" 를 가리키는 이름
+PENDING_IDLE_S = 2.0      # 벡터 채우기는 마지막 질문 뒤 이만큼 쉬었을 때만(질문이 먼저 — 인덱싱 속도 개선 설계서 §3-5-5)
+PENDING_STEP = 64         # 한 번에 채울 벡터 대기 청크 수 — 4스레드로 약 1초라 질문이 오면 1초 안에 비켜 준다
 
 
 #------------------------------------------------------------------
@@ -73,6 +75,9 @@ class IndexJobs:
         self._queued = set()                      # 중복 방지용 (op, 정규화 경로)
         self._inflight = None                     # 보내 놓고 기다리는 일(설명 글)
         self._bm25_needed = False
+        # 벡터 대기 청크(단계형 인덱싱) — None 이면 아직 모름(워커가 뜨면 한 번 물어본다)
+        self._vec_pending = None
+        self._vec_total = 0                       # 채우기 시작할 때의 대기 수(진행 표시의 분모)
         self._retry_at = 0.0
         self._last_avail = None                   # 지난번에 본 워커 상태("up" 이 되는 순간을 잡는다)
         self._outside_needed = True               # 지정 폴더 밖 문서를 확인할 차례인가
@@ -185,6 +190,10 @@ class IndexJobs:
             return "새 문서 {}건 — 트레이 '지금 인덱싱'".format(sum(self.waiting_new.values()))
         if self.waiting_delete:
             return "사라진 문서가 많아 멈춤 — 트레이 '지금 인덱싱'"
+        if self._vec_pending:
+            total = max(self._vec_total, self._vec_pending)
+            return "벡터 채우는 중 {:,} / {:,} — 지금도 검색할 수 있습니다".format(
+                total - self._vec_pending, total)
         return ""
 
     #--------------------------------------------------------------
@@ -224,6 +233,9 @@ class IndexJobs:
             return "인덱스 확인 중"
         if self.waiting_new or self.waiting_delete:
             return "'지금 인덱싱' 필요"
+        if self._vec_pending:
+            total = max(self._vec_total, self._vec_pending)
+            return "벡터 채우는 중 {:,}/{:,}".format(total - self._vec_pending, total)
         return ""
 
     #--------------------------------------------------------------
@@ -247,6 +259,8 @@ class IndexJobs:
                 for r in self.roots:
                     self.mark_dirty(r, "워커가 떴다")
                 self._outside_needed = True
+                # 남은 벡터 대기 청크가 있는지 다시 본다(지난번에 채우다 끊겼을 수 있다)
+                self._vec_pending = None
             self._last_avail = avail
             if avail == "starting":
                 return                                  # 곧 뜬다 — 뜨면 워커에게 시킨다
@@ -304,6 +318,38 @@ class IndexJobs:
             return
         if self._round_active():
             self._finish_round()
+        # 벡터 대기 청크 채우기 — 질문을 처리하지 않을 때만, 64개씩(질문이 오면 1초 안에 비켜 준다)
+        idle = getattr(self.worker, "is_idle", lambda: False)()
+        if (idle and self.worker.seconds_since_ask() >= PENDING_IDLE_S
+                and (self._vec_pending is None or self._vec_pending > 0)):
+            self._send("/embed-pending " + json.dumps({"max": PENDING_STEP}), self._on_pending, "벡터 채우기")
+
+    #--------------------------------------------------------------
+    # 벡터 채우기 결과 (메인 스레드)
+    #=> 남은 수를 기억하고, 다 채우면 한 번 알린다. 실패하면 이번 워커에서는 더 보내지 않는다.
+    #
+    # -in: res = 워커 결과 {ok, filled, pending}
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_pending(self, res):
+        if res.get("stopped"):
+            return
+        if not res.get("ok"):
+            self.log.warning("벡터 채우기 실패: %s", res.get("why"))
+            self._vec_pending = 0
+            return
+        left = int(res.get("pending") or 0)
+        was = self._vec_pending or 0
+        if left and (self._vec_pending is None or left > self._vec_total):
+            self._vec_total = left
+            self.log.info("벡터 대기 청크 %d개 — 질문이 없을 때 채운다", left)
+        if not left and was:
+            self.log.info("벡터 채우기 끝 — %d청크", self._vec_total)
+            self.notify("info", "벡터 채우기가 끝났습니다 — 이제 일상어 질문도 원래 정확도로 찾습니다")
+            self._vec_total = 0
+        self._vec_pending = left
 
     #--------------------------------------------------------------
     # 워커에게 명령 보내기
@@ -496,6 +542,9 @@ class IndexJobs:
         if res.get("ok"):
             self._bm25_needed = False
             self.log.info("키워드 색인 다시 만듦: %s청크 %sms", res.get("chunks"), res.get("ms"))
+            # 새 대기 청크가 생겼으면 다시 채우기 시작한다
+            if res.get("pending") and not self._vec_pending:
+                self._vec_pending = None
         else:
             self._bm25_needed = False               # 같은 실패를 되풀이하지 않는다
             self.log.warning("키워드 색인 실패: %s", res.get("why"))
@@ -563,8 +612,10 @@ class IndexJobs:
             summary, code, tail = None, None, ""
             try:
                 cwd = os.path.dirname(os.path.abspath(self.base_cmd[0]))
+                # 자동 인덱싱은 사용자가 다른 일을 하는 중에 돈다 — 임베딩 스레드를 4 로 둔다(설계서 §3-2)
+                env = dict(os.environ, SIMPLERAG_EMBED_THREADS="4")
                 p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   stdin=subprocess.DEVNULL, timeout=3600,
+                                   stdin=subprocess.DEVNULL, timeout=3600, env=env,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 code = p.returncode
                 out = p.stdout.decode("utf-8", errors="replace")

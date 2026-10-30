@@ -19,6 +19,10 @@ use crate::worker::Worker;
 const SUMMARY_PREFIX: &str = "@index-summary ";
 const CLI_RETRY_S: u64 = 60;
 const NOTIFY_AT_LEAST: usize = 3;
+// 벡터 채우기는 마지막 질문 뒤 이만큼 쉬었을 때만 보낸다(질문이 먼저 — 인덱싱 속도 개선 설계서 §3-5-5)
+const PENDING_IDLE_S: f64 = 2.0;
+// 한 번에 채울 벡터 대기 청크 수 — 4스레드로 약 1초라 질문이 오면 1초 안에 비켜 준다
+const PENDING_STEP: usize = 64;
 const OUTSIDE_KEY: &str = "(지정 폴더 밖)";
 
 //------------------------------------------------------------------
@@ -35,6 +39,7 @@ enum Handler {
     Plan(String),
     Doc(String, String, Option<String>),
     Bm25,
+    Pending,
 }
 
 struct Round {
@@ -71,10 +76,26 @@ pub struct IndexJobs {
     pub waiting_new: HashMap<String, usize>,
     pub waiting_delete: HashMap<String, String>,
     round: Round,
+    // 벡터 대기 청크(단계형 인덱싱) — None 이면 아직 모름(워커가 뜨면 한 번 물어본다)
+    vec_pending: Option<usize>,
+    // 이번에 채우기 시작할 때의 대기 수(진행 표시 "12,345 / 186,919" 의 분모)
+    vec_total: usize,
 }
 
 fn abspath(p: &str) -> String {
     std::path::absolute(p).map(|x| x.to_string_lossy().into_owned()).unwrap_or(p.to_string())
+}
+// 세 자리마다 쉼표(12,345)
+fn comma(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 fn basename(p: &str) -> String {
     p.rsplit(['\\', '/']).next().unwrap_or(p).to_string()
@@ -89,7 +110,15 @@ impl IndexJobs {
             queued: HashSet::new(), inflight: None, handlers: HashMap::new(), next_id: 1, bm25_needed: false, retry_at: None,
             last_avail: None, outside_needed: true, approve_outside: false, waiting_new: HashMap::new(), waiting_delete: HashMap::new(),
             round: Round { done: 0, total: 0, changed: vec![], failed: vec![] },
+            vec_pending: None, vec_total: 0,
         }
+    }
+
+    // 벡터 채우기 진행 글 — 대기 청크가 없으면 None
+    fn pending_text(&self) -> Option<String> {
+        let left = self.vec_pending.filter(|n| *n > 0)?;
+        let total = self.vec_total.max(left);
+        Some(format!("벡터 채우는 중 {} / {} — 지금도 검색할 수 있습니다", comma(total - left), comma(total)))
     }
 
     //------------------------------------------------------------------
@@ -166,7 +195,7 @@ impl IndexJobs {
         if !self.waiting_delete.is_empty() {
             return "사라진 문서가 많아 멈춤 — 트레이 '지금 인덱싱'".into();
         }
-        String::new()
+        self.pending_text().unwrap_or_default()
     }
 
     pub fn has_waiting(&self) -> bool {
@@ -190,7 +219,10 @@ impl IndexJobs {
         if !self.waiting_new.is_empty() || !self.waiting_delete.is_empty() {
             return "'지금 인덱싱' 필요".into();
         }
-        String::new()
+        match self.vec_pending {
+            Some(n) if n > 0 => format!("벡터 채우는 중 {}/{}", comma(self.vec_total.max(n) - n), comma(self.vec_total.max(n))),
+            _ => String::new(),
+        }
     }
 
     //------------------------------------------------------------------
@@ -206,6 +238,8 @@ impl IndexJobs {
                 self.mark_dirty(&r, "워커가 떴다");
             }
             self.outside_needed = true;
+            // 남은 벡터 대기 청크가 있는지 다시 본다(지난번에 채우다 끊겼을 수 있다)
+            self.vec_pending = None;
         }
         self.last_avail = Some(avail);
         if avail == "starting" {
@@ -259,6 +293,12 @@ impl IndexJobs {
         if self.round_active() {
             self.finish_round();
         }
+        // 벡터 대기 청크 채우기 — 질문을 처리하지 않을 때만, 64개씩(질문이 오면 1초 안에 비켜 준다)
+        let idle = self.worker.as_ref().map(|w| w.is_idle() && w.seconds_since_ask() >= PENDING_IDLE_S).unwrap_or(false);
+        if idle && self.vec_pending.map(|n| n > 0).unwrap_or(true) {
+            let line = format!("/embed-pending {}", crate::worker::ascii_json(&json!({"max": PENDING_STEP})));
+            self.send(line, Handler::Pending, "벡터 채우기");
+        }
     }
 
     // 명령 보내기 — 결과는 post 로 돌아온다
@@ -296,6 +336,7 @@ impl IndexJobs {
                     Handler::Plan(root) => self.on_plan(&root, &res),
                     Handler::Doc(op, path, root) => self.on_doc(&op, &path, root, &res),
                     Handler::Bm25 => self.on_bm25(&res),
+                    Handler::Pending => self.on_pending(&res),
                 }
             }
             JobMsg::Cli(results) => self.on_cli(results),
@@ -422,11 +463,43 @@ impl IndexJobs {
         }
     }
 
+    //------------------------------------------------------------------
+    // 벡터 채우기 결과 — 남은 수를 기억하고, 다 채우면 한 번 알린다
+    //------------------------------------------------------------------
+    fn on_pending(&mut self, res: &Value) {
+        if Self::b(res, "stopped") {
+            return;
+        }
+        if !Self::b(res, "ok") {
+            // 실패하면 이번 워커에서는 더 보내지 않는다(다음에 워커가 뜨면 다시 본다)
+            crate::warn!("autoindex", "벡터 채우기 실패: {}", res["why"]);
+            self.vec_pending = Some(0);
+            return;
+        }
+        let left = res["pending"].as_u64().unwrap_or(0) as usize;
+        let was = self.vec_pending.unwrap_or(0);
+        if left > 0 && (self.vec_pending.is_none() || left > self.vec_total) {
+            self.vec_total = left;
+            crate::info!("autoindex", "벡터 대기 청크 {}개 — 질문이 없을 때 채운다", left);
+        }
+        if left == 0 && was > 0 {
+            crate::info!("autoindex", "벡터 채우기 끝 — {}청크", self.vec_total);
+            (self.notify)("info", "벡터 채우기가 끝났습니다 — 이제 일상어 질문도 원래 정확도로 찾습니다");
+            self.vec_total = 0;
+        }
+        self.vec_pending = Some(left);
+    }
+
     fn on_bm25(&mut self, res: &Value) {
         if Self::b(res, "stopped") {
             return;
         }
         self.bm25_needed = false;
+        if let Some(n) = res.get("pending").and_then(|v| v.as_u64()) {
+            if n > 0 && self.vec_pending.unwrap_or(0) == 0 {
+                self.vec_pending = None;
+            }
+        }
         if Self::b(res, "ok") {
             crate::info!("autoindex", "키워드 색인 다시 만듦: {}청크 {}ms", res["chunks"], res["ms"]);
         } else {
@@ -484,6 +557,8 @@ impl IndexJobs {
                 let t0 = Instant::now();
                 let mut c = std::process::Command::new(&base[0]);
                 c.args(&base[1..]).args(&args).stdin(std::process::Stdio::null());
+                // 자동 인덱싱은 사용자가 다른 일을 하는 중에 돈다 — 임베딩 스레드를 4 로 둔다(설계서 §3-2)
+                c.env("SIMPLERAG_EMBED_THREADS", "4");
                 if let Some(d) = std::path::Path::new(&base[0]).parent() {
                     c.current_dir(d);
                 }

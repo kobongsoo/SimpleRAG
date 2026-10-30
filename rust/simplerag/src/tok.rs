@@ -40,6 +40,55 @@ impl Tok {
         self.inner.encode(text, false).map(|e| e.get_tokens().to_vec()).unwrap_or_default()
     }
 
+    //------------------------------------------------------------------
+    // 청크 하나의 단어별 빈도 (BM25 용)
+    //=> BM25 는 "단어가 몇 번 나왔나" 만 쓴다. 단어 번호를 첫 등장 순서로 매기므로 순서도 지킨다.
+    //    1) 토큰을 차례로 보며 처음 나온 단어는 끝에 붙이고, 이미 있으면 빈도만 올린다
+    //
+    // -in: text = 청크 본문
+    //
+    // -out: [(단어, 빈도)] — 첫 등장 순서
+    // -out: error = 없음 (토큰화 실패는 빈 목록)
+    //------------------------------------------------------------------
+    pub fn term_freqs(&self, text: &str) -> Vec<(String, u32)> {
+        let mut out: Vec<(String, u32)> = vec![];
+        let mut pos: HashMap<String, usize> = HashMap::new();
+        for t in self.tokens(text) {
+            match pos.get(&t) {
+                Some(&i) => out[i].1 += 1,
+                None => {
+                    pos.insert(t.clone(), out.len());
+                    out.push((t, 1));
+                }
+            }
+        }
+        out
+    }
+
+    //------------------------------------------------------------------
+    // 여러 청크의 단어별 빈도 — 스레드 여러 개로 나눠서 (BM25 단계 A)
+    //=> BM25 구축 시간의 약 60% 가 토큰화다. 청크를 스레드 수만큼 잘라 동시에 토큰화하고,
+    //   결과는 입력 순서대로 이어 붙인다 — 그래서 한 줄씩 할 때와 결과가 똑같다.
+    //
+    // -in: texts   = 청크 본문 목록
+    // -in: threads = 스레드 수(1 이면 한 줄씩)
+    //
+    // -out: 청크마다 [(단어, 빈도)] — texts 순서
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn term_freqs_par(&self, texts: &[&str], threads: usize) -> Vec<Vec<(String, u32)>> {
+        let threads = threads.max(1);
+        if threads == 1 || texts.len() < 64 {
+            return texts.iter().map(|t| self.term_freqs(t)).collect();
+        }
+        let per = texts.len().div_ceil(threads);
+        std::thread::scope(|s| {
+            let hs: Vec<_> = texts.chunks(per).map(|part| s.spawn(move || part.iter().map(|t| self.term_freqs(t)).collect::<Vec<_>>())).collect();
+            // 나눈 차례대로 모아 입력 순서를 지킨다
+            hs.into_iter().flat_map(|h| h.join().expect("토큰화 스레드 실패")).collect()
+        })
+    }
+
     // id → 글자 (특수 토큰은 건너뜀 — Python tok.decode 기본값)
     pub fn decode(&self, ids: &[u32]) -> String {
         self.inner.decode(ids, true).unwrap_or_default()

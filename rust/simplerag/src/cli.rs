@@ -110,11 +110,21 @@ fn announce_rerank(app: &std::sync::Arc<App>) {
 
 pub fn cmd_index(a: &Args) -> i32 {
     let app = App::new(None);
+    // 명령줄 index 는 전체 인덱싱이다 — CPU 임베딩 스레드를 설정값(기본 8, 코어 수 상한)으로 올린다(설계서 §3-2).
+    //   RAGSearchBox 가 대신 돌리는 자동 인덱싱은 SIMPLERAG_EMBED_THREADS=4 를 넘겨 4 로 둔다
+    app.embedder.set_threads(config::index_embed_threads());
     app.warmup(true, &mut |_| {}, Some(false));
     let dir = a.dir.clone().unwrap_or_default();
     let mut lg = |m: &str| outln(m);
     let r = indexer::index_folder(&dir, &app.embedder, &app.store, &app.bm25, a.rebuild, &mut lg,
                                   !a.no_recursive, a.allow_delete, a.max_add);
+    // 단계형 인덱싱 2단계 — 1단계(BM25 까지)가 끝나 이미 검색할 수 있다. 같은 실행에서 벡터를 이어 채운다
+    let r = r.map(|mut s| {
+        if s.pending > 0 {
+            s.pending = fill_with_progress(&app, s.pending);
+        }
+        s
+    });
     let code = match r {
         Err(e) => {
             log(&format!("\n❌ {}", e));
@@ -128,6 +138,7 @@ pub fn cmd_index(a: &Args) -> i32 {
                 "same": s.c("same"), "moved": s.c("moved"), "copied": s.c("copied"), "removed": s.removed,
                 "delete_blocked": s.delete_blocked, "held_new": s.held_new, "chunks": s.chunks,
                 "sec": s.sec, "op": "index", "ok": true, "failed": s.failed.len(),
+                "pending": s.pending, "reused": s.reused, "embedded": s.embedded,
             }));
             outln(&commands::format_result(&res, "@index-summary "));
             outln(&format!("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 이동 {}건 · 복사 {}건 · 삭제 {}건 / 청크 {}개 / {:.1}s",
@@ -150,6 +161,46 @@ pub fn cmd_index(a: &Args) -> i32 {
 
 fn obj(v: Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
+}
+
+//------------------------------------------------------------------
+// 벡터 대기 청크를 모두 채우며 진행률 찍기 (단계형 인덱싱 2단계)
+//=> 30초마다 또는 5% 마다 "벡터 채우는 중 12,345 / 186,919 (약 35분 남음)" 한 줄. 끊겨도(Ctrl+C)
+//   대기 청크는 저장소에 남아 다음 index 나 워커가 이어 채운다.
+//
+// -in: app = 앱 / total = 시작할 때의 대기 청크 수
+//
+// -out: 남은 대기 청크 수(다 채우면 0)
+// -out: error = 없음 (실패는 안내만 하고 남은 수를 돌려준다)
+//------------------------------------------------------------------
+fn fill_with_progress(app: &App, total: usize) -> usize {
+    outln(&format!("벡터 채우기 시작 — {}청크 (스레드 {})", pyutil::comma(total as i64), app.embedder.threads()));
+    let t0 = Instant::now();
+    let mut last = Instant::now();
+    let mut last_pct = 0usize;
+    let r = indexer::fill_pending(&app.embedder, &app.store, None, &mut |done, left| {
+        let pct = done * 100 / total.max(1);
+        if last.elapsed().as_secs() >= 30 || pct >= last_pct + 5 || left == 0 {
+            let rate = done as f64 / t0.elapsed().as_secs_f64().max(1e-9);
+            // 남은 시간 — 1분 넘으면 분, 아니면 초
+            let eta = if rate > 0.0 { left as f64 / rate } else { 0.0 };
+            let eta_s = if eta >= 60.0 { format!("약 {:.0}분", (eta / 60.0).ceil()) } else { format!("약 {:.0}초", eta.ceil()) };
+            outln(&format!("  벡터 채우는 중 {} / {} ({:.0} 청크/s, {} 남음) — 지금도 검색할 수 있습니다",
+                pyutil::comma(done as i64), pyutil::comma(total as i64), rate, eta_s));
+            last = Instant::now();
+            last_pct = pct;
+        }
+    });
+    match r {
+        Ok((done, left)) => {
+            outln(&format!("벡터 채우기 끝 — {}청크 {:.1}s", pyutil::comma(done as i64), t0.elapsed().as_secs_f64()));
+            left
+        }
+        Err(e) => {
+            log(&format!("⚠️ 벡터 채우기 멈춤 — {} (남은 청크는 다음 index · 워커가 이어 채웁니다)", e));
+            app.store.pending_count().unwrap_or(total)
+        }
+    }
 }
 
 // ── ask / chat 출력 ──────────────────────────────────────
@@ -967,7 +1018,18 @@ pub fn cmd_status(a: &Args) -> i32 {
     let c = cfg();
     outln(&format!("인덱스   : {}청크 / {:.1}MB", pyutil::comma(n as i64), mb));
     outln(&format!("문서     : {}건", indexer::docs(&state).len()));
-    outln(&format!("BM25캐시 : {}", if std::path::Path::new(&c.bm25_path).is_file() { "있음" } else { "없음(dense 단독 폴백)" }));
+    outln(&format!("BM25캐시 : {}", match (app.bm25.ensure_loaded() >= 0.0, app.bm25.counts()) {
+        (true, Some((base, add, del))) if add + del > 0 => format!("있음 (본 {} · 덧붙임 {} · 지움 {})", pyutil::comma(base as i64), pyutil::comma(add as i64), pyutil::comma(del as i64)),
+        (true, _) => "있음".to_string(),
+        _ if std::path::Path::new(&c.bm25_path).is_file() => "옛 형식 — 다음 index 때 새로 만듦(dense 단독 폴백)".to_string(),
+        _ => "없음(dense 단독 폴백)".to_string(),
+    }));
+    // 단계형 인덱싱 — 벡터가 아직 없는 청크(BM25 로만 찾힘)
+    if let Ok(p) = app.store.pending_count() {
+        if p > 0 {
+            outln(&format!("벡터대기 : {}청크 — 벡터 채우는 중(지금도 검색할 수 있습니다). index 를 다시 돌리거나 워커가 이어 채웁니다", pyutil::comma(p as i64)));
+        }
+    }
     outln(&format!("설정파일 : {}", c.config_path.as_deref().unwrap_or("없음(코드 기본값)")));
     outln(&format!("청킹     : {}토큰 / 겹침 {} / {} / 머리글 상한 {}", c.chunk_tokens, c.chunk_overlap, c.chunk_mode, c.table_header_max_tokens));
     let rec = state.get("chunk_params").filter(|v| !v.is_null()).cloned();
@@ -1241,9 +1303,8 @@ pub fn cmd_import(a: &Args) -> i32 {
             return 1;
         }
     };
-    let (texts, bids, _) = indexer::collect_for_bm25(&app.store, None, &mut |m| outln(m)).unwrap_or_default();
-    match app.bm25.build(&texts, &bids, &tok) {
-        Ok(s) => outln(&format!("BM25 인덱스 {}건 구축 {:.1}s", pyutil::comma(texts.len() as i64), s)),
+    match indexer::refresh_bm25(&app.store, &app.bm25, None, &tok, true, &mut |m| outln(m)) {
+        Ok(r) => outln(&r.line()),
         Err(e) => log(&e),
     }
     state.insert("bm25_built_at".into(), pyutil::jf(pyutil::now_ts()));

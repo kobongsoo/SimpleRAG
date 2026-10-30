@@ -169,8 +169,87 @@ EMBED = EmbedSpec(
     max_tokens_model=512,
 )
 
-# ONNX 스레드 수. 8로 올려도 이득이 없다 — P-core 4개가 실질 상한(REPORT §8.1).
+# ONNX 스레드 수 — 질문 임베딩 · 자동(증분) 인덱싱. 사용자가 다른 일을 하는 중에 돌므로 4 로 둔다.
+#   (예전 측정 "8 로 올려도 이득 없음 — P-core 4개가 실질 상한(REPORT §8.1)" 은 짧은 측정이었다)
 EMBED_THREADS = 4
+# 전체 인덱싱(명령줄 index)의 CPU 임베딩 스레드 기본값 — 2026-10-30 이 PC(i5-1340P) 장시간 측정에서
+#   4스레드 대비 평균 1.30배 · 흔들림 가장 작음(60~66 청크/초, 인덱싱 속도 개선 설계서 §3-2).
+#   다른 PC 도 측정 없이 이 값(물리 코어 수 상한)을 쓴다
+INDEX_EMBED_THREADS = 8
+
+
+#------------------------------------------------------------------
+# 임베딩 스레드 설정 읽기 — 0 = auto
+#=> SIMPLERAG_EMBED_THREADS > config.yaml embed.threads > auto. auto 는 index_embed_threads() 가 정한다.
+#
+# -in: 없음
+#
+# -out: 스레드 수(1~64) 또는 0(auto)
+# -out: error = 환경변수가 auto · 1~64 정수가 아니면 ConfigError
+#------------------------------------------------------------------
+def _embed_threads_setting():
+    raw = (os.environ.get("SIMPLERAG_EMBED_THREADS") or "").strip()
+    if raw:
+        if raw.lower() == "auto":
+            return 0
+        if not raw.isdigit() or not 1 <= int(raw) <= 64:
+            raise ConfigError("SIMPLERAG_EMBED_THREADS={!r} — auto 또는 1~64 정수여야 합니다".format(raw))
+        return int(raw)
+    return int(_YAML.get("embed.threads", 0))
+
+
+EMBED_THREADS_SETTING = _embed_threads_setting()
+# 다음 문서의 파싱·청킹을 임베딩과 겹치기(embed.prefetch, 기본 켬 — 설계서 §3-1)
+EMBED_PREFETCH = ((os.environ["SIMPLERAG_EMBED_PREFETCH"] != "0") if os.environ.get("SIMPLERAG_EMBED_PREFETCH")
+                  else bool(_YAML.get("embed.prefetch", True)))
+# 단계형 인덱싱 문턱 — 이번 실행에서 새로 임베딩할 청크가 이만큼 쌓인 뒤로는 벡터를 비워 두고
+#   BM25 로 먼저 검색되게 한다(index.defer_vectors_over, 기본 500, 0 = 끔 — 설계서 §3-5)
+DEFER_VECTORS_OVER = _setting("index.defer_vectors_over", 500, "SIMPLERAG_DEFER_VECTORS_OVER")
+
+
+#------------------------------------------------------------------
+# 물리 코어 수 (하이퍼스레딩 짝은 하나로)
+#=> 임베딩 · BM25 토큰화 스레드의 상한. psutil 이 있으면 그것을, 없으면 논리 프로세서 수를 쓴다.
+#
+# -in: 없음
+#
+# -out: 코어 수(1 이상)
+# -out: error = 없음
+#------------------------------------------------------------------
+def physical_cores():
+    try:
+        import psutil
+        n = psutil.cpu_count(logical=False)
+        if n:
+            return int(n)
+    except Exception:
+        pass
+    return os.cpu_count() or 4
+
+
+#------------------------------------------------------------------
+# 전체 인덱싱의 CPU 임베딩 스레드 수
+#=> 설정값이 있으면 그 값, auto 면 8. 둘 다 물리 코어 수를 넘지 않게(Rust config::index_embed_threads 와 같다).
+#
+# -out: 스레드 수
+# -out: error = 없음
+#------------------------------------------------------------------
+def index_embed_threads():
+    want = EMBED_THREADS_SETTING or INDEX_EMBED_THREADS
+    return max(1, min(want, physical_cores()))
+
+
+#------------------------------------------------------------------
+# BM25 토큰화 스레드 수 — 물리 코어 수, 상한 8 (설계서 §4-2)
+#=> Python 판은 encode_batch 가 안에서 스레드를 나누므로 지금은 Rust 판과 값을 맞추는 용도다.
+#
+# -in: 없음
+#
+# -out: 스레드 수(1~8)
+# -out: error = 없음
+#------------------------------------------------------------------
+def bm25_threads():
+    return max(1, min(8, physical_cores()))
 # 배치 크기. 1→8 에서 65→77 chunk/s, 그 이상은 오히려 하락.
 EMBED_BATCH = 8
 
@@ -293,7 +372,8 @@ RERANK_POOL = _setting("rerank.pool", 10)
 # 5 → 10 (REPORT §35.9, 사용자 결정 2026-09-14): 506문항 답변 정답 363→379(+16, p=0.056),
 #   TTFT 중앙값 +0.36초(3초 이내 99% 유지). §27 의 "풀 5 최선" 은 204문항·검색 단계 지표였다.
 RERANK_MAX_TOKENS = 512     # 질의+근거를 합친 길이 상한(모델 한계)
-RERANK_THREADS = EMBED_THREADS
+# 리랭커 스레드 — 예전에는 임베딩 상수를 따라갔다. 질문 응답 속도는 따로 잰 값이라 4 로 떼어 둔다(설계서 §3-2)
+RERANK_THREADS = 4
 RERANK_DIR = os.environ.get(
     "SIMPLERAG_RERANK_DIR", os.path.join(MODELS_DIR, "bge-reranker-base-int8"))
 # 리랭커 토크나이저를 임베더가 파싱해 둔 구성요소로 조립한다(파일 파싱 0.88초 → 약 10ms).

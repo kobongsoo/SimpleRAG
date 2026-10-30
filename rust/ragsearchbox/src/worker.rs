@@ -434,6 +434,15 @@ impl Worker {
         self.inner.lock().unwrap().hold = reason;
     }
 
+    //------------------------------------------------------------------
+    // 질문을 처리하지 않고 쉬는 중인가 — 벡터 채우기 같은 뒷일을 보내도 되나
+    //=> 워커가 떠 있고(READY), 답을 만들거나 기다리는 질문이 없을 때만 참.
+    //------------------------------------------------------------------
+    pub fn is_idle(&self) -> bool {
+        let g = self.inner.lock().unwrap();
+        g.child.is_some() && g.state == READY && g.pending.is_none()
+    }
+
     pub fn seconds_since_ask(&self) -> f64 {
         self.inner.lock().unwrap().t_last_ask.elapsed().as_secs_f64()
     }

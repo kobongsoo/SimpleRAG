@@ -10,15 +10,27 @@
 #
 #   변경 감지 키는 (경로, mtime, size) 해시다. 내용 해시를 쓰면 정확하지만
 #   파일을 통째로 읽어야 해서 감지 단계가 인덱싱만큼 느려진다.
+#
+#   인덱싱 속도 개선 (설계서 2026-10-30)
+#    - BM25 는 바뀐 청크만 고친다(덧붙임 · 지움 — §4). 청크별 단어 빈도를 토큰 표에 남긴다
+#    - 수정 문서는 글이 그대로인 청크의 벡터를 다시 쓴다(청크 해시 — §4-5)
+#    - 다음 문서의 파싱·청킹을 준비 스레드가 임베딩과 겹쳐 한다(§3-1)
+#    - 새로 임베딩할 청크가 많으면 벡터를 비워 두고 BM25 로 먼저 검색되게 한다(단계형 — §3-5)
 #------------------------------------------------------------------
 
 import hashlib
 import json
 import os
+import queue
 import sys
+import threading
 import time
 
 from .. import config
+import numpy as np
+
+from . import bm25 as bm25_mod
+from . import store as store_mod
 from ..chunk import split_structured, split_text
 from ..extract import build_extractor, extract_text
 from ..meta import hook as meta_hook      # 문서 메타데이터(meta.sqlite)를 색인과 함께 고친다
@@ -299,6 +311,90 @@ def _extract_blocks(path, name, ext, embedder):
 
 
 #------------------------------------------------------------------
+# 청크 해시 — 청크 글(접두 포함, 임베딩에 넣는 글 그대로)의 sha1 16진수
+#=> 수정 문서에서 글이 그대로인 청크를 찾아 벡터를 다시 쓴다(인덱싱 속도 개선 설계서 §4-5).
+#   운영 18.7만 청크 전체가 0.16초(청크당 약 0.9μs)라 인덱싱 시간에 보태지는 것이 사실상 없다.
+#
+# -in: text = 청크 글
+#
+# -out: 40글자 16진수
+# -out: error = 없음
+#------------------------------------------------------------------
+def chunk_hash(text):
+    return hashlib.sha1(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+# 추출·청킹을 한 번에 하나만 — 준비 스레드와 본 스레드가 같은 추출기를 동시에 쓰지 않게
+_PARSE_LOCK = threading.Lock()
+
+
+#------------------------------------------------------------------
+# 문서 하나 추출·청킹 (sync_doc 2단계의 앞부분 — 준비 스레드도 이것을 부른다)
+#=> blocks 엔진이면 블록 추출 → split_blocks, 아니면 글자 추출 → 구조/고정 청킹.
+#
+# -in: path     = 문서 경로
+# -in: name     = 파일 이름
+# -in: ext      = build_extractor() 결과
+# -in: embedder = OnnxEmbedder (토크나이저)
+#
+# -out: (text, n_rows, chunks, metas) — 전체 글자, 표 행 수, 청크 글 목록, 청크 메타(없으면 None)
+# -out: error = 추출 실패는 예외 전파, 청크가 없으면 ValueError
+#------------------------------------------------------------------
+def parse_doc(path, name, ext, embedder):
+    with _PARSE_LOCK:
+        n_rows, metas = 0, None
+        if config.EXTRACT_ENGINE == "blocks":
+            text, n_rows, metas = _extract_blocks(path, name, ext, embedder)
+            chunks = [m["text"] for m in metas]
+        else:
+            text, n_rows = extract_text(ext, path)
+            if config.CHUNK_MODE == "structured":
+                # 파일명을 문서 제목으로 쓴다 — 청크 접두에 들어가 검색과
+                # 생성 양쪽에 문맥을 준다(설계서 구조인식 §4.5).
+                chunks = split_structured(text, embedder.tokenizer,
+                                          title=os.path.splitext(name)[0])
+            else:
+                chunks = split_text(text, embedder.tokenizer)
+    if not chunks:
+        raise ValueError("추출 텍스트 없음")
+    return text, n_rows, chunks, metas
+
+
+#------------------------------------------------------------------
+# 수정 문서의 벡터 재사용 (인덱싱 속도 개선 설계서 §4-5)
+#=> 다시 자른 청크 가운데 옛 버전과 글이 똑같은 청크는 옛 벡터를 그대로 쓴다.
+#    1) 옛 청크마다 해시(payload chunk_hash, 없으면 본문으로 계산) → 점 id 목록
+#    2) 새 청크 해시가 같으면 그 id 하나를 짝짓는다(같은 글이 여러 번이면 개수만큼만)
+#    3) 짝지은 점의 벡터와 대기 표시를 꺼낸다(대기 중이던 청크는 계속 대기)
+#
+# -in: store   = VectorStore
+# -in: old_ids = 옛 버전 점 id 목록
+# -in: hashes  = 새 청크 해시 목록
+#
+# -out: 새 청크마다 None(새로 임베딩) 또는 (옛 벡터, 대기였나)
+# -out: error = 저장소 읽기 실패는 예외 전파
+#------------------------------------------------------------------
+def _reuse_vectors(store, old_ids, hashes):
+    out = [None] * len(hashes)
+    if not old_ids:
+        return out
+    vecs, payloads = store.points_of(old_ids)
+    if vecs is None:
+        return out                       # 옛 점이 빠져 있다 — 모두 새로 임베딩
+    by_hash = {}
+    for i, p in enumerate(payloads):
+        # chunk_hash 가 없는 옛 인덱스는 남아 있는 본문으로 그 자리에서 계산한다
+        h = p.get("chunk_hash") or chunk_hash(p.get("text", ""))
+        by_hash.setdefault(h, []).append(i)
+    for j, h in enumerate(hashes):
+        rows = by_hash.get(h)
+        if rows:
+            i = rows.pop(0)
+            out[j] = (vecs[i], bool(payloads[i].get("vec_pending")))
+    return out
+
+
+#------------------------------------------------------------------
 # 문서 한 건을 인덱스에 반영 — 추가·수정 공통 (자동 인덱싱 설계서 §5)
 #=> 수정 문서는 "수정 전 청크를 지우고 수정 후 청크를 넣는다". 다만 그 순서대로 하면
 #   사이에 문서가 비고, 넣기가 실패하면 문서가 사라진다. 그래서 순서를 뒤집는다.
@@ -322,20 +418,28 @@ def _extract_blocks(path, name, ext, embedder):
 # -in: store    = VectorStore
 # -in: ext      = build_extractor() 결과
 # -in: log      = 안내 출력 함수 fn(str)
+# -in: defer    = True 면 새로 임베딩할 청크의 벡터를 비워 둔다(단계형 인덱싱 1단계 — 자리 표시 벡터 +
+#                 vec_pending 표시, 나중에 fill_pending 이 채운다). 기본 False
+# -in: prepared = 준비 스레드 결과 {chash, parsed?}(None 이면 그 자리에서 해시 · 추출 · 청킹)
 #
-# -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"), chunks, why, kept_old, n_rows, from}
+# -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"), chunks, why, kept_old, n_rows, from,
+#               reused(옛 벡터를 다시 쓴 청크 수), embedded(새로 임베딩한 수), deferred(벡터 대기로 둔 수)}
 # -out: error = 추출·임베딩 실패는 ok=False 로 돌려준다. 저장소 쓰기 실패는 예외 전파
 #------------------------------------------------------------------
-def sync_doc(path, fp, state, embedder, store, ext, log=None):
+def sync_doc(path, fp, state, embedder, store, ext, log=None, defer=False, prepared=None):
     log = log or (lambda m: None)
     key = os.path.abspath(path)
     name = os.path.basename(path)
     prev = state["docs"].get(key)
     op = "modified" if prev else "added"
+    prepared = prepared or {}
 
     # ── 1) 내용이 같은가 ─────────────────────────────
+    # 준비 스레드가 이미 구했으면 그것을 쓴다(읽기 실패도 그대로 넘어온다)
     try:
-        chash = content_hash(path)
+        chash = prepared["chash"] if "chash" in prepared else content_hash(path)
+        if isinstance(chash, Exception):
+            raise chash
     except OSError as e:
         return {"ok": False, "op": op, "chunks": 0, "kept_old": bool(prev),
                 "why": "읽기 실패 {}: {}".format(type(e).__name__, str(e)[:70])}
@@ -364,24 +468,28 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
     # ── 2) 새 버전 만들기 (인덱스는 아직 그대로) ──────
     # 문서 1건의 실패가 전체 실행을 죽이면 안 된다. 추출뿐 아니라 청킹·임베딩까지
     # 통째로 감싼다(토크나이저가 서로게이트 문자에서 죽어 전체가 멈춘 적이 있다).
-    n_rows = 0
-    metas = None
+    # 옛 버전의 점 id — 글이 같은 청크의 벡터를 다시 쓴다(설계서 §4-5)
+    rng = (prev or {}).get("ids")
+    old_ids = list(range(rng[0], rng[1])) if rng else []
     try:
-        if config.EXTRACT_ENGINE == "blocks":
-            text, n_rows, metas = _extract_blocks(path, name, ext, embedder)
-            chunks = [m["text"] for m in metas]
+        # 준비 스레드가 이미 만들었으면 그것을 쓴다(결과는 그 자리에서 만든 것과 같다)
+        parsed = prepared.get("parsed")
+        if parsed is None:
+            parsed = parse_doc(path, name, ext, embedder)
+        if isinstance(parsed, Exception):
+            raise parsed
+        text, n_rows, chunks, metas = parsed
+        hashes = [chunk_hash(c) for c in chunks]
+        reused = _reuse_vectors(store, old_ids, hashes)      # [None | (옛 벡터, 대기였나)]
+        # 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 자리 표시 벡터로 둔다
+        need = [c for c, r in zip(chunks, reused) if r is None]
+        if defer:
+            fresh = [store_mod.pending_vector(store.dim)] * len(need)
         else:
-            text, n_rows = extract_text(ext, path)
-            if config.CHUNK_MODE == "structured":
-                # 파일명을 문서 제목으로 쓴다 — 청크 접두에 들어가 검색과
-                # 생성 양쪽에 문맥을 준다(설계서 구조인식 §4.5).
-                chunks = split_structured(text, embedder.tokenizer,
-                                          title=os.path.splitext(name)[0])
-            else:
-                chunks = split_text(text, embedder.tokenizer)
-        if not chunks:
-            raise ValueError("추출 텍스트 없음")
-        vecs = embedder.embed_passages(chunks)
+            fresh = list(embedder.embed_passages(need)) if need else []
+        it = iter(fresh)
+        vecs = np.asarray([r[0] if r is not None else next(it) for r in reused], dtype="float32")
+        n_reused = len(chunks) - len(need)
     except Exception as e:
         why = "{}: {}".format(type(e).__name__, str(e)[:80])
         # 같은 지문으로는 다시 시도하지 않게 적어 둔다(자동 인덱싱이 저장할 때마다
@@ -411,8 +519,10 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
     payloads = [{"text": c, "doc_path": key, "doc_name": name, "folder": folder,
                  "chunk_idx": i, "mtime": mtime,
                  # 어느 버전 문서에서 나온 청크인지(진단·고아 청소용)
-                 "gen": fp, "content_hash": chash}
-                for i, c in enumerate(chunks)]
+                 "gen": fp, "content_hash": chash,
+                 # 청크 글의 해시 — 다음에 이 문서가 바뀌면 같은 글인 청크를 찾는 데 쓴다
+                 "chunk_hash": h}
+                for i, (c, h) in enumerate(zip(chunks, hashes))]
     if metas:
         # blocks 엔진 — 절 번호(Parent-Child 실험 A 에서 같은 절 청크를 모을 때 쓴다)·
         # 제목 경로·출처·쪽 범위를 함께 남긴다. 값이 없는 키는 넣지 않는다.
@@ -420,7 +530,13 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
             for k in ("section_id", "path", "source", "page_from", "page_to", "page"):
                 if m.get(k) not in (None, []):
                     p[k] = m[k]
+    # 벡터 대기 표시 — 새로 임베딩할 청크인데 미뤘으면(재사용 청크는 옛 표시를 그대로 이어받는다)
+    for p, r in zip(payloads, reused):
+        if (r is None and defer) or (r is not None and r[1]):
+            p["vec_pending"] = True
     store.upsert(ids, vecs, payloads)
+    # 청크별 단어 빈도도 함께 남긴다 — BM25 를 고칠 때 토큰화하지 않게(설계서 §4-3)
+    bm25_mod.TfStore().put(ids, bm25_mod.term_freqs(chunks, embedder.tokenizer))
 
     # ── 5) 방금 넣은 것 말고 이 문서의 청크를 모두 지운다 ──
     # 새 문서여도 부른다 — 예전에 넣다가 끊겨 남은 찌꺼기가 있을 수 있다.
@@ -434,7 +550,9 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None):
     mark_changed(state)
     save_state(state)
     meta_hook.synced(key, chash)
-    return {"ok": True, "op": op, "chunks": len(chunks), "n_rows": n_rows}
+    n_new = len(chunks) - n_reused
+    return {"ok": True, "op": op, "chunks": len(chunks), "n_rows": n_rows, "reused": n_reused,
+            "embedded": 0 if defer else n_new, "deferred": n_new if defer else 0}
 
 
 #------------------------------------------------------------------
@@ -738,6 +856,12 @@ def copy_doc(src_key, path, fp, state, store):
     for p in payloads:
         p.update(doc_path=key, doc_name=name, folder=folder, mtime=mtime, gen=fp)
     store.upsert(ids, vecs, payloads)
+    # 원본의 토큰 표도 새 id 로 베낀다(원본이 벡터 대기면 사본도 대기 표시 그대로 — 나중에 함께 채워진다)
+    tfs = bm25_mod.TfStore()
+    src_ids = list(range(rng[0], rng[1]))
+    got = tfs.get(src_ids)
+    pairs = [(d, got[s]) for s, d in zip(src_ids, ids) if s in got]
+    tfs.put([d for d, _ in pairs], [t for _, t in pairs])
     # 예전에 넣다 끊긴 찌꺼기가 있을 수 있다 — 방금 넣은 것만 남긴다(sync_doc 과 같다)
     store.delete_doc_except(key, ids)
 
@@ -813,7 +937,8 @@ def move_doc(old_key, path, fp, state, store):
 #                     인덱싱하지 않게 한다(설계서 §8 — 371건에 19분 걸렸다)
 #
 # -out: dict = 처리 요약 {files, changed, added, modified, same, moved, copied, removed,
-#                         delete_blocked, held_new, chunks, failed, sec}
+#                         delete_blocked, held_new, chunks, failed, sec,
+#                         pending(벡터 대기로 남은 청크 수), reused, embedded}
 # -out: error = 폴더 없음·청킹 설정 불일치는 RuntimeError
 #------------------------------------------------------------------
 def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
@@ -831,6 +956,9 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     # 청킹 설정이 이 인덱스를 만들 때와 다르면 증분으로 섞지 않는다(§35) — 저장소를 건드리기 전에
     check_chunk_params(state, rebuild, log)
     store.ensure_collection(recreate=rebuild)
+    if rebuild:
+        # id 를 0 부터 다시 쓰므로 옛 토큰 표도 비운다
+        bm25_mod.TfStore().clear()
 
     plan = plan_changes(doc_dir, state, recursive=recursive, allow_delete=allow_delete,
                         rebuild=rebuild)
@@ -865,6 +993,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     prog = Progress(max(1, len(todo)))
     counts = {"added": 0, "modified": 0, "same": 0, "moved": 0, "copied": 0}
     total_chunks = 0
+    n_reused = n_embedded = 0
     failed = []
 
     # ── 삭제 ─────────────────────────────────────────
@@ -875,40 +1004,59 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
         log("  [삭제] {:<48} {:>4}청크".format(os.path.basename(key)[:46], n))
 
     # ── 추가·수정 ────────────────────────────────────
-    for n, (path, fp) in enumerate(todo, 1):
-        name = os.path.basename(path)
-        r = sync_doc(path, fp, state, embedder, store, ext, log)
-        if not r["ok"]:
-            failed.append((name, r["why"] + (" (옛 버전 유지)" if r.get("kept_old") else "")))
-            continue
-        counts[r["op"]] += 1
-        if r["op"] == "same":
-            log("  [{}/{}] {:<48} 내용 같음 — 다시 임베딩하지 않음".format(n, len(todo), name[:46]))
-            continue
-        if r["op"] == "moved":
-            log("  [{}/{}] [이동] {:<44} 경로만 바꿈 — 다시 임베딩하지 않음".format(
-                n, len(todo), name[:42]))
-            continue
-        total_chunks += r["chunks"]
-        rate, eta = prog.update(n)
-        label = {"added": "추가", "copied": "복사"}.get(r["op"], "수정")
-        table_note = "  표{}행".format(r["n_rows"]) if r.get("n_rows") else ""
-        log("  [{}/{}] [{}] {:<44} {:>4}청크  ({:.1f} 문서/s, 남은시간 {:.0f}s)".format(
-            n, len(todo), label, name[:42], r["chunks"], rate, eta) + table_note)
+    # 단계형 인덱싱 문턱(§3-5-6) — 이번 실행에서 새로 임베딩할 청크가 이만큼 쌓인 뒤로는 벡터를 비워 두고
+    #   BM25 로 먼저 검색되게 한다. 문서 몇 건(자동 인덱싱)은 문턱에 닿지 않아 지금처럼 바로 임베딩한다.
+    defer_over = config.DEFER_VECTORS_OVER if config.DEFER_VECTORS_OVER > 0 else None
+    fresh_chunks = 0
+    # 준비 스레드(§3-1) — 문서가 두 건 이상일 때만
+    prep = _Prefetcher(todo, ext, embedder, state) if config.EMBED_PREFETCH and len(todo) >= 2 else None
+    try:
+        for n, (path, fp) in enumerate(todo, 1):
+            name = os.path.basename(path)
+            prepared = prep.next() if prep else None
+            defer = defer_over is not None and fresh_chunks >= defer_over
+            r = sync_doc(path, fp, state, embedder, store, ext, log, defer=defer, prepared=prepared)
+            if not r["ok"]:
+                failed.append((name, r["why"] + (" (옛 버전 유지)" if r.get("kept_old") else "")))
+                continue
+            counts[r["op"]] += 1
+            if r["op"] == "same":
+                log("  [{}/{}] {:<48} 내용 같음 — 다시 임베딩하지 않음".format(n, len(todo), name[:46]))
+                continue
+            if r["op"] == "moved":
+                log("  [{}/{}] [이동] {:<44} 경로만 바꿈 — 다시 임베딩하지 않음".format(
+                    n, len(todo), name[:42]))
+                continue
+            total_chunks += r["chunks"]
+            n_reused += r.get("reused", 0)
+            n_embedded += r.get("embedded", 0)
+            fresh_chunks += r.get("embedded", 0) + r.get("deferred", 0)
+            rate, eta = prog.update(n)
+            label = {"added": "추가", "copied": "복사"}.get(r["op"], "수정")
+            note = "  표{}행".format(r["n_rows"]) if r.get("n_rows") else ""
+            if r.get("reused"):
+                note += "  벡터 재사용 {}/{}".format(r["reused"], r["chunks"])
+            if r.get("deferred"):
+                note += "  벡터 대기"
+            log("  [{}/{}] [{}] {:<44} {:>4}청크  ({:.1f} 문서/s, 남은시간 {:.0f}s)".format(
+                n, len(todo), label, name[:42], r["chunks"], rate, eta) + note)
+    finally:
+        if prep:
+            prep.stop()
 
     # ── BM25 ─────────────────────────────────────────
-    # 전체 코퍼스가 있어야 만들 수 있어 마지막에 한 번 구축한다. 지난번에 벡터만 바꾸고
-    # BM25 를 못 만든 채 끝났으면(bm25_stale) 이번에 바뀐 게 없어도 만든다.
+    # 바뀐 청크만 고친다(덧붙임 · 지움 — §4). 지난번에 벡터만 바꾸고 BM25 를 못 만든 채 끝났으면
+    # (bm25_stale), 또는 옛 형식(v2) · 깨진 캐시면 이번에 바뀐 게 없어도 반영한다.
+    bm25_missing = bool(state["docs"]) and bm25.ensure_loaded() < 0
     if (counts["added"] or counts["modified"] or counts["copied"] or n_removed or rebuild
-            or bm25_stale(state)):
-        log("BM25 인덱스 구축 중...")
-        all_chunks, all_ids, n_orphans = collect_for_bm25(store, state, log)
-        if n_orphans:
-            log("  고아 청크 {}개를 지웠습니다(중간에 끊겼던 작업의 찌꺼기)".format(n_orphans))
-        build_s = bm25.build(all_chunks, all_ids, embedder.tokenizer) if all_chunks else 0.0
+            or bm25_stale(state) or bm25_missing):
+        log("BM25 인덱스 반영 중...")
+        rep = refresh_bm25(store, bm25, state, embedder.tokenizer, full=rebuild, log=log)
+        if rep["orphans"]:
+            log("  고아 청크 {}개를 지웠습니다(중간에 끊겼던 작업의 찌꺼기)".format(rep["orphans"]))
         state["bm25_built_at"] = time.time()
         save_state(state)
-        log("BM25 인덱스 {:,}건 구축 {:.1f}s".format(len(all_chunks), build_s))
+        log(bm25_line(rep))
 
     # ── 메타데이터 마무리 — 빠진 문서 채우기 · 정리 · 템플릿 상속 판정(전체를 봐야 한다) ──
     # 본문 첫머리(본문 첫 제목 · 양식 빈칸 판정)는 인덱스의 첫 청크에서 읽는다
@@ -917,12 +1065,244 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     for name, why in failed:
         log("  ❌ {} — {}".format(name, why))
 
+    pending = store.pending_count()
+    if pending:
+        log("검색 가능 — 벡터 채우는 중 0 / {:,} (그동안은 BM25 · 동의어로 찾습니다)".format(pending))
+
     return {"files": len(files), "changed": len(todo) + n_removed,
             "added": counts["added"], "modified": counts["modified"], "same": counts["same"],
             "moved": counts["moved"], "copied": counts["copied"],
             "removed": n_removed, "delete_blocked": delete_blocked, "held_new": held_new,
             "chunks": total_chunks, "failed": failed,
+            "pending": pending, "reused": n_reused, "embedded": n_embedded,
             "sec": round(time.perf_counter() - t_start, 1)}
+
+
+#------------------------------------------------------------------
+# 준비 스레드 (인덱싱 속도 개선 설계서 §3-1)
+#=> 다음 문서의 내용 해시 · 추출 · 청킹을 임베딩과 겹쳐 미리 해 둔다. 한 건만 앞서 간다(메모리 상한).
+#    1) 내용 해시를 구한다
+#    2) 상태 파일에 같은 경로 · 같은 내용이 있으면(내용 같음), 처음 보는 경로인데 같은 내용이
+#       다른 자리에 있으면(이동 · 복사 후보) 파싱하지 않는다 — 본 스레드가 판단한다
+#    3) 그 밖에는 추출 · 청킹까지 한다(실패도 결과로 넘긴다 — 본 스레드가 실패로 기록)
+#   파서 · onnxruntime 이 계산 중에 GIL 을 놓으므로 스레드로 겹친다.
+#
+# -필드: _q     = 만든 결과를 본 스레드로 넘기는 통로
+# -필드: _slots = 앞서 갈 수 있는 건수(1) — 본 스레드가 하나 가져가면 하나 더 만든다
+#------------------------------------------------------------------
+class _Prefetcher:
+    #------------------------------------------------------------------
+    # 생성 — 곧바로 준비 스레드를 띄운다
+    #
+    # -in: todo     = [(경로, 지문)] 처리 순서
+    # -in: ext      = build_extractor() 결과
+    # -in: embedder = OnnxEmbedder (토크나이저)
+    # -in: state    = 상태 dict (지금의 내용 해시를 읽어 둔다)
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def __init__(self, todo, ext, embedder, state):
+        self._known = {k: m.get("content_hash") for k, m in state["docs"].items()}
+        self._hashes = set(h for h in self._known.values() if h)
+        self._q = queue.Queue()
+        self._slots = threading.Semaphore(1)
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, args=(list(todo), ext, embedder),
+                                   name="index-prefetch", daemon=True)
+        self._t.start()
+
+    #------------------------------------------------------------------
+    # 준비 스레드 본체 — 문서마다 자리를 하나 얻고 만든 뒤 통로에 넣는다
+    #
+    # -in: todo · ext · embedder = 생성자와 같음
+    #
+    # -out: 없음
+    # -out: error = 없음 (문서 실패는 결과 안의 예외로 넘긴다)
+    #------------------------------------------------------------------
+    def _run(self, todo, ext, embedder):
+        for path, _ in todo:
+            self._slots.acquire()
+            if self._stop.is_set():
+                return
+            key = os.path.abspath(path)
+            out = {}
+            try:
+                out["chash"] = content_hash(path)
+            except OSError as e:
+                out["chash"] = e
+            h = out["chash"]
+            if not isinstance(h, Exception):
+                same = self._known.get(key) == h
+                move_or_copy = key not in self._known and h in self._hashes
+                if not (same or move_or_copy):
+                    try:
+                        out["parsed"] = parse_doc(path, os.path.basename(path), ext, embedder)
+                    except Exception as e:      # 문서 1건 실패 — 본 스레드가 실패로 기록한다
+                        out["parsed"] = e
+            self._q.put(out)
+
+    #------------------------------------------------------------------
+    # 다음 문서의 준비 결과 받기(처리 순서대로) — 받으면 한 건 더 만들게 자리를 내준다
+    #
+    # -out: dict {chash, parsed?}
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def next(self):
+        out = self._q.get()
+        self._slots.release()
+        return out
+
+    #------------------------------------------------------------------
+    # 멈추기 — 본 스레드가 끝났거나 오류로 빠져나올 때
+    #=> 멈춤 표시를 하고 자리를 하나 내줘, 자리를 기다리던 준비 스레드가 깨어나 끝나게 한다.
+    #
+    # -in: 없음
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def stop(self):
+        self._stop.set()
+        self._slots.release()
+
+
+#------------------------------------------------------------------
+# BM25 반영 결과 한 줄 (진행 출력)
+#
+# -in: rep = refresh_bm25 결과
+#
+# -out: 안내 글
+# -out: error = 없음
+#------------------------------------------------------------------
+def bm25_line(rep):
+    if rep["mode"] == "update":
+        return "BM25 인덱스 {:,}건 — 바뀐 청크만 반영(추가 {} · 삭제 {}) {:.2f}s".format(
+            rep["chunks"], rep["added"], rep["removed"], rep["sec"])
+    if rep["mode"] == "same":
+        return "BM25 인덱스 {:,}건 — 바뀐 청크 없음".format(rep["chunks"])
+    return "BM25 인덱스 {:,}건 구축 {:.1f}s{}".format(
+        rep["chunks"], rep["sec"], " (토큰화 {:,}건)".format(rep["tokenized"]) if rep["tokenized"] else "")
+
+
+#------------------------------------------------------------------
+# 점들의 단어 빈도 모으기 — 토큰 표에서 읽고, 없는 것만 토큰화해 채운다(설계서 §4-3)
+#=> 옛 인덱스(표가 없음)는 처음 한 번 빠진 청크만 토큰화한다(encode_batch 병렬 — 단계 A).
+#
+# -in: tfs   = TfStore
+# -in: ids   = 점 id 목록
+# -in: texts = {id: 본문} (토큰화할 때 쓴다)
+# -in: tok   = e5 토크나이저
+# -in: all_rows = True 면 표 전체를 한 번에 읽는다(전체 구축)
+#
+# -out: (ids 순서의 단어 빈도 목록, 새로 토큰화한 수)
+# -out: error = sqlite 예외 전파
+#------------------------------------------------------------------
+def _tfs_for(tfs, ids, texts, tok, all_rows=False):
+    have = tfs.get(None if all_rows else ids)
+    missing = [i for i in ids if i not in have]
+    if missing:
+        made = bm25_mod.term_freqs([texts.get(i, "") for i in missing], tok)
+        tfs.put(missing, made)
+        have.update(zip(missing, made))
+    return [have[i] for i in ids], len(missing)
+
+
+#------------------------------------------------------------------
+# BM25 반영 (핵심 — 설계서 §4 단계 A~C)
+#=> 저장소와 색인을 맞대어 바뀐 청크만 고친다. 많이 바뀌었거나 색인이 없으면 전체를 다시 만든다.
+#    1) 저장소를 훑어 고아 점을 청소하고 살아 있는 점의 id · 본문을 모은다
+#    2) 색인이 있고 full 이 아니면: 넣을 id · 뺄 id 를 구해, 합칠 때가 아니면 덧붙임 · 지움만 고친다
+#    3) 아니면 모든 점의 단어 빈도(토큰 표)로 본 세그먼트를 새로 만든다 — 토큰화 없이
+#
+# -in: store = VectorStore
+# -in: bm25  = Bm25Index
+# -in: state = 상태 dict(None 이면 고아 청소 안 함)
+# -in: tok   = e5 토크나이저
+# -in: full  = True 면 전체 다시 만들기(--rebuild)
+# -in: log   = 안내 출력 함수
+#
+# -out: dict {mode("full"|"update"|"same"), chunks, sec, orphans, added, removed, tokenized}
+# -out: error = 저장소 · 파일 예외 전파
+#------------------------------------------------------------------
+def refresh_bm25(store, bm25, state, tok, full=False, log=None):
+    t0 = time.perf_counter()
+    texts, ids, n_orphans = collect_for_bm25(store, state, log)
+    by_id = dict(zip(ids, texts))
+    tfs = bm25_mod.TfStore()
+    rep = {"mode": "full", "chunks": len(ids), "orphans": n_orphans, "added": 0, "removed": 0, "tokenized": 0}
+    if not full and ids:
+        plan = bm25.plan_update(ids)
+        if plan is not None:
+            add, rem = plan
+            if not add and not rem:
+                rep.update(mode="same", sec=time.perf_counter() - t0)
+                return rep
+            if not bm25.should_merge(len(add), len(rem)):
+                made, n_tok = _tfs_for(tfs, add, by_id, tok)
+                bm25.update(list(zip(add, made)), rem)
+                rep.update(mode="update", added=len(add), removed=len(rem), tokenized=n_tok,
+                           sec=time.perf_counter() - t0)
+                return rep
+    # 전체 — 처음 · --rebuild · 합치기 · 옛 형식
+    made, n_tok = _tfs_for(tfs, ids, by_id, tok, all_rows=True)
+    bm25.build_tf(ids, made)
+    # 지운 청크의 토큰 표 찌꺼기 정리(옛 인덱스 · 끊긴 작업)
+    tfs.prune(ids)
+    rep.update(tokenized=n_tok, sec=time.perf_counter() - t0)
+    return rep
+
+
+#------------------------------------------------------------------
+# 벡터 대기 청크 채우기 (단계형 인덱싱 2단계 — 설계서 §3-5-5)
+#=> 먼저 넣은 문서부터(id 순) 64개씩 임베딩해 벡터를 채운다. 끊겨도 대기 청크는 저장소에 남으므로
+#   다음 index 나 워커가 이어 채운다.
+#   배치(8개)는 문서 경계를 넘지 않고 문서의 첫 대기 청크부터 8개씩 묶는다 — 바로 임베딩할 때와
+#   묶음이 같아 벡터가 같다(int8 모델은 함께 묶인 글에 따라 벡터가 미세하게 달라진다).
+#    1) 대기 청크를 64개 꺼내 문서별로 나눈다
+#    2) 꺼낸 묶음이 꽉 찼으면 마지막 문서는 다음 차례로 이어지므로 8의 배수까지만 채운다
+#
+# -in: embedder    = OnnxEmbedder
+# -in: store       = VectorStore
+# -in: max_n       = 최대 채울 수(None 이면 다 채울 때까지)
+# -in: on_progress = 64개마다 fn(이번에 채운 수, 남은 수)
+# -in: on_filled   = 채울 때마다 fn(ids, vecs) — 벡터 한 벌(VectorMatrix) 고치기용
+#
+# -out: (채운 수, 남은 수)
+# -out: error = 임베딩 · 저장 예외 전파
+#------------------------------------------------------------------
+def fill_pending(embedder, store, max_n=None, on_progress=None, on_filled=None):
+    step, done = 64, 0
+    while True:
+        want = step if max_n is None else min(step, max_n - done)
+        if want <= 0:
+            break
+        batch = store.pending_batch(want)
+        if not batch:
+            break
+        # 문서별로 나눈다(id 순이라 같은 문서는 붙어 있다)
+        groups = []
+        for i, t, d in batch:
+            if not groups or groups[-1][0] != d:
+                groups.append((d, []))
+            groups[-1][1].append((i, t))
+        # 마지막 문서는 다음 차례로 이어질 수 있다 — 8 의 배수까지만(남은 것은 다음에 그 자리부터 8개씩)
+        if len(batch) == want and len(groups) > 1:
+            last = groups[-1][1]
+            del last[len(last) // config.EMBED_BATCH * config.EMBED_BATCH:]
+        for _, g in groups:
+            if not g:
+                continue
+            ids = [i for i, _ in g]
+            vecs = embedder.embed_passages([t for _, t in g])
+            store.set_vectors(ids, vecs)
+            if on_filled:
+                on_filled(ids, vecs)
+            done += len(ids)
+        if on_progress:
+            on_progress(done, store.pending_count())
+    return done, store.pending_count()
+
 
 
 #------------------------------------------------------------------

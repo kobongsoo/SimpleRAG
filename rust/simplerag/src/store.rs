@@ -5,6 +5,8 @@
 //    · 디스크: <데이터 루트>/rag_index/points.sqlite — points(id, vec f32 BLOB, payload JSON)
 //    · 메모리: 시작할 때 전부 읽어 정규화한 벡터로 들고 있다 → 코사인 = 내적
 //    · 잠금:   rag_index/.lock 을 독점으로 연다 — Qdrant local 처럼 한 프로세스만 연다
+//    · 토큰 표: bm25_tf(id, terms) — 청크별 단어 빈도(BM25 를 토큰화 없이 만들려고, 설계서 §4-3)
+//    · 벡터 대기: vec 이 길이 0 인 점 — 단계형 인덱싱에서 BM25 로만 찾히고 벡터는 나중에 채운다(§3-5)
 //   폴더 한정 검색용 '벡터 한 벌'(VectorMatrix)도 이 메모리 벡터로 바로 한다.
 //------------------------------------------------------------------
 
@@ -109,7 +111,8 @@ impl VectorStore {
         })?;
         let conn = Connection::open(pyutil::join(&self.path, "points.sqlite")).map_err(|e| e.to_string())?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
-            CREATE TABLE IF NOT EXISTS points (id INTEGER PRIMARY KEY, vec BLOB NOT NULL, payload TEXT NOT NULL);")
+            CREATE TABLE IF NOT EXISTS points (id INTEGER PRIMARY KEY, vec BLOB NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS bm25_tf (id INTEGER PRIMARY KEY, terms BLOB NOT NULL);")
             .map_err(|e| e.to_string())?;
         let mut points = BTreeMap::new();
         {
@@ -140,6 +143,8 @@ impl VectorStore {
     pub fn recreate(&self) -> Result<(), String> {
         self.with(|inn| {
             inn.conn.execute("DELETE FROM points", []).map_err(|e| e.to_string())?;
+            // id 를 0 부터 다시 쓰므로 옛 토큰 표도 비운다
+            inn.conn.execute("DELETE FROM bm25_tf", []).map_err(|e| e.to_string())?;
             inn.points.clear();
             let left: i64 = inn.conn.query_row("SELECT COUNT(*) FROM points", [], |r| r.get(0)).map_err(|e| e.to_string())?;
             if left != 0 {
@@ -179,8 +184,11 @@ impl VectorStore {
         let tx = inn.conn.transaction().map_err(|e| e.to_string())?;
         {
             let mut st = tx.prepare("DELETE FROM points WHERE id = ?1").map_err(|e| e.to_string())?;
+            // 청크를 지우면 그 청크의 토큰 표도 같이 지운다
+            let mut st2 = tx.prepare("DELETE FROM bm25_tf WHERE id = ?1").map_err(|e| e.to_string())?;
             for id in ids {
                 st.execute(params![id]).map_err(|e| e.to_string())?;
+                st2.execute(params![id]).map_err(|e| e.to_string())?;
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
@@ -269,8 +277,9 @@ impl VectorStore {
         let mut q = qv.to_vec();
         normalize(&mut q);
         self.with(|inn| {
+            // 벡터 대기 점(길이 0)은 건너뛴다 — 0점으로 줄 세우지 않는다(BM25 로만 찾힌다)
             let mut scored: Vec<(f32, i64)> = inn.points.iter()
-                .filter(|(i, _)| allow.map(|a| a.contains(i)).unwrap_or(true))
+                .filter(|(i, p)| !p.vec.is_empty() && allow.map(|a| a.contains(i)).unwrap_or(true))
                 .map(|(i, p)| (p.vec.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), *i)).collect();
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
             scored.truncate(limit);
@@ -348,6 +357,147 @@ impl VectorStore {
     //------------------------------------------------------------------
     pub fn scroll_all(&self) -> Result<Vec<(i64, String, String)>, String> {
         self.with(|inn| Ok(inn.points.iter().map(|(i, p)| (*i, pl_str(&p.payload, "text").to_string(), pl_str(&p.payload, "doc_path").to_string())).collect()))
+    }
+
+    //------------------------------------------------------------------
+    // 모든 점의 (id, doc_path) — id 순 (고아 청소 — 본문은 읽지 않는다)
+    //------------------------------------------------------------------
+    pub fn doc_paths(&self) -> Result<Vec<(i64, String)>, String> {
+        self.with(|inn| Ok(inn.points.iter().map(|(i, p)| (*i, pl_str(&p.payload, "doc_path").to_string())).collect()))
+    }
+
+    //------------------------------------------------------------------
+    // 모든 점 id (id 순) — BM25 를 고칠 때 색인과 맞대어 본다
+    //------------------------------------------------------------------
+    pub fn ids(&self) -> Result<Vec<i64>, String> {
+        self.with(|inn| Ok(inn.points.keys().copied().collect()))
+    }
+
+    //------------------------------------------------------------------
+    // 점들의 본문 (없는 id 는 빈 글)
+    //------------------------------------------------------------------
+    pub fn texts_of(&self, ids: &[i64]) -> Result<Vec<String>, String> {
+        self.with(|inn| Ok(ids.iter().map(|i| inn.points.get(i).map(|p| pl_str(&p.payload, "text").to_string()).unwrap_or_default()).collect()))
+    }
+
+    //------------------------------------------------------------------
+    // 청크별 단어 빈도 넣기 (설계서 §4-3 단계 B)
+    //=> 청크를 넣을 때 그 청크의 토큰화 결과를 함께 남겨, BM25 를 다시 만들 때 토큰화를 건너뛴다.
+    //
+    // -in: ids = 점 id / blobs = 같은 순서의 bm25::tf_to_blob 결과
+    //
+    // -out: 없음
+    // -out: error = sqlite 쓰기 실패면 Err
+    //------------------------------------------------------------------
+    pub fn put_tf(&self, ids: &[i64], blobs: &[Vec<u8>]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.with(|inn| {
+            let tx = inn.conn.transaction().map_err(|e| e.to_string())?;
+            {
+                let mut st = tx.prepare("INSERT OR REPLACE INTO bm25_tf (id, terms) VALUES (?1, ?2)").map_err(|e| e.to_string())?;
+                for (id, b) in ids.iter().zip(blobs) {
+                    st.execute(params![id, b]).map_err(|e| e.to_string())?;
+                }
+            }
+            tx.commit().map_err(|e| e.to_string())
+        })
+    }
+
+    //------------------------------------------------------------------
+    // 청크별 단어 빈도 읽기 — {id: 바이트}, 표에 없는 id 는 빠진다
+    //
+    // -in: ids = Some(점 id 목록) 이면 그것만, None 이면 표 전체
+    //
+    // -out: {id: tf 바이트}
+    // -out: error = sqlite 읽기 실패면 Err
+    //------------------------------------------------------------------
+    pub fn tf_of(&self, ids: Option<&[i64]>) -> Result<HashMap<i64, Vec<u8>>, String> {
+        self.with(|inn| {
+            let mut out = HashMap::new();
+            match ids {
+                None => {
+                    let mut st = inn.conn.prepare("SELECT id, terms FROM bm25_tf").map_err(|e| e.to_string())?;
+                    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))).map_err(|e| e.to_string())?;
+                    for row in rows.flatten() {
+                        out.insert(row.0, row.1);
+                    }
+                }
+                Some(ids) => {
+                    let mut st = inn.conn.prepare("SELECT terms FROM bm25_tf WHERE id = ?1").map_err(|e| e.to_string())?;
+                    for id in ids {
+                        if let Ok(b) = st.query_row(params![id], |r| r.get::<_, Vec<u8>>(0)) {
+                            out.insert(*id, b);
+                        }
+                    }
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    //------------------------------------------------------------------
+    // 토큰 표 정리 — 저장소에 없는 점의 줄을 지운다(고아 청소 뒤 · 옛 찌꺼기)
+    //
+    // -out: 지운 줄 수
+    // -out: error = sqlite 쓰기 실패면 Err
+    //------------------------------------------------------------------
+    pub fn prune_tf(&self) -> Result<usize, String> {
+        self.with(|inn| {
+            inn.conn.execute("DELETE FROM bm25_tf WHERE id NOT IN (SELECT id FROM points)", []).map_err(|e| e.to_string())
+        })
+    }
+
+    //------------------------------------------------------------------
+    // 벡터 대기 청크 수 (단계형 인덱싱 §3-5)
+    //------------------------------------------------------------------
+    pub fn pending_count(&self) -> Result<usize, String> {
+        self.with(|inn| Ok(inn.points.values().filter(|p| p.vec.is_empty()).count()))
+    }
+
+    //------------------------------------------------------------------
+    // 벡터 대기 청크 앞에서부터 — [(id, 본문, doc_path)] id 순 (먼저 넣은 문서부터 채운다)
+    //
+    // -in: limit = 최대 개수
+    //------------------------------------------------------------------
+    pub fn pending_batch(&self, limit: usize) -> Result<Vec<(i64, String, String)>, String> {
+        self.with(|inn| Ok(inn.points.iter().filter(|(_, p)| p.vec.is_empty()).take(limit)
+            .map(|(i, p)| (*i, pl_str(&p.payload, "text").to_string(), pl_str(&p.payload, "doc_path").to_string())).collect()))
+    }
+
+    //------------------------------------------------------------------
+    // 점들의 벡터만 바꾸기 (대기 청크 채우기) — payload 는 그대로
+    //=> 채우는 사이에 문서가 지워졌으면(점이 없으면) 그 점은 건너뛴다.
+    //
+    // -in: ids = 점 id / vectors = 같은 순서의 벡터
+    //
+    // -out: 실제로 바꾼 점 수
+    // -out: error = sqlite 쓰기 실패면 Err
+    //------------------------------------------------------------------
+    pub fn set_vectors(&self, ids: &[i64], vectors: &[Vec<f32>]) -> Result<usize, String> {
+        self.with(|inn| {
+            let tx = inn.conn.transaction().map_err(|e| e.to_string())?;
+            let mut n = 0;
+            {
+                let mut st = tx.prepare("UPDATE points SET vec = ?2 WHERE id = ?1").map_err(|e| e.to_string())?;
+                for (id, v) in ids.iter().zip(vectors) {
+                    if inn.points.contains_key(id) {
+                        st.execute(params![id, to_blob(v)]).map_err(|e| e.to_string())?;
+                        n += 1;
+                    }
+                }
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            for (id, v) in ids.iter().zip(vectors) {
+                if let Some(p) = inn.points.get_mut(id) {
+                    let mut vv = v.clone();
+                    normalize(&mut vv);
+                    p.vec = vv;
+                }
+            }
+            Ok(n)
+        })
     }
 
     //------------------------------------------------------------------

@@ -6,6 +6,10 @@
 #   (프로세스 생명주기/포트/방화벽)가 이득보다 크다.
 #
 #   전환 기준: 청크 15만 초과 또는 검색 300ms 초과 → 서버 모드(API 동일).
+#
+#   벡터 대기 점(단계형 인덱싱 — 인덱싱 속도 개선 설계서 §3-5-3)
+#     Qdrant 점에는 벡터가 반드시 있어야 하므로, 벡터를 나중에 채울 청크는 자리 표시 단위 벡터와
+#     payload vec_pending: true 로 넣는다. 벡터 검색은 이 점을 거르고(must_not), 채우면 표시를 지운다.
 #------------------------------------------------------------------
 
 import os
@@ -15,6 +19,35 @@ import time
 from .. import config
 
 COLLECTION = "rag"
+
+
+#------------------------------------------------------------------
+# 벡터 대기 표시 조건 (payload vec_pending == true)
+#
+# -in: 없음
+#
+# -out: qdrant FieldCondition
+# -out: error = 없음
+#------------------------------------------------------------------
+def _pending_cond():
+    from qdrant_client.models import FieldCondition, MatchValue
+    return FieldCondition(key="vec_pending", match=MatchValue(value=True))
+
+
+#------------------------------------------------------------------
+# 자리 표시 벡터 (벡터 대기 점용)
+#=> Qdrant 점에는 벡터가 꼭 있어야 한다. 첫 칸만 1 인 단위 벡터를 넣고 검색에서는 거른다.
+#
+# -in: dim = 벡터 차원
+#
+# -out: float32 배열 (dim,)
+# -out: error = 없음
+#------------------------------------------------------------------
+def pending_vector(dim):
+    import numpy as np
+    v = np.zeros(dim, dtype="float32")
+    v[0] = 1.0
+    return v
 
 
 class VectorStore:
@@ -29,6 +62,9 @@ class VectorStore:
         self.dim = dim or config.EMBED.dim
         self._client = None
         self._load_lock = threading.Lock()
+        # 벡터 대기 점 수 — None 이면 모름(다음 검색 때 센다). 0 이면 검색에 필터를 걸지 않는다
+        #   (local 모드 필터는 점마다 파이썬으로 검사해 느리다 — 대기 점이 있을 때만 건다)
+        self._pending = None
 
     def is_ready(self):
         return self._client is not None
@@ -97,6 +133,7 @@ class VectorStore:
                 collection_name=COLLECTION,
                 vectors_config=VectorParams(size=self.dim, distance=Distance.COSINE))
         if recreate:
+            self._pending = 0
             left = self._client.count(COLLECTION).count
             if left:
                 raise RuntimeError("컬렉션을 비우지 못했습니다(점 {:,}개 남음): {}".format(
@@ -149,6 +186,10 @@ class VectorStore:
                 for j in range(i, min(i + batch, len(ids)))
             ]
             self._client.upsert(collection_name=COLLECTION, points=pts)
+        # 벡터 대기 점을 넣었으면 센 값을 늘린다(모르는 상태면 다음에 센다)
+        n_pending = sum(1 for p in payloads if p.get("vec_pending"))
+        if n_pending and self._pending is not None:
+            self._pending += n_pending
 
     #------------------------------------------------------------------
     # 문서 단위 삭제 (증분 갱신용)
@@ -165,6 +206,9 @@ class VectorStore:
             points_selector=Filter(must=[
                 FieldCondition(key="doc_path", match=MatchValue(value=doc_path))
             ]))
+        # 대기 점이 지워졌을 수 있다 — 다음에 다시 센다
+        if self._pending:
+            self._pending = None
 
     #------------------------------------------------------------------
     # 문서의 청크 가운데 "방금 넣은 것" 만 남기고 지우기 (자동 인덱싱 §5)
@@ -190,6 +234,8 @@ class VectorStore:
             points_selector=Filter(
                 must=[FieldCondition(key="doc_path", match=MatchValue(value=doc_path))],
                 must_not=must_not))
+        if self._pending:
+            self._pending = None
 
     #------------------------------------------------------------------
     # 점 id 들의 payload 일부 바꾸기 (문서 이동 — 경로만 바뀌고 내용은 같을 때)
@@ -269,6 +315,8 @@ class VectorStore:
             self._client.delete(
                 collection_name=COLLECTION,
                 points_selector=PointIdsList(points=[int(x) for x in ids[i:i + 1000]]))
+        if self._pending:
+            self._pending = None
 
     #------------------------------------------------------------------
     # 벡터 검색
@@ -291,6 +339,10 @@ class VectorStore:
             if not doc_paths:
                 return []
             flt = Filter(must=[FieldCondition(key="doc_path", match=MatchAny(any=list(doc_paths)))])
+        # 벡터 대기 점은 거른다 — 자리 표시 벡터로 줄 세우지 않는다(BM25 로만 찾힌다)
+        if self.pending_count():
+            flt = flt or Filter()
+            flt.must_not = (flt.must_not or []) + [_pending_cond()]
         res = self._client.query_points(
             collection_name=COLLECTION, query=vector.tolist(),
             limit=limit, with_payload=True, query_filter=flt)
@@ -346,6 +398,67 @@ class VectorStore:
             if offset is None:
                 break
         return sorted(out, key=lambda pl: pl.get("chunk_idx", 0))
+
+    #------------------------------------------------------------------
+    # 벡터 대기 점 수 (단계형 인덱싱)
+    #=> 한 번 세면 기억해 두고, 넣기 · 채우기 · 지우기 때 고친다(지우면 다시 센다).
+    #
+    # -in: 없음
+    #
+    # -out: 대기 점 수
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def pending_count(self):
+        if self._pending is None:
+            from qdrant_client.models import Filter
+
+            self.ensure_collection()
+            self._pending = self._client.count(COLLECTION, count_filter=Filter(must=[_pending_cond()])).count
+        return self._pending
+
+    #------------------------------------------------------------------
+    # 벡터 대기 점 앞에서부터 — [(id, 본문, doc_path)] id 순 (먼저 넣은 문서부터 채운다)
+    #
+    # -in: limit = 최대 개수
+    #
+    # -out: [(점 id, 본문, doc_path)]
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def pending_batch(self, limit):
+        from qdrant_client.models import Filter
+
+        if not self.pending_count():
+            return []
+        pts, _ = self._client.scroll(collection_name=COLLECTION, scroll_filter=Filter(must=[_pending_cond()]),
+                                     limit=int(limit), with_payload=["text", "doc_path"], with_vectors=False)
+        return sorted(((int(p.id), (p.payload or {}).get("text", ""), (p.payload or {}).get("doc_path", ""))
+                       for p in pts), key=lambda x: x[0])
+
+    #------------------------------------------------------------------
+    # 점들의 벡터만 바꾸고 대기 표시 지우기 (대기 청크 채우기)
+    #=> 채우는 사이에 문서가 지워졌으면(점이 없으면) 그 점은 건너뛴다.
+    #
+    # -in: ids     = 점 id 목록
+    # -in: vectors = (N, dim) 배열
+    #
+    # -out: 실제로 바꾼 점 수
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def set_vectors(self, ids, vectors):
+        from qdrant_client.models import PointVectors
+
+        self.ensure_collection()
+        have = {int(p.id) for p in self._client.retrieve(collection_name=COLLECTION, ids=[int(i) for i in ids],
+                                                         with_payload=False, with_vectors=False)}
+        rows = [(int(i), v) for i, v in zip(ids, vectors) if int(i) in have]
+        if not rows:
+            return 0
+        self._client.update_vectors(collection_name=COLLECTION,
+                                    points=[PointVectors(id=i, vector=v.tolist()) for i, v in rows])
+        self._client.delete_payload(collection_name=COLLECTION, keys=["vec_pending"], points=[i for i, _ in rows])
+        if self._pending:
+            self._pending = max(0, self._pending - len(rows))
+        return len(rows)
 
     #------------------------------------------------------------------
     # 인덱스 통계
