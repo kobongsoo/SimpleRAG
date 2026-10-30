@@ -215,6 +215,7 @@ impl ChatParser {
                         if it["no"] == full["no"] {
                             it["full"] = full.get("text").cloned().unwrap_or(json!(""));
                             it["path"] = full.get("path").cloned().unwrap_or(json!(""));
+                            it["page"] = full.get("page").cloned().unwrap_or(Value::Null);
                         }
                     }
                 }

@@ -267,7 +267,7 @@ function drawMeta(t, text) { t.meta.innerHTML = ""; t.meta.appendChild(el("div",
 function drawRaw(t, text) { dropWait(t); t.ans.appendChild(el("div", "raw", text)); }
 function drawError(t, msg) { dropWait(t); t.ans.appendChild(el("div", "err", "● " + msg)); }
 
-// 답 아래 소요 줄 — "정확한 내용은 아래 출처로 확인하세요.  0.51s/6.85s/9.64s , qwen3-4b-q4(정밀)"
+// 답 아래 소요 줄 — "정확한 내용은 아래 근거로 확인하세요.  0.51s/6.85s/9.64s , qwen3-4b-q4(정밀)"
 //   시간은 검색/첫 글자/완료 순서로 모두 초. AI 답이 있을 때만 안내를 앞에 둔다(Python chat_parser.meta_line 과 같은 글)
 function metaLine(info, answered) {
   const times = [];
@@ -276,7 +276,7 @@ function metaLine(info, answered) {
   if (info.total_s != null) times.push(Number(info.total_s).toFixed(2) + "s");
   const model = info.model ? (info.model_mode && info.model_mode !== info.model ? info.model + "(" + info.model_mode + ")" : info.model) : "";
   const tail = [times.join("/"), model].filter(Boolean).join(" , ");
-  return answered ? "정확한 내용은 아래 출처로 확인하세요." + (tail ? "  " + tail : "") : tail;
+  return answered ? "정확한 내용은 아래 근거로 확인하세요." + (tail ? "  " + tail : "") : tail;
 }
 
 // ── 문서 업로드 (문서 업로드 설계서 §8) ─────────────────────
@@ -354,7 +354,7 @@ function drawSources(t, items) {
   const card = el("div", "srccard");
   const head = el("div", "srchead");
   const tog = el("span", "tog");
-  tog.appendChild(el("span", "chev", "›")); tog.appendChild(el("span", null, "출처")); tog.appendChild(el("span", "n", items.length + "건"));
+  tog.appendChild(el("span", "chev", "›")); tog.appendChild(el("span", null, "근거")); tog.appendChild(el("span", "n", items.length + "건"));
   head.appendChild(tog);
   const docs = t.docs.slice();
   const right = el("span", "srcright");

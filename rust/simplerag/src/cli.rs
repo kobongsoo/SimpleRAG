@@ -517,7 +517,10 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                     outln(&format!("  [{}] {}", i + 1, c.doc_name));
                     outln(&format!("      {}{}", pyutil::head(&body, 160), if pyutil::clen(&body) > 160 { "…" } else { "" }));
                     if full {
-                        let v = json!({"no": i + 1, "path": c.doc_path, "text": c.text});
+                        // 쪽 번호도 함께 — RAGSearchBox 탐색기 창이 AI 답의 [n] 을 누르면 그 쪽을 미리 보기에 띄운다
+                        let page = app.store.payloads(&[c.id]).ok().and_then(|m| m.get(&c.id).and_then(|p| p.get("page").cloned()))
+                            .unwrap_or(Value::Null);
+                        let v = json!({"no": i + 1, "path": c.doc_path, "text": c.text, "page": page});
                         outln(&format!("  @ev {}", pyutil::json_ascii(&v, false)));
                     }
                 }

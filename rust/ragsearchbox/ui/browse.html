@@ -137,6 +137,16 @@
   .ai-card .hd { display: flex; gap: 8px; align-items: center; font-weight: bold; }
   .ai-card .hd .x { margin-left: auto; color: var(--muted); }
   .ai-card .body { white-space: pre-wrap; line-height: 1.6; margin-top: 4px; }
+  /* AI 답 근거 — 답 글의 [n] · 아래 근거 줄. 누르면 미리 보기 창에 그 근거 */
+  .ai-card .cite { color: var(--link); font-weight: bold; padding: 0 1px; border-radius: 3px; }
+  .ai-card .cite:hover, .ai-card .cite.on { background: var(--sel); }
+  .ai-card .srcs { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 8px; font-size: calc(var(--fs) * .85); }
+  .ai-card .srcs .lb { color: var(--muted); }
+  .ai-card .src { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; border: 1px solid var(--rule); border-radius: 999px;
+    padding: 1px 9px 1px 6px; background: var(--surface); }
+  .ai-card .src span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  .ai-card .src i { color: var(--muted); font-style: normal; }
+  .ai-card .src:hover, .ai-card .src.on { border-color: var(--sel-bar); background: var(--sel); }
   .ai-card .ft { color: var(--muted); font-size: calc(var(--fs) * .8); margin-top: 4px; }
 
   /* 미리 보기 창 */
@@ -299,7 +309,7 @@
     <button class="b on" id="pvtoggle" title="미리 보기 창 (Alt+P)">◫ 미리 보기 창</button>
     <span class="sp"></span>
     <button class="ai" id="askai" title="같은 검색어로 AI 답 받기 (Shift+Enter)">✦ AI에게 묻기</button>
-    <button class="ai" id="toai" title="AI 모드로 바꾸기 — 탐색기 옆 대화 패널에서 AI 가 문서를 근거로 답합니다">💬 AI 모드</button>
+    <button class="ai" id="toai" title="채팅 모드로 바꾸기 — 탐색기 옆 대화 패널에서 AI 가 문서를 근거로 답합니다">💬 채팅 모드</button>
   </div>
   <div class="chips hidden" id="chips"></div>
   <div class="main" id="main">
@@ -321,7 +331,7 @@
   <div class="phead">
     <div class="brand"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div>
     <span class="f" id="pfolder"></span>
-    <span class="seg"><button class="on">탐색기</button><button id="torag" title="이 패널을 AI(대화) 모드로">AI</button></span>
+    <span class="seg"><button class="on">탐색기</button><button id="torag" title="이 패널을 채팅 모드로">채팅</button></span>
     <button class="ibtn" id="big" title="크게 보기 — MoAI 탐색기 창">⤢</button>
     <button class="ibtn" id="pclose" title="닫기 (Esc)">✕</button>
   </div>
@@ -710,9 +720,12 @@ function pageOf(row) {
   if (row.kind === "page") return row.page;
   return row.doc.pages[0] || null;
 }
+// 미리 보기 창이 지금 보여 주는 문서 · 쪽 — [열기] · [폴더 열기] 가 쓴다(목록 줄 또는 AI 답 근거)
+let pvTarget = null;
 function showPreview(row) {
   if (LAYOUT !== "window" || !row) return;
   const d = row.doc, p = pageOf(row);
+  pvTarget = { path: d.meta.doc_path, page: p ? p.page : null };
   $("pvtitle").textContent = d.meta.doc_name;
   $("pvtitle").title = d.meta.doc_path;
   $("pvpage").textContent = p && p.page != null ? `${p.exact ? "" : "약 "}${p.page}쪽` : "";
@@ -794,16 +807,62 @@ function askAi() {
   send({ type: "ask_ai", q, folder: scope });
   redrawAi();
 }
+// 답 글의 [n] 을 누를 수 있는 근거 표시로 — 그 번호의 근거가 있을 때만
+function citeHtml(text) {
+  return esc(text).replace(/\[(\d{1,2})\]/g, (m, n) => evItem(+n)
+    ? `<button class="cite ${ai.pick === +n ? "on" : ""}" data-ev="${n}" title="${esc(evItem(+n).doc)} — 미리 보기">[${n}]</button>` : m);
+}
+function evItem(n) { return ai && ai.items ? ai.items.find((e) => +e.no === n) : null; }
 function aiCard() {
   if (!ai) return "";
   const ev = ai.ev != null ? `근거 ${ai.ev}건` : "찾는 중…";
-  const body = ai.err ? `<span style="color:#b4462f">${esc(ai.err)}</span>` : esc(ai.text) || (ai.ev != null ? "답을 쓰는 중…" : "");
+  const body = ai.err ? `<span style="color:#b4462f">${esc(ai.err)}</span>` : citeHtml(ai.text) || (ai.ev != null ? "답을 쓰는 중…" : "");
   const ft = ai.info ? (ai.info.timing_text || "") : "";
+  // 근거 줄 — [1] 문서 이름 · 쪽 (누르면 미리 보기 창에 그 근거)
+  const src = ai.items && ai.items.length ? `<div class="srcs"><span class="lb">근거</span>${ai.items.map((e) =>
+    `<button class="src ${ai.pick === +e.no ? "on" : ""}" data-ev="${e.no}" title="${esc(e.path || e.doc)}">${docIcon(e.path || e.doc)}<b>[${e.no}]</b> <span>${esc(e.doc)}</span>${e.page != null ? ` <i>p.${e.page}</i>` : ""}</button>`).join("")}</div>` : "";
   return `<div class="ai-card"><div class="hd">✦ AI 답 — ${esc(ai.q)}<span class="cnt" style="font-weight:normal;color:var(--muted)">· ${ev}</span>
-    <button class="x" id="aix" title="닫기">✕</button></div><div class="body">${body}</div>${ft ? `<div class="ft">${esc(ft)}</div>` : ""}
-    <div class="ft">AI 요약 — 근거 문서로 확인하세요.</div></div>`;
+    <button class="x" id="aix" title="닫기">✕</button></div><div class="body">${body}</div>${src}${ft ? `<div class="ft">${esc(ft)}</div>` : ""}
+    <div class="ft">AI 요약 — 근거 문서로 확인하세요. [번호]를 누르면 그 근거를 미리 보기에 보여 줍니다.</div></div>`;
 }
-function bindAi() { const x = $("aix"); if (x) x.onclick = () => { ai = null; render(); }; }
+function bindAi() {
+  const x = $("aix");
+  if (x) x.onclick = () => { ai = null; render(); };
+  document.querySelectorAll(".ai-card [data-ev]").forEach((b) => { b.onclick = () => showEvidence(+b.dataset.ev); });
+}
+//------------------------------------------------------------------
+// AI 답 근거 보이기 — 미리 보기 창이 꺼져 있어도 켜서 그 근거를 보여 준다
+//   PDF 이고 쪽을 알면 그 쪽(PDF 뷰어), 아니면 근거 글 전체(글 미리 보기). 좁은 패널이면 문서를 그 쪽에서 연다
+//------------------------------------------------------------------
+function showEvidence(n) {
+  const e = evItem(n);
+  if (!e) return;
+  ai.pick = n;
+  redrawAi();
+  const path = e.path || "";
+  if (LAYOUT !== "window") { if (path) send({ type: "open_page", path, page: e.page != null ? e.page : null }); return; }
+  if (!pvShown) togglePv();
+  pvTarget = path ? { path, page: e.page != null ? e.page : null } : null;
+  $("pvtitle").textContent = `[${n}] ${e.doc}`;
+  $("pvtitle").title = path;
+  $("pvpage").textContent = e.page != null ? `${e.page}쪽` : "";
+  $("pvopen").disabled = !path;
+  $("pvopen").textContent = e.page != null ? `${e.page}쪽 열기 ↗` : "열기 ↗";
+  $("pvreveal").disabled = !path;
+  $("pvempty").classList.add("hidden");
+  if (isPdf(path) && e.page != null) {
+    $("pvtext").classList.add("hidden");
+    send({ type: "preview", path, page: e.page });
+    sendRect();
+  } else {
+    send({ type: "preview_hide" });
+    const t = $("pvtext");
+    t.classList.remove("hidden");
+    t.innerHTML = `<div class="sec">AI 답 근거 [${n}]</div>${hl(e.full || e.snippet || "")}
+      <div class="note">AI 가 답에 쓴 근거 글입니다 — 원본 모양(표 서식 · 그림)은 "열기"로 보세요.</div>`;
+    t.scrollTop = 0;
+  }
+}
 function redrawAi() {
   const box = LAYOUT === "window" ? $("list") : $("cards");
   const old = box.querySelector(".ai-card");
@@ -1095,7 +1154,7 @@ const api = {
     setStatus(t, true);
   },
   // AI 답(RAG) — 같은 검색어로 묻고 흘러나오는 답을 카드에
-  evidence(items) { if (ai) { ai.ev = (items || []).length; redrawAi(); } },
+  evidence(items) { if (ai) { ai.items = items || []; ai.ev = ai.items.length; redrawAi(); } },
   token(t) { if (ai) { ai.text += t; redrawAi(); } },
   raw(t) { if (ai) { ai.text += t; redrawAi(); } },
   finish(info) {
@@ -1125,8 +1184,9 @@ if (LAYOUT === "window") {
   // 정렬 상자로 기준을 바꾸면 그 기준의 기본 방향으로
   $("sort").onchange = () => { sortAsc = SORT_ASC_DEF[$("sort").value]; render(); };
   $("pvtoggle").onclick = togglePv;
-  $("pvopen").onclick = () => { if (rows[selIdx]) openPage(rows[selIdx]); };
-  $("pvreveal").onclick = () => { if (rows[selIdx]) send({ type: "reveal", path: rows[selIdx].doc.meta.doc_path }); };
+  // 미리 보기에 지금 보이는 것(목록 줄 · AI 답 근거)을 연다
+  $("pvopen").onclick = () => { if (pvTarget) send({ type: "open_page", path: pvTarget.path, page: pvTarget.page }); };
+  $("pvreveal").onclick = () => { if (pvTarget) send({ type: "reveal", path: pvTarget.path }); };
   applyLayout();
   bindSplits();
   new ResizeObserver(sendRect).observe($("pvframe"));
