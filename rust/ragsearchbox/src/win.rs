@@ -441,8 +441,10 @@ pub fn autorun_value() -> Option<String> {
         Some(String::from_utf16_lossy(&buf[..n.min(buf.len())]))
     }
 }
+// 자동 시작 명령 — --tray 를 붙여, 로그인할 때는 화면 없이 트레이에만 뜨게 한다(직접 실행하면 화면이 뜬다)
+//   옛 등록(--tray 없음)은 시작할 때 autorun_fix_path 가 이 값으로 고친다
 pub fn autorun_command() -> String {
-    format!("\"{}\"", std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default())
+    format!("\"{}\" --tray", std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default())
 }
 pub fn autorun_enable() -> Result<String, String> {
     use windows::Win32::System::Registry::*;

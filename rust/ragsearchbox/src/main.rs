@@ -272,11 +272,18 @@ impl App {
         // 인덱싱 폴더 아이콘 — ini 를 손으로 고친 경우까지 시작할 때 맞춰 본다
         self.sync_icons();
         // 자체 시험(RSB_SELFTEST_BROWSE) — 시작하자마자 MoAI 탐색기 창을 연다(값이 1 이 아니면 그 검색어로 찾는다)
-        if let Ok(q) = std::env::var("RSB_SELFTEST_BROWSE") {
-            if !q.is_empty() {
-                crate::info!("app", "자체 시험: 탐색기 창 열기 ({})", q);
-                let q = if q == "1" { None } else { Some(q) };
-                self.open_browse(q.as_deref(), None, Value::Null);
+        let selftest = std::env::var("RSB_SELFTEST_BROWSE").unwrap_or_default();
+        if !selftest.is_empty() {
+            crate::info!("app", "자체 시험: 탐색기 창 열기 ({})", selftest);
+            let q = if selftest == "1" { None } else { Some(selftest) };
+            self.open_browse(q.as_deref(), None, Value::Null);
+        } else if !std::env::args().any(|a| a == "--tray") {
+            // 직접 실행하면 화면을 바로 띄운다(트레이 "열기" 와 같다) — 로그인 자동 시작(--tray)은 트레이에만
+            crate::info!("app", "시작 화면 띄우기 ({} 모드)", self.s.ui_mode);
+            if self.s.ui_mode == "explorer" {
+                self.open_browse(None, None, Value::Null);
+            } else {
+                self.open_panel();
             }
         }
         self.update_tooltip();
@@ -326,7 +333,17 @@ impl App {
 
     // 탐색기 창 · 패널(탐색기 모드)에 인덱싱 폴더 · 쪽 열기 설정을 알린다
     fn push_roots(&mut self) {
-        let roots = browse_win::roots_json(&self.current_folders());
+        let mut roots = browse_win::roots_json(&self.current_folders());
+        // 인덱싱 폴더마다 문서 수 — 상태 파일의 문서 키를 경로 앞부분으로 센다(파일이 그대로면 다시 읽지 않는다)
+        if let Some(keys) = self.state_keys() {
+            if let Some(arr) = roots.as_array_mut() {
+                for r in arr.iter_mut() {
+                    let p = r["path"].as_str().unwrap_or("").trim_end_matches(['\\', '/']).to_lowercase() + "\\";
+                    let n = keys.iter().filter(|k| k.starts_with(&p)).count();
+                    r["count"] = json!(n);
+                }
+            }
+        }
         self.browse.call("setRoots", roots.clone());
         self.browse.call("setPageClick", json!(self.s.page_click));
         if self.panel_mode == "explorer" {
@@ -354,6 +371,56 @@ impl App {
     //------------------------------------------------------------------
     // 패널 화면 바꾸기(탐색기 ↔ RAG) — 이번 실행 동안만. 설정 창에서 바꾸면 ini 에도 남는다
     //------------------------------------------------------------------
+    //------------------------------------------------------------------
+    // 화면 모드 저장 — ini [UI] Mode 에 남기고 설정 창 안내 글을 고친다(값 rag = AI 모드)
+    //------------------------------------------------------------------
+    fn save_ui_mode(&mut self, mode: &str) {
+        self.s.ui_mode = mode.to_string();
+        self.mode_msg = match settings::save_ini_value(&self.s.ini_path, "UI", "Mode", mode) {
+            Ok(_) => if mode == "rag" { "AI 모드 — 질문하면 AI 가 문서를 근거로 답합니다".into() }
+                     else { "탐색기 모드 — 문서 · 쪽 · 내용을 찾아 목록으로 보여 줍니다".into() },
+            Err(e) => e,
+        };
+    }
+
+    //------------------------------------------------------------------
+    // 화면 모드 바꾸기 ([AI 모드] · [탐색기 모드] 버튼)
+    //=> 모드를 저장하고 지금 화면을 닫은 뒤 그 모드의 화면을 연다.
+    //    · AI 모드: 탐색기 창을 숨기고 탐색기 옆 대화 패널(트레이 "열기" 와 같다)
+    //    · 탐색기 모드: 대화 패널을 숨기고 MoAI 탐색기 창
+    //------------------------------------------------------------------
+    fn switch_ui_mode(&mut self, mode: &str) {
+        crate::info!("app", "화면 모드 바꾸기: {}", mode);
+        self.save_ui_mode(mode);
+        self.set_panel_mode(mode);
+        if mode == "rag" {
+            self.browse.hide();
+            self.open_panel();
+        } else {
+            self.panel.hide(true);
+            self.open_browse(None, None, Value::Null);
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 인덱싱 폴더 추가 — 폴더 고르기 창을 띄워 넣는다. 돌려줌: 안내 글(취소하면 빈 글)
+    //------------------------------------------------------------------
+    fn add_folder_dialog(&mut self) -> String {
+        let p = match rfd::FileDialog::new().set_title("인덱싱할 폴더 고르기").pick_folder() {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => return String::new(),
+        };
+        let cur = self.current_folders();
+        if cur.iter().any(|f| f.to_lowercase() == p.to_lowercase()) {
+            return "이미 들어 있는 폴더입니다".into();
+        }
+        let mut v = cur;
+        v.push(p);
+        let msg = self.set_folders(v).unwrap_or_else(|e| e);
+        self.push_roots();
+        msg
+    }
+
     fn set_panel_mode(&mut self, mode: &str) {
         if self.panel_mode == mode {
             return;
@@ -374,6 +441,10 @@ impl App {
     fn on_find_ipc(&mut self, to_browse: bool, m: &Value) -> bool {
         match m["type"].as_str().unwrap_or("") {
             "find" => {
+                // 폴더 옆 문서 수를 새로 — 그사이 자동 인덱싱으로 바뀌었을 수 있다(상태 파일이 그대로면 읽지 않는다)
+                if to_browse {
+                    self.push_roots();
+                }
                 let q = m["q"].as_str().unwrap_or("").trim().to_string();
                 let folder = m["folder"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
                 if q.is_empty() {
@@ -465,6 +536,25 @@ impl App {
             "mode" => {
                 let mode = if m["mode"] == "rag" { "rag" } else { "explorer" };
                 self.set_panel_mode(mode);
+            }
+            // [AI 모드] · [탐색기 모드] 버튼 — 화면 모드를 바꿔 저장하고 그 모드의 화면으로 옮겨 간다
+            "switch_mode" => {
+                let mode = if m["mode"] == "rag" { "rag" } else { "explorer" };
+                self.switch_ui_mode(mode);
+            }
+            // 탐색기 창 왼쪽 아래 [폴더 추가] · [폴더 빼기] — 설정 창과 같은 일
+            "add_folder" => {
+                let msg = self.add_folder_dialog();
+                if !msg.is_empty() {
+                    self.browse.call("notice", json!(msg));
+                }
+            }
+            "remove_folder" => {
+                let target = m["folder"].as_str().unwrap_or("").to_string();
+                let v: Vec<String> = self.current_folders().into_iter().filter(|f| f.to_lowercase() != target.to_lowercase()).collect();
+                let msg = self.set_folders(v).unwrap_or_else(|e| e);
+                self.browse.call("notice", json!(msg));
+                self.push_roots();
             }
             _ => return false,
         }
@@ -1403,16 +1493,9 @@ impl App {
                 "4B 는 20초 안팎 · 이 PC 에서 4B 를 처음 올리면 CPU·iGPU 측정으로 1~2분"),
             "multiturn" => self.info.mt_msg = self.set_flag("multiturn", "이어서 묻기", m["on"].as_bool().unwrap_or(true), "10초 안팎"),
             "add_folder" => {
-                if let Some(p) = rfd::FileDialog::new().set_title("인덱싱할 폴더 고르기").pick_folder() {
-                    let p = p.to_string_lossy().into_owned();
-                    let cur = self.current_folders();
-                    if cur.iter().any(|f| f.to_lowercase() == p.to_lowercase()) {
-                        self.info.folder_msg = "이미 들어 있는 폴더입니다".into();
-                    } else {
-                        let mut v = cur;
-                        v.push(p);
-                        self.info.folder_msg = self.set_folders(v).unwrap_or_else(|e| e);
-                    }
+                let msg = self.add_folder_dialog();
+                if !msg.is_empty() {
+                    self.info.folder_msg = msg;
                 }
             }
             "remove_folder" => {
@@ -1421,15 +1504,10 @@ impl App {
                 self.info.folder_msg = self.set_folders(v).unwrap_or_else(|e| e);
             }
             "folder_msg" => self.info.folder_msg = m["msg"].as_str().unwrap_or("").to_string(),
-            // 화면 모드(탐색기 · RAG) — ini 에 남기고 패널 화면을 바로 바꾼다(다시 시작 없이)
+            // 화면 모드(탐색기 · AI) — ini 에 남기고 패널 화면을 바로 바꾼다(다시 시작 없이)
             "ui_mode" => {
                 let mode = if m["value"] == "rag" { "rag" } else { "explorer" };
-                self.s.ui_mode = mode.to_string();
-                self.mode_msg = match settings::save_ini_value(&self.s.ini_path, "UI", "Mode", mode) {
-                    Ok(_) => if mode == "rag" { "RAG 모드 — 질문하면 AI 가 문서를 근거로 답합니다".into() }
-                             else { "탐색기 모드 — 문서 · 쪽 · 내용을 찾아 목록으로 보여 줍니다".into() },
-                    Err(e) => e,
-                };
+                self.save_ui_mode(mode);
                 self.set_panel_mode(mode);
             }
             "page_click" => {
