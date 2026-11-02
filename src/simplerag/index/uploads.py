@@ -208,7 +208,7 @@ def _new_meta(conv):
 # -out: error = 없음 (실패는 why 로)
 #------------------------------------------------------------------
 def add(conv, path, embedder, ext=None, on_progress=None):
-    from .indexer import TEXT_EXTS, build_extractor, is_transient
+    from .indexer import UPLOAD_EXTS, build_extractor, is_transient
 
     say = on_progress or (lambda m: None)
     t0 = time.perf_counter()
@@ -220,7 +220,7 @@ def add(conv, path, embedder, ext=None, on_progress=None):
     name = os.path.basename(path)
     if not os.path.isfile(path):
         return {"ok": False, "conv": str(conv), "name": name, "why": "파일이 없습니다"}
-    if os.path.splitext(name)[1].lower() not in TEXT_EXTS or is_transient(path):
+    if os.path.splitext(name)[1].lower() not in UPLOAD_EXTS or is_transient(path):
         return {"ok": False, "conv": str(conv), "name": name, "why": "지원하지 않는 형식입니다"}
     with _lock:
         meta = read_meta(conv)

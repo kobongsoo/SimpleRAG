@@ -71,6 +71,7 @@ class IndexJobs:
 
         self._dirty = collections.OrderedDict()   # {root: 이유} 대조가 필요한 폴더
         self._approved = set()                    # 사람이 "지금 인덱싱" 으로 허락한 폴더
+        self._running_approved = set()            # 이번 차례에 허락받고 도는 폴더(워커가 내려가도 다시 묻지 않게)
         self._docs = collections.deque()          # [(op, path, root)] 보낼 문서 명령
         self._queued = set()                      # 중복 방지용 (op, 정규화 경로)
         self._inflight = None                     # 보내 놓고 기다리는 일(설명 글)
@@ -414,6 +415,8 @@ class IndexJobs:
             return
         approved = root in self._approved
         self._approved.discard(root)
+        if approved:
+            self._running_approved.add(root)
         add, modify, remove = res.get("add", []), res.get("modify", []), res.get("remove", [])
         # 하위 폴더로 옮긴 문서 — 워커가 경로만 바꾼다(다시 임베딩 없음). 새 문서 한도에 세지 않는다.
         # 옛 워커는 이 키를 주지 않는다(그때는 add 에 섞여 온다)
@@ -505,10 +508,16 @@ class IndexJobs:
             if root is None:
                 self._outside_needed = True        # 지정 폴더 밖 정리는 워커가 다시 뜨면
             else:
+                # 허락받고 돌던 폴더는 허락을 되살린다 — 다시 대조할 때 한도에 걸려 멈추지 않게
+                if root in self._running_approved:
+                    self._approved.add(root)
                 self.mark_dirty(root, "워커가 도중에 내려감")
             return
         r = self._round
         r["done"] += 1
+        # 벡터를 미룬 큰 문서 — 차례가 끝나면 /embed-pending 으로 채운다
+        if res.get("deferred"):
+            self._vec_pending = None
         result = res.get("result", "")
         name = os.path.basename(path)
         if res.get("ok") and result == "moved":
@@ -613,7 +622,8 @@ class IndexJobs:
             try:
                 cwd = os.path.dirname(os.path.abspath(self.base_cmd[0]))
                 # 자동 인덱싱은 사용자가 다른 일을 하는 중에 돈다 — 임베딩 스레드를 4 로 둔다(설계서 §3-2)
-                env = dict(os.environ, SIMPLERAG_EMBED_THREADS="4")
+                env = dict(os.environ, SIMPLERAG_EMBED_THREADS="4",
+                           SIMPLERAG_INDEX_EXTS=" ".join(self.s.index_exts))
                 p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    stdin=subprocess.DEVNULL, timeout=3600, env=env,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -699,6 +709,7 @@ class IndexJobs:
     # -out: error = 없음
     #--------------------------------------------------------------
     def _finish_round(self):
+        self._running_approved.clear()
         r = self._round
         n, failed = len(r["changed"]), len(r["failed"])
         if n >= NOTIFY_AT_LEAST or failed:

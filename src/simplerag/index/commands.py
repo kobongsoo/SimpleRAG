@@ -30,6 +30,7 @@ import os
 import time
 
 from . import indexer
+from .. import config
 from ..meta import hook as meta_hook      # 문서 메타데이터 마무리(/bm25 때)
 
 PREFIX = "@index "
@@ -205,7 +206,7 @@ class IndexCommands:
     # -in: path = 문서 경로
     #
     # -out: {ok, result("added"|"modified"|"same"|"moved"|"copied"|"unchanged"|"failed_before"),
-    #        chunks, why, from(옮긴 문서의 옛 경로 · 복사본의 원본 경로)}
+    #        chunks, deferred(벡터를 미룬 청크 수), why, from(옮긴 문서의 옛 경로 · 복사본의 원본 경로)}
     # -out: error = 저장소 쓰기 실패는 예외(run 이 받는다)
     #--------------------------------------------------------------
     def index_doc(self, path):
@@ -214,7 +215,7 @@ class IndexCommands:
         path = os.path.abspath(path)
         if not os.path.isfile(path):
             return {"ok": False, "path": path, "why": "파일이 없습니다"}
-        if os.path.splitext(path)[1].lower() not in indexer.TEXT_EXTS or indexer.is_transient(path):
+        if os.path.splitext(path)[1].lower() not in indexer.INDEX_EXTS or indexer.is_transient(path):
             return {"ok": False, "path": path, "why": "인덱싱 대상이 아닌 파일입니다"}
 
         state = self._state()
@@ -230,7 +231,9 @@ class IndexCommands:
         if self._ext is None:
             self._ext = indexer.build_extractor()
         self.app.embedder.ensure_loaded()
-        r = indexer.sync_doc(path, fp, state, self.app.embedder, self.app.store, self._ext)
+        # 큰 문서는 벡터를 미룬다 — 한 건 임베딩이 명령 시간 한도(5분)를 넘어 워커가 죽지 않게. /embed-pending 이 채운다
+        over = config.DEFER_VECTORS_OVER if config.DEFER_VECTORS_OVER > 0 else None
+        r = indexer.sync_doc(path, fp, state, self.app.embedder, self.app.store, self._ext, defer_over=over)
         if r["ok"] and r["op"] == "moved":
             # 옮긴 문서 — 같은 벡터를 새 경로 이름으로 다시 단다(옛 경로 행은 뺀다)
             self._matrix_update(r["from"], None)
@@ -240,7 +243,8 @@ class IndexCommands:
             # 폴더 한정 검색용 벡터 한 벌에도 반영한다 — 옛 행은 지우고 새 청크를 덧붙인다
             rng = state["docs"].get(path, {}).get("ids") or [0, 0]
             self._matrix_update(path, list(range(rng[0], rng[1])))
-        out = {"ok": r["ok"], "path": path, "result": r["op"], "chunks": r.get("chunks", 0)}
+        out = {"ok": r["ok"], "path": path, "result": r["op"], "chunks": r.get("chunks", 0),
+               "deferred": r.get("deferred", 0)}
         if r.get("from"):
             out["from"] = r["from"]          # 옮긴 문서·복사본 — 어디서 왔는지(로그용)
         if not r["ok"]:
@@ -265,7 +269,9 @@ class IndexCommands:
             return {"ok": False, "why": "경로가 없습니다"}
         if os.path.exists(path):
             outside = bool(outside_of) and not _under_any(path, outside_of)
-            if not outside:
+            # 대상에서 빠진 확장자(.html · .py …)는 파일이 있어도 인덱스에서 뺀다
+            dropped = os.path.splitext(path)[1].lower() not in indexer.INDEX_EXTS
+            if not outside and not dropped:
                 return {"ok": False, "path": path, "why": "파일이 아직 있어 빼지 않습니다"}
         state = self._state()
         want = indexer.norm_path(path)

@@ -275,6 +275,12 @@ pub fn open_path(path: &str) -> Result<(), String> {
 }
 
 // 탐색기로 폴더 열기
+pub fn ask_yes_no(title: &str, text: &str) -> bool {
+    // 기본 단추는 [아니요] — 다른 일을 하다 Enter 를 눌러 큰 인덱싱이 시작되지 않게
+    let style = MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_DEFBUTTON2;
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from(title), style) == IDYES }
+}
+
 pub fn open_explorer(path: &str) -> Result<(), String> {
     std::process::Command::new("explorer.exe").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
 }

@@ -54,7 +54,7 @@ ERR = "#b4462f"          # 오류 글자
 UPLOAD_MAX_FILES = 5
 UPLOAD_MAX_MB = 30
 UPLOAD_EXTS = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".hwp", ".hwpx",
-               ".txt", ".md", ".html", ".htm", ".py", ".ipynb")
+               ".txt", ".md", ".csv", ".html", ".htm", ".py", ".ipynb")
 UP_BG = "#fdecef"         # 업로드 범위 칩 — MoAI-S 브랜드 옅은 빨강
 UP_INK = "#b8102f"
 BUBBLE_RATIO = 0.78      # 말풍선이 차지할 수 있는 폭(대화 칸 폭에 대한 비율)

@@ -1,9 +1,9 @@
 //------------------------------------------------------------------
 // 로그 (Python RAGSearchBox/log.py)
-//=> %LOCALAPPDATA%\RAGSearchBox-rs\log 아래 두 파일에 남긴다.
-//    · RAGSearchBox.log — 프로그램 동작(설정 단계 이상)
-//    · worker.log       — 워커(simplerag-rs)가 stderr 로 낸 줄
-//   파일이 5MB 를 넘으면 .1 .2 .3 으로 돌려 쓴다. DIAG 는 INFO 보다 낮은 자세한 단계다.
+//=> %LOCALAPPDATA%\RAGSearchBox-rs\log 아래 날짜별 두 파일에 남긴다(자정이 지나면 새 파일).
+//    · RAGSearchBox._2026-11-02.log — 프로그램 동작(설정 단계 이상)
+//    · worker._2026-11-02.log       — 워커(simplerag-rs)가 stderr 로 낸 줄
+//   하루치가 5MB 를 넘으면 .1 .2 .3 으로 돌려 쓴다. DIAG 는 INFO 보다 낮은 자세한 단계다.
 //------------------------------------------------------------------
 
 use std::io::Write;
@@ -48,11 +48,17 @@ pub fn enabled(lv: u8) -> bool {
     lv >= *LEVEL.get().unwrap_or(&INFO)
 }
 
-// 파일 하나에 한 줄 덧붙이기(넘치면 돌려 쓰기)
-fn append(file: &str, line: &str) {
+// 날짜가 붙은 파일 이름 — ("worker", "2026-11-02") → "worker._2026-11-02.log"
+fn dated_name(base: &str, date: &str) -> String {
+    format!("{}._{}.log", base, date)
+}
+
+// 오늘 파일에 한 줄 덧붙이기(넘치면 돌려 쓰기) — 쓸 때마다 날짜를 보므로 자정이 지나면 저절로 새 파일이 된다
+fn append(base: &str, line: &str) {
     let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let dir = log_dir();
-    let path = std::path::Path::new(&dir).join(file);
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let path = std::path::Path::new(&dir).join(dated_name(base, &today));
     if std::fs::metadata(&path).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
         for i in (1..BACKUPS).rev() {
             let _ = std::fs::rename(format!("{}.{}", path.display(), i), format!("{}.{}", path.display(), i + 1));
@@ -79,13 +85,24 @@ pub fn write(lv: u8, name: &str, msg: &str) {
         _ => "ERROR",
     };
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    append("RAGSearchBox.log", &format!("{} {} rsb.{} {}", now, lname, name, msg));
+    append("RAGSearchBox", &format!("{} {} rsb.{} {}", now, lname, name, msg));
 }
 
 // 워커 stderr 한 줄
 pub fn worker(msg: &str) {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    append("worker.log", &format!("{} INFO  rsbworker {}", now, msg));
+    append("worker", &format!("{} INFO  rsbworker {}", now, msg));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_has_date() {
+        assert_eq!(dated_name("RAGSearchBox", "2026-11-02"), "RAGSearchBox._2026-11-02.log");
+        assert_eq!(dated_name("worker", "2026-11-03"), "worker._2026-11-03.log");
+    }
 }
 
 #[macro_export]

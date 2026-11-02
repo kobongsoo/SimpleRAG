@@ -9,12 +9,15 @@
 import configparser
 import io
 import os
+import re
 import sys
 
 APP_DIR = (os.path.dirname(os.path.abspath(sys.executable))
            if getattr(sys, "frozen", False)
            else os.path.dirname(os.path.abspath(__file__)))
 INI_NAME = "RAGSearchBox.ini"
+# 인덱싱할 확장자 기본값 — watcher.TEXT_EXTS · simplerag indexer.TEXT_EXTS 와 같다
+DEFAULT_EXTS = [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".hwp", ".hwpx", ".txt", ".md", ".csv"]
 
 
 #------------------------------------------------------------------
@@ -49,7 +52,8 @@ INI_NAME = "RAGSearchBox.ini"
 # -필드: autoindex_rescan_min= 알림을 놓쳤을 때를 대비한 대조 순찰 주기(분, 0=시작 때만)
 # -필드: autoindex_ask_above = 새 문서가 이보다 많으면 바로 넣지 않고 트레이에서 허락을 받는다
 # -필드: autoindex_bm25_idle_s = 키워드 색인(BM25)은 질문이 이만큼 없을 때 다시 만든다(초)
-# -필드: log_level        = 로그 단계
+# -필드: index_exts      = 인덱싱할 확장자 목록(비면 DEFAULT_EXTS). 워커 · index 명령에 환경변수로 넘긴다
+# -필드: log_level       = 로그 단계
 # -필드: warnings         = 잘못된 값 안내 목록(트레이·로그로 알린다)
 # -필드: ini_path         = 실제로 읽은 INI 경로
 #------------------------------------------------------------------
@@ -94,6 +98,7 @@ class Settings:
         self.autoindex_rescan_min = 10
         self.autoindex_ask_above = 50
         self.autoindex_bm25_idle_s = 10
+        self.index_exts = list(DEFAULT_EXTS)
         self.log_level = "INFO"
         self.warnings = []
         self.ini_path = None
@@ -253,9 +258,39 @@ def load(path=None):
     s.autoindex_rescan_min = _int(cp, "AutoIndex", "RescanMin", 10, 0, 1440, w)
     s.autoindex_ask_above = _int(cp, "AutoIndex", "AskAboveDocs", 50, 0, 100000, w)
     s.autoindex_bm25_idle_s = _int(cp, "AutoIndex", "Bm25IdleSec", 10, 0, 3600, w)
+    exts, bad = parse_exts(cp.get("AutoIndex", "Extensions", fallback=""))
+    if bad:
+        w.append("[AutoIndex] Extensions 의 {} 는 확장자가 아니라 뺍니다".format(" ".join(bad)))
+    if exts:
+        s.index_exts = exts
 
     s.log_level = cp.get("Log", "Level", fallback="INFO").strip() or "INFO"
     return s
+
+
+#------------------------------------------------------------------
+# 확장자 글 나누기
+#=> INI 의 Extensions 값을 확장자 목록으로 바꾼다. Rust settings::parse_exts 와 같다.
+#    1) 공백 · 쉼표 · ; 로 나눈다
+#    2) 소문자로 바꾸고 앞에 점을 붙인다("csv" → ".csv"), 겹치면 하나만 남긴다
+#    3) 글자 · 숫자 · _ · - · + 로 1~15자가 아니면 잘못된 쪽으로 뺀다
+#
+# -in: raw = INI 값 글
+#
+# -out: (ok, bad) = 알맞은 확장자 목록, 잘못된 낱말 목록
+# -out: error = 없음
+#------------------------------------------------------------------
+def parse_exts(raw):
+    ok, bad = [], []
+    for tok in re.split(r"[\s,;]+", raw or ""):
+        if not tok:
+            continue
+        body = tok[1:].lower() if tok.startswith(".") else tok.lower()
+        if not re.fullmatch(r"[a-z0-9_+-]{1,15}", body):
+            bad.append(tok)
+        elif "." + body not in ok:
+            ok.append("." + body)
+    return ok, bad
 
 
 #------------------------------------------------------------------

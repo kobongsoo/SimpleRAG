@@ -41,6 +41,10 @@ pub struct Settings {
     pub autoindex_rescan_min: i64,
     pub autoindex_ask_above: i64,
     pub autoindex_bm25_idle_s: i64,
+    // 인덱싱할 확장자 — [AutoIndex] Extensions, 비면 DEFAULT_EXTS
+    pub index_exts: Vec<String>,
+    // 인덱싱 폴더 아래에서 뺀 하위 폴더 — [AutoIndex] ExcludeFolders(; 로 나눔)
+    pub exclude_folders: Vec<String>,
     pub log_level: String,
     // 화면 모드(탐색기 모드 설계서 §16) — explorer(기본) | rag · 쪽을 눌렀을 때 preview | app · 폴더 아이콘 바꾸기
     pub ui_mode: String,
@@ -83,6 +87,8 @@ impl Default for Settings {
             autoindex_rescan_min: 10,
             autoindex_ask_above: 50,
             autoindex_bm25_idle_s: 10,
+            index_exts: default_exts(),
+            exclude_folders: vec![],
             log_level: "INFO".into(),
             ui_mode: "explorer".into(),
             page_click: "preview".into(),
@@ -101,6 +107,31 @@ pub fn app_dir() -> String {
 }
 
 pub const INI_NAME: &str = "RAGSearchBox.ini";
+
+// 인덱싱할 확장자 기본값(simplerag indexer TEXT_EXTS 와 같다)
+pub const DEFAULT_EXTS: &[&str] = &[".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".hwp", ".hwpx", ".txt", ".md", ".csv"];
+
+pub fn default_exts() -> Vec<String> {
+    DEFAULT_EXTS.iter().map(|s| s.to_string()).collect()
+}
+
+//------------------------------------------------------------------
+// 확장자 글 → (알맞은 것, 잘못된 것) — 공백 · 쉼표 · ; 로 나누고 소문자 · 점 붙임 · 겹침 없앰
+//=> "csv" 도 받아 ".csv" 로 맞춘다. 글자 · 숫자 · _ · - · + 로 1~15자만 받는다.
+//------------------------------------------------------------------
+pub fn parse_exts(raw: &str) -> (Vec<String>, Vec<String>) {
+    let (mut ok, mut bad): (Vec<String>, Vec<String>) = (vec![], vec![]);
+    for tok in raw.split(|c: char| c.is_whitespace() || c == ',' || c == ';').filter(|t| !t.is_empty()) {
+        let body = tok.strip_prefix('.').unwrap_or(tok).to_lowercase();
+        let valid = (1..=15).contains(&body.len()) && body.chars().all(|c| c.is_ascii_alphanumeric() || "_-+".contains(c));
+        if !valid {
+            bad.push(tok.to_string());
+        } else if !ok.contains(&format!(".{}", body)) {
+            ok.push(format!(".{}", body));
+        }
+    }
+    (ok, bad)
+}
 
 // INI 를 {섹션(소문자): {키(소문자): 값}} 으로(configparser 처럼 주석 줄은 버린다)
 fn parse_ini(text: &str) -> HashMap<String, HashMap<String, String>> {
@@ -242,6 +273,14 @@ pub fn load(path: Option<&str>) -> Settings {
     s.autoindex_rescan_min = ini.int("AutoIndex", "RescanMin", 10, 0, 1440, &mut w);
     s.autoindex_ask_above = ini.int("AutoIndex", "AskAboveDocs", 50, 0, 100000, &mut w);
     s.autoindex_bm25_idle_s = ini.int("AutoIndex", "Bm25IdleSec", 10, 0, 3600, &mut w);
+    let (exts, bad) = parse_exts(&ini.s("AutoIndex", "Extensions"));
+    if !bad.is_empty() {
+        w.push(format!("[AutoIndex] Extensions 의 {} 는 확장자가 아니라 뺍니다", bad.join(" ")));
+    }
+    if !exts.is_empty() {
+        s.index_exts = exts;
+    }
+    s.exclude_folders = ini.s("AutoIndex", "ExcludeFolders").split(';').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
     let m = ini.s("UI", "Mode").to_lowercase();
     if m == "explorer" || m == "rag" {
         s.ui_mode = m;
@@ -350,4 +389,30 @@ pub fn save_window_width(path: &str, width: i64) -> Result<String, String> {
         return Err(format!("허용 범위(300~1200) 밖이라 저장하지 않습니다: {}", width));
     }
     save_ini_value(path, "Window", "Width", &width.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exts_normalized() {
+        let (ok, bad) = parse_exts(".PDF csv, .csv;.tar.gz  a/b");
+        assert_eq!(ok, vec![".pdf", ".csv"]);
+        assert_eq!(bad, vec![".tar.gz", "a/b"]);
+        assert!(parse_exts("  ").0.is_empty());
+    }
+
+    #[test]
+    fn exts_from_ini() {
+        let d = std::env::temp_dir().join(format!("rsb_exts_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("RAGSearchBox.ini").to_string_lossy().into_owned();
+        // 키가 없으면 기본값, 저장하면 [AutoIndex] 아래에 들어가 다음에 그대로 읽힌다
+        std::fs::write(&p, "[AutoIndex]\n; 설명\nEnabled = 1\n").unwrap();
+        assert_eq!(load(Some(&p)).index_exts, default_exts());
+        save_ini_value(&p, "AutoIndex", "Extensions", ".pdf .csv").unwrap();
+        assert_eq!(load(Some(&p)).index_exts, vec![".pdf", ".csv"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

@@ -87,6 +87,38 @@
   .side .i .tw { width: 14px; color: var(--muted); flex: none; text-align: center; font-size: 10px; }
   .side .i span.n { overflow: hidden; text-overflow: ellipsis; }
   .side .i .cnt { color: var(--muted); font-size: calc(var(--fs) * .82); flex: none; margin-left: -2px; }
+  /* 인덱싱 중인 폴더 — 수를 브랜드 색으로, 오른쪽에 깜박이는 점 */
+  .side .i .cnt.busy { color: var(--brand); font-weight: bold; }
+  .side .i .cnt.busy::after { content: ""; display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; vertical-align: 1px;
+    background: var(--brand); animation: busy-blink 1s ease-in-out infinite; }
+  @keyframes busy-blink { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(229, 22, 63, .45); }
+    50% { opacity: .2; transform: scale(.75); box-shadow: 0 0 0 4px rgba(229, 22, 63, 0); } }
+  @media (prefers-reduced-motion: reduce) { .side .i .cnt.busy::after { animation: none; } }
+  /* 찾는 중 — 검색창 아래로 흐르는 막대(진행률을 알 수 없다) */
+  .search { position: relative; }
+  .search.finding::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -6px; height: 3px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--brand), transparent) no-repeat; background-size: 40% 100%; animation: find-flow 1.1s linear infinite; }
+  @keyframes find-flow { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+  @media (prefers-reduced-motion: reduce) { .search.finding::after { animation: none; background: var(--brand); opacity: .5; } }
+  /* 폴더 이름을 쳐서 확인하는 창 */
+  .namebox { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(22, 24, 29, .35); }
+  .nb { width: min(440px, calc(100vw - 32px)); background: var(--surface); border-radius: 10px; padding: 16px 18px; box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+    display: flex; flex-direction: column; gap: 8px; }
+  .nb .nb-path { color: var(--muted); font-size: calc(var(--fs) * .85); word-break: break-all; }
+  .nb .nb-note { color: var(--ink2); white-space: pre-line; }
+  .nb label { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .nb input { font: inherit; color: var(--ink); padding: 5px 8px; border: 1px solid var(--muted); border-radius: 6px; outline: 0; background: var(--surface); }
+  .nb input:focus { border-color: var(--brand); }
+  .nb .nb-btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+  .nb .nb-btns button { padding: 5px 14px; border: 1px solid var(--rule); border-radius: 6px; }
+  .nb .nb-ok { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: bold; }
+  .nb .nb-ok:disabled { opacity: .4; cursor: default; }
+  /* 허락을 기다리는 폴더 — 진한 주황으로 눈에 띄게 */
+  .side .i .cnt.wait { color: #b45309; font-weight: bold; }
+  /* 인덱싱에서 뺀 하위 폴더 — 흐리게, 이름 뒤에 (뺌) */
+  .side .i.off { color: var(--muted); }
+  .side .i.off svg { opacity: .45; }
+  .side .i .offtag { color: var(--muted); font-size: calc(var(--fs) * .82); flex: none; }
   .side .empty { color: var(--muted); padding: 3px 10px; font-size: calc(var(--fs) * .85); }
 
   .list { overflow: auto; background: var(--surface); position: relative; }
@@ -168,6 +200,11 @@
     font-size: calc(var(--fs) * .82); white-space: nowrap; overflow: hidden; }
   .st .sp { flex: 1; }
   .st .err { color: #b4462f; }
+  /* 벡터 채우기 진행 — 검색 결과 글과 따로 맨 아래 줄에 남는다 */
+  .st #stvec { color: var(--ink2); }
+  .st #stvec::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: 1px;
+    background: var(--brand); animation: busy-blink 1s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .st #stvec::before { animation: none; } }
 
   /* 오른쪽 클릭 메뉴 */
   #menu { position: fixed; z-index: 30; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 4px;
@@ -323,7 +360,7 @@
       <div class="acts"><button class="p" id="pvopen" disabled>열기 ↗</button><button id="pvreveal" disabled>폴더 열기</button></div>
     </div>
   </div>
-  <div class="st"><span id="st1">찾을 내용을 쓰고 Enter</span><span id="st2"></span><span id="st3"></span><span class="sp"></span><span id="st4"></span></div>
+  <div class="st"><span id="st1">찾을 내용을 쓰고 Enter</span><span id="st2"></span><span id="st3"></span><span id="stvec" class="hidden"></span><span class="sp"></span><span id="st4"></span></div>
 </div>
 
 <!-- ───────── 탐색기 옆 패널 배치 ───────── -->
@@ -354,6 +391,7 @@ const isPdf = (p) => /\.pdf$/i.test(p || "");
 
 // ── 상태 ─────────────────────────────────────────────────
 let roots = [];          // 인덱싱 폴더 [{path, name, drive}]
+let excluded = [];       // 인덱싱에서 뺀 하위 폴더 경로들([AutoIndex] ExcludeFolders)
 let scope = null;        // 찾는 범위 폴더(null = 인덱싱 폴더 전체)
 let lastQ = "";          // 마지막으로 찾은 검색어
 let docs = [];           // 결과 문서 [{meta, pages:[…]}]
@@ -388,13 +426,29 @@ function remember(q) {
 }
 
 // ── 찾기 ─────────────────────────────────────────────────
+// 찾는 중 표시 — 진행률을 알 수 없어 검색창 아래로 흐르는 막대를 쓴다.
+//   0.3초 안에 끝나는 검색은 막대를 띄우지 않는다(깜박이지 않게).
+//   앞선 인덱싱 작업을 기다리면 1.5초 뒤에 그 까닭을 맨 아래 줄에 알린다
+let findTimers = [], findWaits = false;
+function setFindBusy(on) {
+  busy = on;
+  findTimers.forEach(clearTimeout);
+  findTimers = [];
+  findWaits = false;
+  const box = $(LAYOUT === "window" ? "q" : "pq").closest(".search");
+  box.classList.remove("finding");
+  if (!on) return;
+  findTimers.push(setTimeout(() => box.classList.add("finding"), 300));
+  findTimers.push(setTimeout(() => { if (findWaits) setStatus("앞선 인덱싱 작업이 끝나는 대로 찾습니다…"); }, 1500));
+}
+
 function runFind(q, push) {
   q = (q || "").trim();
   if (!q || busy) return;
   // 다른 검색어면 조건 칩에서 고친 것을 버린다
   if (q !== cond.q) cond = { q, off: [], widen: 0, labels: {} };
   lastQ = q;
-  busy = true;
+  setFindBusy(true);
   if (LAYOUT === "window") { $("q").value = q; } else { $("pq").value = q; }
   if (push !== false) {
     hist = hist.slice(0, histPos + 1);
@@ -409,7 +463,7 @@ function runFind(q, push) {
 
 // Rust 가 /find 결과를 넘긴다
 function onResults(r) {
-  busy = false;
+  setFindBusy(false);
   if (!r || r.q !== lastQ) { /* 지난 검색의 늦은 결과는 버린다 */ if (r && r.q) return; }
   if (!r.ok) {
     docs = []; done = null;
@@ -691,7 +745,7 @@ function pageRow(d, p, withDoc) {
 }
 function welcome() {
   return `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>무엇을 찾을까요?</b><br>
-    문장으로 쓰면 그 내용이 있는 <b>문서 · 쪽 · 대목</b>을 찾아 줍니다.<br>쪽을 고르면 오른쪽에 그 쪽이 보이고, 두 번 누르면 그 쪽에서 문서가 열립니다.`;
+    문장으로 쓰면 그 내용이 있는 <b>문서 · 쪽 · 해당 부분</b>을 찾아 줍니다.<br>쪽을 고르면 오른쪽에 그 쪽이 보이고, 두 번 누르면 그 쪽에서 문서가 열립니다.`;
 }
 function toggleDoc(d) {
   const k = d.meta.doc_path;
@@ -771,7 +825,8 @@ function sendRect() {
   if (LAYOUT !== "window") return;
   const f = $("pvframe");
   const r = f.getBoundingClientRect();
-  send({ type: "pv_rect", x: r.left, y: r.top, w: r.width, h: r.height, show: pvShown && !$("main").classList.contains("nopv") });
+  // PDF 미리 보기는 화면 위에 따로 뜨는 창이라 확인 창이 떠 있는 동안에는 가린다
+  send({ type: "pv_rect", x: r.left, y: r.top, w: r.width, h: r.height, show: pvShown && !$("main").classList.contains("nopv") && !nameBoxOpen });
 }
 
 // ── 오른쪽 클릭 메뉴 ─────────────────────────────────────
@@ -783,6 +838,10 @@ function showMenu(x, y, row) {
     ["경로 복사", () => copy(row.doc.meta.doc_path)],
     ["이 폴더에서만 찾기", () => { scope = row.doc.meta.doc_path.replace(/[\\/][^\\/]+$/, ""); runFind(lastQ); }],
   ];
+  popMenu(x, y, items);
+}
+// 메뉴 띄우기 — items = [[글, 할 일], …]
+function popMenu(x, y, items) {
   const m = $("menu");
   m.innerHTML = items.map((it, k) => `<button data-k="${k}">${esc(it[0])}</button>`).join("");
   m.querySelectorAll("button").forEach((b) => { b.onclick = () => { hideMenu(); items[+b.dataset.k][1](); }; });
@@ -798,6 +857,72 @@ function copy(t) {
   a.remove();
 }
 document.addEventListener("click", (e) => { if (!$("menu").contains(e.target)) hideMenu(); });
+// 폴더 오른쪽 클릭 메뉴 — 폴더 열기, 허락을 기다리는 인덱싱 폴더면 지금 인덱싱
+function showFolderMenu(x, y, path) {
+  const r = roots.find((v) => v.path === path);
+  const items = [["폴더 열기", () => send({ type: "open_folder", path })]];
+  if (r && (r.waiting || r.waiting_del)) items.push(["지금 인덱싱", () => send({ type: "index_now", path })]);
+  if (r) items.push(["폴더 빼기", () => removeRoot(r)]);
+  // 하위 폴더는 그 폴더만 인덱싱에서 뺀다 — 뺀 폴더는 다시 넣고, 뺀 폴더의 안쪽은 바깥을 다시 넣어야 한다
+  else if (isExcluded(path) === "self") items.push(["폴더 다시 넣기", () => send({ type: "exclude_folder", path, on: false })]);
+  else if (!isExcluded(path)) items.push(["폴더 빼기", () => excludeSub(path)]);
+  popMenu(x, y, items);
+}
+// 인덱싱에서 뺀 폴더인가 — "self" = 이 폴더를 뺐다, "under" = 뺀 폴더의 안쪽, false = 아니다
+function isExcluded(path) {
+  const low = (p) => p.toLowerCase().replace(/[\\/]+$/, "");
+  const lp = low(path);
+  if (excluded.some((e) => low(e) === lp)) return "self";
+  return excluded.some((e) => lp.startsWith(low(e) + "\\")) ? "under" : false;
+}
+// 하위 폴더 빼기 — 파일은 그대로 두고 그 폴더의 문서만 인덱스에서 뺀다. 잘못 누르지 않게 폴더 이름을 치게 한다
+function excludeSub(path) {
+  confirmByName(path, "파일은 지우지 않고, 이 폴더(하위 포함)의 문서만 검색에서 빠집니다.\n오른쪽 클릭 '폴더 다시 넣기' 로 되돌릴 수 있습니다.",
+    () => send({ type: "exclude_folder", path, on: true }));
+}
+// 폴더 이름을 똑같이 쳐야 실행하는 확인 창 — 대소문자는 가리지 않고, 맞을 때만 [폴더 빼기] 가 켜진다
+let nameBoxOpen = false;
+function confirmByName(path, note, onOk) {
+  const need = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  const box = document.createElement("div"); box.className = "namebox";
+  box.innerHTML = `<div class="nb"><b></b><div class="nb-path"></div><div class="nb-note"></div><label><span></span><input type="text" spellcheck="false"></label>
+    <div class="nb-btns"><button class="nb-no">취소</button><button class="nb-ok" disabled>폴더 빼기</button></div></div>`;
+  box.querySelector("b").textContent = `"${need}" 폴더를 뺄까요?`;
+  box.querySelector(".nb-path").textContent = path;
+  box.querySelector(".nb-note").textContent = note;
+  box.querySelector("label span").textContent = `확인을 위해 폴더 이름 "${need}" 을(를) 입력하세요`;
+  const inp = box.querySelector("input"), ok = box.querySelector(".nb-ok");
+  const close = () => { box.remove(); nameBoxOpen = false; sendRect(); };
+  const go = () => { if (!ok.disabled) { close(); onOk(); } };
+  inp.oninput = () => { ok.disabled = inp.value.trim().toLowerCase() !== need.toLowerCase(); };
+  ok.onclick = go;
+  box.querySelector(".nb-no").onclick = close;
+  box.addEventListener("keydown", (e) => {
+    // 창 전체 단축키가 뒤에서 돌지 않게 막는다. 한글 조합 중 Enter 는 글자 확정이다
+    e.stopPropagation();
+    if (e.key === "Escape") close();
+    else if (e.key === "Enter" && !e.isComposing) go();
+  });
+  document.body.appendChild(box);
+  nameBoxOpen = true;
+  sendRect();
+  inp.focus();
+}
+// 인덱싱 폴더 빼기 — 파일은 그대로 두고 인덱스에서만 뺀다. 잘못 누르지 않게 폴더 이름을 치게 한다
+function removeRoot(r) {
+  confirmByName(r.path, "파일은 지우지 않고, 이 폴더의 문서만 검색에서 빠집니다.", () => {
+    scope = null;
+    send({ type: "remove_folder", folder: r.path });
+  });
+}
+// 브라우저 기본 메뉴(뒤로 · 새로 고침 · 인쇄 …)는 앱에 맞지 않아 끈다.
+//   입력칸과 글을 고른 때만 남긴다 — 복사 · 붙여넣기가 필요하다
+document.addEventListener("contextmenu", (e) => {
+  if (e.defaultPrevented || e.target.closest("input, textarea")) return;
+  if (String(window.getSelection() || "")) return;
+  e.preventDefault();
+  hideMenu();
+});
 
 // ── AI 답 카드 ───────────────────────────────────────────
 function askAi() {
@@ -905,6 +1030,25 @@ function drawCrumb() {
   $("fwd").disabled = histPos >= hist.length - 1;
   $("up").disabled = !scope;
 }
+// 폴더 옆 숫자 — 인덱싱 중이면 (끝낸 수/전체), 허락을 기다리면 (문서 수 · 대기 N), 그 밖에는 (문서 수)
+const fmtN = (n) => Number(n).toLocaleString("ko-KR");
+function cntText(r) {
+  if (r.progress) return `(${fmtN(r.progress[0])}/${fmtN(r.progress[1])})`;
+  if (r.count == null) return "";
+  return r.waiting ? `(${fmtN(r.count)} · 대기 ${fmtN(r.waiting)})` : `(${fmtN(r.count)})`;
+}
+// 숫자 표시 종류 — 인덱싱 중(깜박임) · 허락 대기(진한 색)
+function cntState(r) {
+  return r.progress ? "busy" : (r.waiting || r.waiting_del) ? "wait" : "";
+}
+function cntTip(r) {
+  if (r.progress) return "인덱싱 중 — 끝낸 문서 / 이번에 처리할 문서";
+  if (r.waiting_del && !r.waiting) return "사라진 문서가 많아 기다립니다 — 오른쪽 클릭 '지금 인덱싱' 을 누르면 뺍니다";
+  return r.waiting ? `새 문서 ${fmtN(r.waiting)}건이 기다립니다 — 오른쪽 클릭 '지금 인덱싱' 을 누르면 넣습니다` : "인덱스에 있는 문서 수";
+}
+function totalText() {
+  return roots.some((r) => r.count != null) ? `(${fmtN(roots.reduce((a, r) => a + (r.count || 0), 0))})` : "";
+}
 function drawNav() {
   drawCrumb();
   if (LAYOUT !== "window") return;
@@ -915,20 +1059,19 @@ function drawNav() {
     : `<div class="empty">아직 없습니다</div>`;
   h += `<div class="h">인덱싱 폴더</div>`;
   // 문서 수 — 인덱싱 폴더마다 Rust 가 상태 파일로 센 값(count). 모든 인덱싱 폴더는 그 합
-  const cntOf = (n) => n == null ? "" : `<span class="cnt">(${Number(n).toLocaleString("ko-KR")})</span>`;
-  const total = roots.some((r) => r.count != null) ? roots.reduce((a, r) => a + (r.count || 0), 0) : null;
-  h += `<button class="i ${scope ? "" : "on"}" data-p=""><span class="tw"></span><span class="n">모든 인덱싱 폴더</span>${cntOf(total)}</button>`;
-  const node = (path, name, depth, icon, count) => {
+  h += `<button class="i ${scope ? "" : "on"}" data-p=""><span class="tw"></span><span class="n">모든 인덱싱 폴더</span><span class="cnt" id="cntall">${esc(totalText())}</span></button>`;
+  const node = (path, name, depth, icon, root) => {
     const on = scope && scope.toLowerCase() === path.toLowerCase();
     const open = openDirs.has(path);
     const kids = dirs[path];
     const tw = kids && !kids.length ? "" : open ? "▾" : "▸";
-    let out = `<button class="i ${on ? "on" : ""}" data-p="${esc(path)}" style="padding-left:${6 + depth * 14}px" title="${esc(path)}">
-      <span class="tw" data-dir="${esc(path)}">${tw}</span><svg width="16" height="16"><use href="#${icon}"/></svg><span class="n">${esc(name)}</span>${cntOf(count)}</button>`;
+    const ex = !root && isExcluded(path);
+    let out = `<button class="i ${on ? "on" : ""} ${ex ? "off" : ""}" data-p="${esc(path)}" style="padding-left:${6 + depth * 14}px" title="${esc(path)}">
+      <span class="tw" data-dir="${esc(path)}">${tw}</span><svg width="16" height="16"><use href="#${icon}"/></svg><span class="n">${esc(name)}</span>${ex === "self" ? `<span class="offtag">(뺌)</span>` : ""}${root ? `<span class="cnt ${cntState(root)}" data-cnt="${esc(path)}" title="${esc(cntTip(root))}">${esc(cntText(root))}</span>` : ""}</button>`;
     if (open && kids) for (const k of kids) out += node(path.replace(/[\\/]+$/, "") + "\\" + k, k, depth + 1, "i-fold");
     return out;
   };
-  for (const r of roots) h += node(r.path, r.name, 0, r.drive ? "i-drive" : "i-moai", r.count);
+  for (const r of roots) h += node(r.path, r.name, 0, r.drive ? "i-drive" : "i-moai", r);
   if (!roots.length) h += `<div class="empty">아래 [＋ 폴더 추가] 로 인덱싱할 폴더를 넣으세요</div>`;
   // 폴더 빼기는 인덱싱 폴더(맨 위 폴더)를 골랐을 때만 — 그 아래 하위 폴더는 뺄 수 없다
   const picked = scope && roots.find((r) => r.path.toLowerCase().replace(/[\\/]+$/, "") === scope.toLowerCase().replace(/[\\/]+$/, ""));
@@ -936,15 +1079,13 @@ function drawNav() {
     <button id="frem" ${picked ? "" : "disabled"} title="${picked ? esc(picked.path) + " 을(를) 인덱싱 폴더에서 뺍니다" : "뺄 인덱싱 폴더를 위 목록에서 고르세요"}">－ 폴더 빼기</button></div>`;
   s.innerHTML = h;
   $("fadd").onclick = () => send({ type: "add_folder" });
-  $("frem").onclick = () => {
-    if (!picked) return;
-    // 파일은 그대로 두고 인덱스에서만 뺀다 — 실수로 누르지 않게 한 번 묻는다
-    if (!confirm(`"${picked.name}" 폴더를 인덱싱 폴더에서 뺄까요?\n${picked.path}\n\n파일은 지우지 않고, 이 폴더의 문서만 검색에서 빠집니다.`)) return;
-    scope = null;
-    send({ type: "remove_folder", folder: picked.path });
-  };
+  $("frem").onclick = () => { if (picked) removeRoot(picked); };
   s.querySelectorAll("[data-q]").forEach((b) => { b.onclick = () => runFind(b.dataset.q); });
-  s.querySelectorAll("[data-p]").forEach((b) => { b.onclick = () => setScope(b.dataset.p || null); });
+  s.querySelectorAll("[data-p]").forEach((b) => {
+    b.onclick = () => setScope(b.dataset.p || null);
+    // "모든 인덱싱 폴더" 는 한 폴더가 아니라서 메뉴가 없다
+    if (b.dataset.p) b.oncontextmenu = (e) => { e.preventDefault(); showFolderMenu(e.clientX, e.clientY, b.dataset.p); };
+  });
   s.querySelectorAll("[data-dir]").forEach((t) => {
     t.onclick = (e) => {
       e.stopPropagation();
@@ -963,7 +1104,7 @@ function renderCards() {
   const C = $("cards");
   if (!docs.length) {
     showMessage(lastQ ? `<b>"${esc(lastQ)}"</b> 와 맞는 문서를 찾지 못했습니다.` :
-      `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>이 폴더에서 찾기</b><br>문장으로 쓰면 그 내용이 있는<br>문서 · 쪽 · 대목을 찾아 줍니다.`);
+      `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>이 폴더에서 찾기</b><br>문장으로 쓰면 그 내용이 있는<br>문서 · 쪽 · 해당 부분을 찾아 줍니다.`);
     return;
   }
   let h = aiCard();
@@ -1126,7 +1267,24 @@ function togglePv() {
 
 // ── Rust 가 부르는 함수들 ────────────────────────────────
 const api = {
-  setRoots(v) { roots = v || []; drawNav(); },
+  setRoots(v) {
+    roots = v || [];
+    // 트레이 · 설정 창에서 지금 고른 폴더를 뺐으면 범위를 푼다 — 없는 폴더에서 찾지 않게
+    const low = (p) => p.toLowerCase().replace(/[\\/]+$/, "") + "\\";
+    if (scope && !roots.some((r) => low(scope).startsWith(low(r.path)))) scope = null;
+    drawNav();
+  },
+  // 인덱싱 진행 — 숫자만 고친다(0.5초마다 오므로 탐색 창을 다시 그리면 누르던 것이 끊긴다)
+  setRootCounts(v) {
+    roots = v || [];
+    document.querySelectorAll("[data-cnt]").forEach((el) => {
+      const r = roots.find((x) => x.path === el.dataset.cnt);
+      if (r) { el.textContent = cntText(r); el.title = cntTip(r); el.className = "cnt " + cntState(r); }
+    });
+    const all = $("cntall");
+    if (all) all.textContent = totalText();
+  },
+  setExcluded(v) { excluded = v || []; drawNav(); },
   setDirs(path, names) { dirs[path] = names || []; drawNav(); },
   setPageClick(v) { pageClick = v || "preview"; },
   // 탐색기 옆 패널 — 지금 탐색기가 보는 폴더가 찾는 범위
@@ -1143,13 +1301,21 @@ const api = {
   runQuery(q, folder, select) {
     if (folder !== undefined) scope = folder || null;
     pendingSelect = select || null;
-    busy = false;
+    setFindBusy(false);
     if (q) runFind(q); else drawNav();
   },
   setState(t) { if (t) setStatus(t); },
   notice(t) { setStatus(t); },
+  // 벡터 채우기 진행 — 빈 글이면 감춘다(좁은 패널에는 자리가 없어 탐색기 창에만)
+  setVecStatus(t) {
+    if (LAYOUT !== "window") return;
+    $("stvec").textContent = t || "";
+    $("stvec").classList.toggle("hidden", !t);
+  },
+  // 찾기를 맡겼는데 워커가 인덱싱 명령을 처리하는 중이다
+  findWaiting() { findWaits = busy; },
   error(t) {
-    busy = false;
+    setFindBusy(false);
     if (ai && ai.text === "" && ai.info == null) { ai.err = t; redrawAi(); }
     setStatus(t, true);
   },

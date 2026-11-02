@@ -3,7 +3,8 @@
 //=> 폴더 감시 묶음을 받아 "대조 → 문서별 반영 → 키워드 색인" 을 워커에게 하나씩 시킨다.
 //    · 워커가 떠 있으면: /index-outside → /index-plan → /index-doc·/remove-doc → /bm25
 //    · 워커가 내려가 있으면: `simplerag-rs index --dir` 를 따로 돌린다(그동안 워커를 띄우지 않는다)
-//    · 새 문서가 너무 많거나(AskAboveDocs) 한꺼번에 많이 사라지면 멈추고 트레이 '지금 인덱싱' 허락을 기다린다
+//    · 새 문서가 너무 많거나(AskAboveDocs) 한꺼번에 많이 사라지면 멈추고 [예] · [아니요] 창으로 허락을 묻는다
+//      (아니요면 트레이 · 폴더 오른쪽 클릭 '지금 인덱싱' 을 기다린다)
 //   메인 스레드에서만 돈다(tick). 워커·명령 스레드의 결과는 post 로 메인에 돌려받는다.
 //------------------------------------------------------------------
 
@@ -31,6 +32,8 @@ const OUTSIDE_KEY: &str = "(지정 폴더 밖)";
 pub enum JobMsg {
     Done(u64, Value),
     Cli(Vec<(String, Option<i32>, Option<Value>, String, f64)>),
+    // index 명령의 진행 — (폴더, 끝낸 수, 전체)
+    CliProgress(String, usize, usize),
 }
 
 // 보낸 명령의 결과를 받을 곳
@@ -80,6 +83,12 @@ pub struct IndexJobs {
     vec_pending: Option<usize>,
     // 이번에 채우기 시작할 때의 대기 수(진행 표시 "12,345 / 186,919" 의 분모)
     vec_total: usize,
+    // 폴더별 인덱싱 진행 — 폴더 → (끝낸 수, 전체). 탐색 창에 "Desktop (10/311)" 로 보이고, 끝나면 뺀다
+    prog: HashMap<String, (usize, usize)>,
+    // 진행 · 대기가 바뀔 때마다 늘어난다 — 메인이 보고 탐색 창 숫자를 고친다
+    pub prog_ver: u64,
+    // 이번 차례에 허락받고 도는 폴더 — 워커가 도중에 내려가도 다시 묻지 않고 이어 간다
+    running_approved: HashSet<String>,
 }
 
 fn abspath(p: &str) -> String {
@@ -110,12 +119,12 @@ impl IndexJobs {
             queued: HashSet::new(), inflight: None, handlers: HashMap::new(), next_id: 1, bm25_needed: false, retry_at: None,
             last_avail: None, outside_needed: true, approve_outside: false, waiting_new: HashMap::new(), waiting_delete: HashMap::new(),
             round: Round { done: 0, total: 0, changed: vec![], failed: vec![] },
-            vec_pending: None, vec_total: 0,
+            vec_pending: None, vec_total: 0, prog: HashMap::new(), prog_ver: 0, running_approved: HashSet::new(),
         }
     }
 
     // 벡터 채우기 진행 글 — 대기 청크가 없으면 None
-    fn pending_text(&self) -> Option<String> {
+    pub fn pending_text(&self) -> Option<String> {
         let left = self.vec_pending.filter(|n| *n > 0)?;
         let total = self.vec_total.max(left);
         Some(format!("벡터 채우는 중 {} / {} — 지금도 검색할 수 있습니다", comma(total - left), comma(total)))
@@ -137,9 +146,57 @@ impl IndexJobs {
         }
     }
 
+    //------------------------------------------------------------------
+    // 사용자가 고른 폴더를 바로 인덱싱 — 폴더 추가 · 폴더 오른쪽 클릭 '지금 인덱싱'
+    //=> 사람이 직접 고른 것 자체가 허락이다. 새 문서 수 한도(AskAboveDocs)는 감시 중에 문서가 뜻밖에
+    //   몰려들 때를 막으려는 것이라 여기서는 묻지 않는다.
+    //------------------------------------------------------------------
+    pub fn approve_folder(&mut self, root: &str, why: &str) {
+        let r = abspath(root);
+        crate::info!("autoindex", "{} — 바로 인덱싱: {}", why, r);
+        self.approved.insert(r.clone());
+        self.mark_dirty(&r, why);
+    }
+
+    // 이 폴더가 대량 삭제 허락을 기다리는가
+    pub fn root_delete_wait(&self, root: &str) -> bool {
+        let low = root.to_lowercase();
+        self.waiting_delete.keys().any(|k| k.to_lowercase() == low)
+    }
+
+    //------------------------------------------------------------------
+    // 탐색 창에 보일 폴더 상태 — (진행 중이면 Some((끝낸 수, 전체)), 허락을 기다리는 새 문서 수)
+    //------------------------------------------------------------------
+    pub fn root_state(&self, root: &str) -> (Option<(usize, usize)>, usize) {
+        let low = root.to_lowercase();
+        let prog = self.prog.iter().find(|(k, _)| k.to_lowercase() == low).map(|(_, v)| *v);
+        let wait = self.waiting_new.iter().find(|(k, _)| k.to_lowercase() == low).map(|(_, n)| *n).unwrap_or(0);
+        (prog, wait)
+    }
+
     pub fn rescan_all(&mut self) {
         for r in self.roots.clone() {
             self.mark_dirty(&r, "사용자 요청");
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 인덱싱 대상(확장자 · 뺀 폴더)이 바뀜
+    //   approve = 다음 대조를 허락받은 것으로 칠까. 확장자는 사용자가 고른 일이라 AskAboveDocs 로 멈추지 않게 true,
+    //             하위 폴더 빼기는 기다리던 새 문서까지 들어가면 안 되므로 false
+    //   rescan = 지금 대조를 부탁할까. 워커를 다시 띄우면 뜰 때 대조하므로 false 로 부른다
+    //   (워커를 띄우는데 여기서 부탁하면 뜨기 전 잠깐 사이에 index 명령이 먼저 돈다)
+    //------------------------------------------------------------------
+    pub fn filter_changed(&mut self, s: &Settings, approve: bool, rescan: bool) {
+        self.s.index_exts = s.index_exts.clone();
+        self.s.exclude_folders = s.exclude_folders.clone();
+        for r in self.roots.clone() {
+            if approve {
+                self.approved.insert(r.clone());
+            }
+            if rescan {
+                self.mark_dirty(&r, "인덱싱 대상 변경");
+            }
         }
     }
 
@@ -340,6 +397,10 @@ impl IndexJobs {
                 }
             }
             JobMsg::Cli(results) => self.on_cli(results),
+            JobMsg::CliProgress(root, n, total) => {
+                self.prog.insert(root, (n, total));
+                self.prog_ver += 1;
+            }
         }
     }
 
@@ -360,6 +421,10 @@ impl IndexJobs {
             return;
         }
         let approved = self.approved.remove(root);
+        if approved {
+            self.running_approved.insert(root.to_string());
+        }
+        self.prog_ver += 1;
         let mut add = Self::strs(res, "add");
         let modify = Self::strs(res, "modify");
         let remove = Self::strs(res, "remove");
@@ -367,7 +432,7 @@ impl IndexJobs {
         let limit = self.s.autoindex_ask_above as usize;
         if limit > 0 && add.len() > limit && !approved {
             if self.waiting_new.get(root) != Some(&add.len()) {
-                (self.notify)("warn", &format!("새 문서 {}건이 있습니다 — 트레이 메뉴 '지금 인덱싱' 을 누르면 넣습니다", add.len()));
+                (self.notify)("ask", &format!("새 문서 {}건이 있습니다", add.len()));
             }
             self.waiting_new.insert(root.into(), add.len());
             crate::info!("autoindex", "새 문서 {}건 > {} — 허락을 기다린다: {}", add.len(), limit, root);
@@ -378,7 +443,7 @@ impl IndexJobs {
         let db = res["delete_blocked"].as_str().unwrap_or("").to_string();
         if !db.is_empty() {
             if !self.waiting_delete.contains_key(root) {
-                (self.notify)("warn", &format!("{} — 정말 지운 것이면 트레이 메뉴 '지금 인덱싱'", db));
+                (self.notify)("ask", &format!("{}\n정말 지운 문서라면 인덱스에서도 뺍니다.", db));
             }
             self.waiting_delete.insert(root.into(), db);
         } else {
@@ -391,6 +456,7 @@ impl IndexJobs {
                 if self.queued.insert(key) {
                     self.docs.push_back((op.into(), p.clone(), Some(root.into())));
                     self.round.total += 1;
+                    self.prog.entry(root.to_string()).or_default().1 += 1;
                 }
             }
         }
@@ -420,7 +486,7 @@ impl IndexJobs {
         let db = res["delete_blocked"].as_str().unwrap_or("").to_string();
         if !db.is_empty() && !approved {
             if !self.waiting_delete.contains_key(OUTSIDE_KEY) {
-                (self.notify)("warn", &format!("지정 폴더 밖 문서 {}건이 인덱스에 있습니다({}) — 트레이 '지금 인덱싱' 을 누르면 뺍니다", out.len(), db));
+                (self.notify)("ask", &format!("지정 폴더 밖 문서 {}건이 인덱스에 있습니다({})\n인덱스에서 뺍니다.", out.len(), db));
             }
             self.waiting_delete.insert(OUTSIDE_KEY.into(), db);
             crate::info!("autoindex", "지정 폴더 밖 문서 {}건 — 허락을 기다린다", out.len());
@@ -440,11 +506,30 @@ impl IndexJobs {
         if Self::b(res, "stopped") {
             match root {
                 None => self.outside_needed = true,
-                Some(r) => self.mark_dirty(&r, "워커가 도중에 내려감"),
+                Some(r) => {
+                    // 허락받고 돌던 폴더는 허락을 되살린다 — 다시 대조할 때 한도에 걸려 멈추지 않게
+                    if self.running_approved.contains(&r) {
+                        self.approved.insert(r.clone());
+                    }
+                    self.mark_dirty(&r, "워커가 도중에 내려감");
+                }
             }
             return;
         }
         self.round.done += 1;
+        // 벡터를 미룬 큰 문서 — 차례가 끝나면 /embed-pending 으로 채운다
+        if res["deferred"].as_u64().unwrap_or(0) > 0 {
+            self.vec_pending = None;
+        }
+        // 폴더별 진행 — 다 끝난 폴더는 빼서 문서 수만 보이게 한다
+        if let Some(p) = root.as_ref().and_then(|r| self.prog.get_mut(r)) {
+            p.0 += 1;
+            if p.0 >= p.1 {
+                let r = root.as_ref().unwrap();
+                self.prog.remove(r);
+            }
+            self.prog_ver += 1;
+        }
         let result = res["result"].as_str().unwrap_or("");
         let name = basename(path);
         if Self::b(res, "ok") && result == "moved" {
@@ -488,6 +573,8 @@ impl IndexJobs {
             self.vec_total = 0;
         }
         self.vec_pending = Some(left);
+        // 탐색기 창 맨 아래 줄의 진행도 새로 고친다
+        self.prog_ver += 1;
     }
 
     fn on_bm25(&mut self, res: &Value) {
@@ -551,6 +638,8 @@ impl IndexJobs {
         crate::info!("autoindex", "워커가 내려가 있어 index 명령으로 반영한다: {}", roots.join(", "));
         let base = self.base_cmd.clone();
         let post = self.post.clone();
+        let exts = self.s.index_exts.join(" ");
+        let exclude = self.s.exclude_folders.join(";");
         std::thread::spawn(move || {
             let mut results = vec![];
             for (root, args) in jobs {
@@ -559,6 +648,8 @@ impl IndexJobs {
                 c.args(&base[1..]).args(&args).stdin(std::process::Stdio::null());
                 // 자동 인덱싱은 사용자가 다른 일을 하는 중에 돈다 — 임베딩 스레드를 4 로 둔다(설계서 §3-2)
                 c.env("SIMPLERAG_EMBED_THREADS", "4");
+                c.env("SIMPLERAG_INDEX_EXTS", &exts);
+                c.env("SIMPLERAG_INDEX_EXCLUDE", &exclude);
                 if let Some(d) = std::path::Path::new(&base[0]).parent() {
                     c.current_dir(d);
                 }
@@ -568,10 +659,38 @@ impl IndexJobs {
                 }
                 let (mut summary, mut code) = (None, None);
                 let tail;
-                match c.output() {
-                    Ok(o) => {
-                        code = o.status.code();
-                        let out = String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr);
+                c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+                match c.spawn() {
+                    Ok(mut ch) => {
+                        // stderr 는 따로 받아 둔다 — 안 읽으면 버퍼가 차서 index 명령이 멈출 수 있다
+                        let err = ch.stderr.take();
+                        let eh = std::thread::spawn(move || {
+                            let mut b = vec![];
+                            if let Some(mut e) = err {
+                                let _ = std::io::Read::read_to_end(&mut e, &mut b);
+                            }
+                            b
+                        });
+                        // stdout 은 한 줄씩 읽어 "[10/311]" 진행을 탐색 창으로 넘긴다
+                        let mut raw: Vec<u8> = vec![];
+                        if let Some(so) = ch.stdout.take() {
+                            let mut r = std::io::BufReader::new(so);
+                            let mut line = vec![];
+                            loop {
+                                line.clear();
+                                match std::io::BufRead::read_until(&mut r, b'\n', &mut line) {
+                                    Ok(n) if n > 0 => {}
+                                    _ => break,
+                                }
+                                if let Some((n, total)) = parse_progress(&String::from_utf8_lossy(&line)) {
+                                    post(JobMsg::CliProgress(root.clone(), n, total));
+                                }
+                                raw.extend_from_slice(&line);
+                            }
+                        }
+                        let eb = eh.join().unwrap_or_default();
+                        code = ch.wait().ok().and_then(|s| s.code());
+                        let out = String::from_utf8_lossy(&raw).into_owned() + &String::from_utf8_lossy(&eb);
                         for ln in out.lines() {
                             if let Some(js) = ln.strip_prefix(SUMMARY_PREFIX) {
                                 summary = serde_json::from_str::<Value>(js).ok();
@@ -597,6 +716,8 @@ impl IndexJobs {
         }
         let mut failed_any = false;
         for (root, code, summary, tail, sec) in results {
+            self.prog.remove(&root);
+            self.prog_ver += 1;
             let ok = summary.as_ref().map(|s| Self::b(s, "ok")).unwrap_or(false);
             if !ok {
                 failed_any = true;
@@ -616,7 +737,7 @@ impl IndexJobs {
             let held = n("held_new");
             if held > 0 {
                 if self.waiting_new.get(&root) != Some(&held) {
-                    (self.notify)("warn", &format!("새 문서 {}건이 있습니다 — 트레이 메뉴 '지금 인덱싱' 을 누르면 넣습니다", held));
+                    (self.notify)("ask", &format!("새 문서 {}건이 있습니다", held));
                 }
                 self.waiting_new.insert(root.clone(), held);
             } else {
@@ -625,7 +746,7 @@ impl IndexJobs {
             let db = s["delete_blocked"].as_str().unwrap_or("").to_string();
             if !db.is_empty() {
                 if !self.waiting_delete.contains_key(&root) {
-                    (self.notify)("warn", &format!("{} — 정말 지운 것이면 트레이 메뉴 '지금 인덱싱'", db));
+                    (self.notify)("ask", &format!("{}\n정말 지운 문서라면 인덱스에서도 뺍니다.", db));
                 }
                 self.waiting_delete.insert(root, db);
             } else {
@@ -660,5 +781,30 @@ impl IndexJobs {
             crate::info!("autoindex", "자동 인덱싱 한 차례 끝: 반영 {} · 실패 {}", n, failed);
         }
         self.round = Round { done: 0, total: 0, changed: vec![], failed: vec![] };
+        self.prog.clear();
+        self.running_approved.clear();
+        self.prog_ver += 1;
+    }
+}
+
+//------------------------------------------------------------------
+// index 명령 출력 한 줄에서 진행 읽기 — "  [10/311] [추가] …" → (10, 311), 아니면 None
+//------------------------------------------------------------------
+fn parse_progress(line: &str) -> Option<(usize, usize)> {
+    let rest = line.trim_start().strip_prefix('[')?;
+    let (head, _) = rest.split_once(']')?;
+    let (n, total) = head.split_once('/')?;
+    Some((n.parse().ok()?, total.parse().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_line() {
+        assert_eq!(parse_progress("  [10/311] [추가] 규정.docx   5청크\n"), Some((10, 311)));
+        assert_eq!(parse_progress("  [삭제] 규정.docx"), None);
+        assert_eq!(parse_progress("문서 3건 중 3건 처리 대상"), None);
     }
 }

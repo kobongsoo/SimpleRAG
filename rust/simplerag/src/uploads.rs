@@ -164,7 +164,7 @@ pub fn add(conv: &str, path: &str, embedder: &Embedder) -> Value {
         return fail("파일이 없습니다".into());
     }
     let ext = pyutil::splitext(&name).1.to_lowercase();
-    if !crate::indexer::TEXT_EXTS.contains(&ext.as_str()) || crate::indexer::is_transient(&path) {
+    if !crate::indexer::UPLOAD_EXTS.contains(&ext.as_str()) || crate::indexer::is_transient(&path) {
         return fail("지원하지 않는 형식입니다".into());
     }
     let _g = WRITE.lock().unwrap();

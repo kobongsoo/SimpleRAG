@@ -119,7 +119,7 @@ fn index_doc(app: &App, path: &str) -> Result<Map<String, Value>, String> {
     if !std::path::Path::new(&path).is_file() {
         return Ok(obj(json!({"ok": false, "path": path, "why": "파일이 없습니다"})));
     }
-    if !indexer::TEXT_EXTS.contains(&pyutil::ext_lower(&path).as_str()) || indexer::is_transient(&path) {
+    if !indexer::is_index_ext(&path) || indexer::is_excluded(&path) || indexer::is_transient(&path) {
         return Ok(obj(json!({"ok": false, "path": path, "why": "인덱싱 대상이 아닌 파일입니다"})));
     }
     let mut st = state()?;
@@ -135,8 +135,10 @@ fn index_doc(app: &App, path: &str) -> Result<Map<String, Value>, String> {
         }
     }
     app.embedder.ensure_loaded()?;
-    let r = indexer::sync_doc(&path, &fp, &mut st, &app.embedder, &app.store, &mut |_| {})?;
-    let mut out = obj(json!({"ok": r.ok, "path": path, "result": r.op, "chunks": r.chunks}));
+    // 큰 문서는 벡터를 미룬다 — 한 건 임베딩이 명령 시간 한도(5분)를 넘어 워커가 죽지 않게. /embed-pending 이 채운다
+    let opts = indexer::SyncOpts { defer_over: indexer::defer_over(), ..Default::default() };
+    let r = indexer::sync_doc_with(&path, &fp, &mut st, &app.embedder, &app.store, &mut |_| {}, opts)?;
+    let mut out = obj(json!({"ok": r.ok, "path": path, "result": r.op, "chunks": r.chunks, "deferred": r.deferred}));
     if let Some(f) = &r.from {
         out.insert("from".into(), json!(f));
     }
@@ -158,7 +160,9 @@ fn remove_doc(app: &App, path: &str, outside_of: Option<Value>) -> Result<Map<St
         let roots: Vec<String> = outside_of.and_then(|v| v.as_array().cloned()).unwrap_or_default()
             .into_iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect();
         let outside = !roots.is_empty() && !under_any(path, &roots);
-        if !outside {
+        // 대상에서 빠진 확장자(.html · .py …) · 뺀 폴더는 파일이 있어도 인덱스에서 뺀다
+        let dropped = !indexer::is_index_ext(path) || indexer::is_excluded(path);
+        if !outside && !dropped {
             return Ok(obj(json!({"ok": false, "path": path, "why": "파일이 아직 있어 빼지 않습니다"})));
         }
     }

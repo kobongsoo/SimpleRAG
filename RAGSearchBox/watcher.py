@@ -30,9 +30,10 @@ import time
 import log as rsb_log
 
 # simplerag/index/indexer.py 의 TEXT_EXTS 와 같아야 한다(tests/test_watcher.py 가 확인)
+#   INI [AutoIndex] Extensions 가 있으면 app.py 가 시작할 때 그 값으로 바꿔 넣는다
 TEXT_EXTS = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
-    ".hwp", ".hwpx", ".txt", ".md", ".html", ".htm", ".py", ".ipynb",
+    ".hwp", ".hwpx", ".txt", ".md", ".csv",
 }
 
 # ReadDirectoryChangesW 의 알림 종류

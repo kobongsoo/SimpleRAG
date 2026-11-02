@@ -25,13 +25,60 @@ use crate::embed::Embedder;
 use crate::pyutil;
 use crate::store::{Payload, VectorStore};
 
+// 인덱싱 대상 확장자 기본값 — 웹 문서 · 코드(.html · .htm · .py · .ipynb)는 빼기로 했다(2026-11-02).
+//   보고서 HTML 한 건이 1만 청크를 넘고 프로그램 폴더의 코드가 검색을 흐렸다.
+//   RAGSearchBox 는 설정에서 고친 목록을 SIMPLERAG_INDEX_EXTS 로 넘긴다(index_exts)
 pub const TEXT_EXTS: &[&str] = &[".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
-    ".hwp", ".hwpx", ".txt", ".md", ".html", ".htm", ".py", ".ipynb"];
+    ".hwp", ".hwpx", ".txt", ".md", ".csv"];
+// 대화에 올릴 수 있는 확장자 — 사용자가 고른 문서라 인덱싱 대상보다 넓다
+pub const UPLOAD_EXTS: &[&str] = &[".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+    ".hwp", ".hwpx", ".txt", ".md", ".csv", ".html", ".htm", ".py", ".ipynb"];
 
 // 블록 추출·청킹 결과가 달라지는 코드 변경마다 올린다(Python 판과 같은 값)
 pub const BLOCKS_VERSION: i64 = 5;
 
 pub type State = Map<String, Value>;
+
+//------------------------------------------------------------------
+// 지금 인덱싱 대상 확장자 — SIMPLERAG_INDEX_EXTS(공백 · 쉼표 · ; 로 나눔), 없으면 TEXT_EXTS
+//=> 프로세스가 사는 동안 바뀌지 않는다. RAGSearchBox 는 값을 바꾸면 워커를 다시 띄운다.
+//------------------------------------------------------------------
+pub fn index_exts() -> &'static [String] {
+    static EXTS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    EXTS.get_or_init(|| {
+        let raw = std::env::var("SIMPLERAG_INDEX_EXTS").unwrap_or_default();
+        let v: Vec<String> = raw.split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+            .map(|s| s.trim().trim_start_matches('.').to_lowercase()).filter(|s| !s.is_empty())
+            .map(|s| format!(".{}", s)).collect();
+        if v.is_empty() { TEXT_EXTS.iter().map(|s| s.to_string()).collect() } else { v }
+    })
+}
+
+// 이 경로의 확장자가 인덱싱 대상인가
+pub fn is_index_ext(path: &str) -> bool {
+    let ext = pyutil::ext_lower(path);
+    index_exts().iter().any(|e| *e == ext)
+}
+
+//------------------------------------------------------------------
+// 인덱싱에서 뺄 목록 — SIMPLERAG_INDEX_EXCLUDE, ; 로 나눔(대소문자 무시). 말뭉치처럼 문서가 아닌 큰 파일 ·
+//   폴더를 뺄 때, RAGSearchBox 의 하위 폴더 빼기. \ 나 / 가 든 항목은 폴더(그 아래 전부), 아니면 파일 이름
+//=> 프로세스가 사는 동안 바뀌지 않는다. RAGSearchBox 는 값을 바꾸면 워커를 다시 띄운다.
+//------------------------------------------------------------------
+fn index_excludes() -> &'static [String] {
+    static LIST: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| {
+        std::env::var("SIMPLERAG_INDEX_EXCLUDE").unwrap_or_default()
+            .split(';').map(|s| s.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase()).filter(|s| !s.is_empty()).collect()
+    })
+}
+
+// 이 경로가 인덱싱에서 뺄 목록에 걸리는가
+pub fn is_excluded(path: &str) -> bool {
+    let low = path.replace('/', "\\").to_lowercase();
+    let name = pyutil::basename(&low).to_string();
+    index_excludes().iter().any(|e| if e.contains('\\') { low.starts_with(&format!("{}\\", e)) } else { name == *e })
+}
 
 //------------------------------------------------------------------
 // 저장하는 동안 잠깐 생기는 파일인가 — "~$" · ".~lock." 이름, 숨김·시스템 속성
@@ -54,17 +101,8 @@ pub fn is_transient(path: &str) -> bool {
 pub fn list_files(root: &str, recursive: bool) -> std::io::Result<(Vec<String>, usize)> {
     let mut files = vec![];
     let mut skipped = 0;
-    // SIMPLERAG_INDEX_EXCLUDE — ; 로 나눈 제외 목록(대소문자 무시). 말뭉치처럼 문서가 아닌 큰 파일 · 폴더를 뺄 때
-    //   \ 나 / 가 든 항목은 폴더(그 아래 전부), 아니면 파일 이름
-    let exclude: Vec<String> = std::env::var("SIMPLERAG_INDEX_EXCLUDE").unwrap_or_default()
-        .split(';').map(|s| s.trim().replace('/', "\\").trim_end_matches('\\').to_lowercase()).filter(|s| !s.is_empty()).collect();
-    let excluded = |p: &str| {
-        let low = p.replace('/', "\\").to_lowercase();
-        let name = pyutil::basename(&low).to_string();
-        exclude.iter().any(|e| if e.contains('\\') { low.starts_with(&format!("{}\\", e)) } else { name == *e })
-    };
     let mut take = |p: String| {
-        if TEXT_EXTS.contains(&pyutil::ext_lower(&p).as_str()) && !is_transient(&p) && !excluded(&p) {
+        if is_index_ext(&p) && !is_transient(&p) && !is_excluded(&p) {
             files.push(p);
         } else {
             skipped += 1;
@@ -366,13 +404,23 @@ pub struct Prepared {
 
 //------------------------------------------------------------------
 // sync_doc 의 선택 사항
-// -필드: defer    = true 면 새 청크의 벡터를 비워 둔다(단계형 인덱싱 1단계)
-// -필드: prepared = 준비 스레드 결과(없으면 그 자리에서 추출·청킹)
+// -필드: defer_over = Some(n) 이면 새로 임베딩할 청크가 fresh 까지 합쳐 n 을 넘을 때 벡터를 비워 둔다(단계형 1단계)
+//                     청킹이 끝나야 청크 수를 알므로 문서마다 그때 정한다 — 큰 문서 한 건도 미룰 수 있다
+// -필드: fresh      = 이번 실행에서 이미 새로 임베딩하거나 미룬 청크 수
+// -필드: prepared   = 준비 스레드 결과(없으면 그 자리에서 추출·청킹)
 //------------------------------------------------------------------
 #[derive(Default)]
 pub struct SyncOpts {
-    pub defer: bool,
+    pub defer_over: Option<usize>,
+    pub fresh: usize,
     pub prepared: Option<Prepared>,
+}
+
+//------------------------------------------------------------------
+// 설정의 단계형 인덱싱 문턱 — 0 이면 끔(None)
+//------------------------------------------------------------------
+pub fn defer_over() -> Option<usize> {
+    if cfg().defer_vectors_over > 0 { Some(cfg().defer_vectors_over as usize) } else { None }
 }
 
 // blocks 엔진으로 한 문서 추출·청킹 → (전체 글자, 표 행 수, 청크 메타)
@@ -560,7 +608,8 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
     let tok = embedder.tokenizer()?;
     // 옛 버전의 점 id — 글이 같은 청크의 벡터를 다시 쓴다(설계서 §4-5)
     let old_ids: Vec<i64> = prev.as_ref().and_then(id_range).map(|(a, b)| (a..b).collect()).unwrap_or_default();
-    let made: Result<(String, usize, Vec<String>, Option<Vec<crate::chunk::ChunkMeta>>, Vec<Vec<f32>>, Vec<String>, usize, usize), String> = (|| {
+    let (defer_over, fresh_before) = (opts.defer_over, opts.fresh);
+    let made: Result<(String, usize, Vec<String>, Option<Vec<crate::chunk::ChunkMeta>>, Vec<Vec<f32>>, Vec<String>, usize, usize, bool), String> = (|| {
         // 준비 스레드가 이미 만들었으면 그것을 쓴다(결과는 그 자리에서 만든 것과 같다)
         let (text, n_rows, chunks, metas) = match pre_parsed.take() {
             Some(p) => p?,
@@ -571,12 +620,14 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
         let n_reused = reused.iter().filter(|v| v.is_some()).count();
         // 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 빈 벡터로 둔다
         let need: Vec<String> = chunks.iter().zip(&reused).filter(|(_, r)| r.is_none()).map(|(c, _)| c.clone()).collect();
-        let fresh = if opts.defer { vec![vec![]; need.len()] } else { embedder.embed_passages(&need)? };
+        // 이번 실행에서 새로 임베딩할 청크가 문턱을 넘으면 벡터는 미룬다(큰 문서가 명령 시간 한도를 넘지 않게)
+        let defer = defer_over.map(|o| fresh_before + need.len() > o).unwrap_or(false);
+        let fresh = if defer { vec![vec![]; need.len()] } else { embedder.embed_passages(&need)? };
         let mut fresh = fresh.into_iter();
         let vecs: Vec<Vec<f32>> = reused.into_iter().map(|r| r.unwrap_or_else(|| fresh.next().unwrap_or_default())).collect();
-        Ok((text, n_rows, chunks, metas, vecs, hashes, n_reused, need.len()))
+        Ok((text, n_rows, chunks, metas, vecs, hashes, n_reused, need.len(), defer))
     })();
-    let (text, n_rows, chunks, metas, vecs, hashes, n_reused, n_new) = match made {
+    let (text, n_rows, chunks, metas, vecs, hashes, n_reused, n_new, deferred_doc) = match made {
         Ok(x) => x,
         Err(e) => {
             let why = why_of(&e);
@@ -654,7 +705,7 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
     mark_changed(state);
     save_state(state)?;
     crate::meta::hook::synced(&key, Some(&chash));
-    let (embedded, deferred) = if opts.defer { (0, n_new) } else { (n_new, 0) };
+    let (embedded, deferred) = if deferred_doc { (0, n_new) } else { (n_new, 0) };
     Ok(SyncResult { ok: true, op: op.into(), chunks: chunks.len() as i64, n_rows, embedded, reused: n_reused, deferred, ..Default::default() })
 }
 
@@ -706,6 +757,28 @@ pub fn find_removed(state: &State, root: &str, present: &HashSet<String>, recurs
         }
         out.push(key.clone());
     }
+    out.sort();
+    out
+}
+
+//------------------------------------------------------------------
+// 대상에서 빠진 문서 찾기 — 이 폴더 아래, 파일은 있는데 index_exts 에 없거나 뺄 목록에 걸린 것
+//=> 대상을 줄이면 예전에 넣은 문서가 인덱스에 남는다. 사고로 사라진 것이 아니라 정한 일이므로
+//   대량 삭제 확인(delete_guard)을 거치지 않고 뺀다.
+//
+// -in: state = 상태 / root = 폴더 / recursive = 하위 폴더까지
+//
+// -out: 문서 키 목록(정렬)
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn find_dropped(state: &State, root: &str, recursive: bool) -> Vec<String> {
+    let base = norm_path(root);
+    let prefix = format!("{}\\", pyutil::rstrip_chars(&base, "\\/"));
+    let mut out: Vec<String> = docs(state).keys().filter(|key| {
+        let k = norm_path(key);
+        let inside = if recursive { k.starts_with(&prefix) } else { pyutil::dirname(&k) == base };
+        inside && (!is_index_ext(key) || is_excluded(key)) && std::path::Path::new(key.as_str()).exists()
+    }).cloned().collect();
     out.sort();
     out
 }
@@ -776,6 +849,10 @@ pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete:
         }
     }
     removed.extend(dup);
+    // 대상에서 빠진 확장자 · 폴더의 문서도 뺀다(--rebuild 는 어차피 처음부터 다시 만든다)
+    if !rebuild {
+        removed.extend(find_dropped(state, doc_dir, recursive));
+    }
     removed.sort();
     Ok(Plan { files, skipped, todo, removed, moved, delete_blocked, retry_skip: n_retry })
 }
@@ -999,9 +1076,9 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
     }
     let total = todo.len();
     let tok = embedder.tokenizer()?;
-    // 단계형 인덱싱 문턱(§3-6) — 이번 실행에서 새로 임베딩할 청크가 이만큼 쌓인 뒤로는 벡터를 비워 두고
+    // 단계형 인덱싱 문턱(§3-6) — 이번 실행에서 새로 임베딩할 청크가 이만큼을 넘으면 벡터를 비워 두고
     //   BM25 로 먼저 검색되게 한다. 문서 몇 건(자동 인덱싱)은 문턱에 닿지 않아 지금처럼 바로 임베딩한다.
-    let defer_over = if cfg().defer_vectors_over > 0 { Some(cfg().defer_vectors_over as usize) } else { None };
+    let defer_limit = defer_over();
     let mut fresh_chunks = 0usize;
     // 준비 스레드(§3-1) — 문서가 두 건 이상일 때만. 내용이 같거나 옮긴·복사한 문서는 파싱하지 않게
     //   지금 상태의 내용 해시를 넘겨 둔다(이번 실행 중 생긴 복사본은 파싱이 헛되어도 결과는 같다)
@@ -1030,8 +1107,8 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
             let n = i + 1;
             let name = pyutil::basename(path).to_string();
             let prepared = rx.as_ref().and_then(|r| r.recv().ok());
-            let defer = defer_over.map(|o| fresh_chunks >= o).unwrap_or(false);
-            let r = sync_doc_with(path, fp, &mut state, embedder, store, log, SyncOpts { defer, prepared })?;
+            let r = sync_doc_with(path, fp, &mut state, embedder, store, log,
+                                  SyncOpts { defer_over: defer_limit, fresh: fresh_chunks, prepared })?;
             if !r.ok {
                 sum.failed.push((name, format!("{}{}", r.why, if r.kept_old { " (옛 버전 유지)" } else { "" })));
                 continue;

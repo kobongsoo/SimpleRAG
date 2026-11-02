@@ -99,6 +99,8 @@ struct InfoWin {
     prec_msg: String,
     // 마지막 이어서 묻기(멀티턴) 바꾸기 결과
     mt_msg: String,
+    // 마지막 인덱싱 확장자 바꾸기 결과
+    ext_msg: String,
 }
 
 //------------------------------------------------------------------
@@ -107,7 +109,7 @@ struct InfoWin {
 // 문서 업로드 한도(문서 업로드 설계서 §10) · 올릴 수 있는 확장자(SimpleRAG indexer TEXT_EXTS 와 같다)
 const UPLOAD_MAX_FILES: usize = 5;
 const UPLOAD_MAX_MB: u64 = 30;
-const UPLOAD_EXTS: &[&str] = &["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "hwp", "hwpx", "txt", "md", "html", "htm", "py", "ipynb"];
+const UPLOAD_EXTS: &[&str] = &["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "hwp", "hwpx", "txt", "md", "csv", "html", "htm", "py", "ipynb"];
 
 //------------------------------------------------------------------
 // 대화 id → 업로드 폴더 이름 (SimpleRAG uploads::safe_id 와 같은 규칙)
@@ -154,6 +156,9 @@ struct App {
     state_cache: (Option<std::time::SystemTime>, Vec<String>),
     last_tooltip: String,
     t_tooltip: Instant,
+    // 탐색 창 폴더 숫자를 마지막으로 고친 때의 진행 번호 · 시각
+    roots_ver: u64,
+    t_roots: Instant,
     t_info: Instant,
     quitting: bool,
     selftest_done: bool,
@@ -296,6 +301,15 @@ impl App {
         if let Some(j) = self.jobs.as_mut() {
             j.tick();
         }
+        // 인덱싱 진행이 바뀌면 탐색 창 숫자를 고친다 — 0.5초에 한 번까지(상태 파일을 매번 읽지 않게)
+        let ver = self.jobs.as_ref().map(|j| j.prog_ver).unwrap_or(0);
+        if ver != self.roots_ver && self.t_roots.elapsed() >= Duration::from_millis(500) {
+            self.roots_ver = ver;
+            self.t_roots = Instant::now();
+            let v = self.roots_value();
+            self.browse.call("setRootCounts", v);
+            self.push_vec_status();
+        }
         if self.t_tooltip.elapsed() >= TOOLTIP_EVERY {
             self.update_tooltip();
         }
@@ -332,7 +346,28 @@ impl App {
     }
 
     // 탐색기 창 · 패널(탐색기 모드)에 인덱싱 폴더 · 쪽 열기 설정을 알린다
+    // 탐색기 창 맨 아래 줄 — 벡터 채우기 진행(없으면 빈 글)
+    fn push_vec_status(&mut self) {
+        let t = self.jobs.as_ref().and_then(|j| j.pending_text()).unwrap_or_default();
+        self.browse.call("setVecStatus", json!(t));
+    }
+
     fn push_roots(&mut self) {
+        let roots = self.roots_value();
+        self.push_vec_status();
+        self.browse.call("setExcluded", json!(self.s.exclude_folders));
+        self.browse.call("setRoots", roots.clone());
+        self.browse.call("setPageClick", json!(self.s.page_click));
+        if self.panel_mode == "explorer" {
+            self.panel.call("setRoots", roots);
+            self.panel.call("setPageClick", json!(self.s.page_click));
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 인덱싱 폴더 목록 값 — 경로 · 이름 · 문서 수 + 진행(끝낸 수, 전체) · 허락 대기 새 문서 수
+    //------------------------------------------------------------------
+    fn roots_value(&mut self) -> Value {
         let mut roots = browse_win::roots_json(&self.current_folders());
         // 인덱싱 폴더마다 문서 수 — 상태 파일의 문서 키를 경로 앞부분으로 센다(파일이 그대로면 다시 읽지 않는다)
         if let Some(keys) = self.state_keys() {
@@ -344,12 +379,22 @@ impl App {
                 }
             }
         }
-        self.browse.call("setRoots", roots.clone());
-        self.browse.call("setPageClick", json!(self.s.page_click));
-        if self.panel_mode == "explorer" {
-            self.panel.call("setRoots", roots);
-            self.panel.call("setPageClick", json!(self.s.page_click));
+        // 인덱싱 중이면 진행, 한도를 넘어 기다리면 대기 수 — 끝나면 문서 수만 남는다
+        if let (Some(j), Some(arr)) = (self.jobs.as_ref(), roots.as_array_mut()) {
+            for r in arr.iter_mut() {
+                let (prog, wait) = j.root_state(r["path"].as_str().unwrap_or(""));
+                if let Some((n, total)) = prog {
+                    r["progress"] = json!([n, total]);
+                }
+                if wait > 0 {
+                    r["waiting"] = json!(wait);
+                }
+                if j.root_delete_wait(r["path"].as_str().unwrap_or("")) {
+                    r["waiting_del"] = json!(true);
+                }
+            }
         }
+        roots
     }
 
     //------------------------------------------------------------------
@@ -415,8 +460,17 @@ impl App {
             return "이미 들어 있는 폴더입니다".into();
         }
         let mut v = cur;
-        v.push(p);
-        let msg = self.set_folders(v).unwrap_or_else(|e| e);
+        v.push(p.clone());
+        let msg = match self.set_folders(v) {
+            Ok(m) => {
+                // 직접 고른 폴더는 새 문서가 많아도 묻지 않고 바로 인덱싱한다
+                if let Some(j) = self.jobs.as_mut() {
+                    j.approve_folder(&p, "폴더 추가");
+                }
+                m
+            }
+            Err(e) => e,
+        };
         self.push_roots();
         msg
     }
@@ -452,6 +506,7 @@ impl App {
                 }
                 crate::info!("browse", "찾기: {:?} (범위 {:?})", q.chars().take(40).collect::<String>(), folder);
                 let done = self.find_done.clone();
+                let mut waits = false;
                 match &self.worker {
                     None => {
                         let e = self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into());
@@ -465,6 +520,9 @@ impl App {
                             return true;
                         }
                         w.ensure_started();
+                        // 찾는 동안 · 찾은 뒤 잠깐은 벡터 채우기가 쉰다 — 연속으로 찾을 때 기다리지 않게
+                        w.note_use();
+                        waits = w.is_indexing();
                         // 조건 칩에서 끈 조건 · 넓힌 기간(메타데이터 검색 설계서 §14)을 함께 넘긴다
                         let req = json!({"q": q, "folder": folder, "off": m["off"].as_array().cloned().unwrap_or_default(),
                                          "widen": m["widen"].as_i64().unwrap_or(0)});
@@ -474,6 +532,9 @@ impl App {
                             done.lock().unwrap().push((to_browse, r));
                         }));
                     }
+                }
+                if waits {
+                    if to_browse { self.browse.call("findWaiting", Value::Null) } else { self.panel.call("findWaiting", Value::Null) }
                 }
             }
             "preview" if to_browse => {
@@ -541,6 +602,26 @@ impl App {
             "switch_mode" => {
                 let mode = if m["mode"] == "rag" { "rag" } else { "explorer" };
                 self.switch_ui_mode(mode);
+            }
+            // 탐색 창 폴더 오른쪽 클릭 — 폴더 열기(그 폴더 안을 보여 준다) · 지금 인덱싱(그 폴더만)
+            "open_folder" => {
+                let path = m["path"].as_str().unwrap_or("");
+                if let Err(e) = win::open_explorer(path) {
+                    crate::warn!("browse", "폴더 열기 실패: {} ({})", path, e);
+                    self.browse.call("error", json!(format!("폴더를 열지 못했습니다: {}", e)));
+                }
+            }
+            "index_now" => {
+                let path = m["path"].as_str().unwrap_or("");
+                if let Some(j) = self.jobs.as_mut() {
+                    j.approve_folder(path, "지금 인덱싱");
+                }
+            }
+            // 탐색 창 하위 폴더 오른쪽 클릭 — 폴더 빼기 · 폴더 다시 넣기
+            "exclude_folder" => {
+                let path = m["path"].as_str().unwrap_or("").to_string();
+                let msg = self.set_exclude(&path, m["on"].as_bool().unwrap_or(true)).unwrap_or_else(|e| e);
+                self.browse.call("notice", json!(msg));
             }
             // 탐색기 창 왼쪽 아래 [폴더 추가] · [폴더 빼기] — 설정 창과 같은 일
             "add_folder" => {
@@ -1082,6 +1163,12 @@ impl App {
             }
             "info" => self.show_info(),
             "exit" => self.quit(),
+            "add_folder" => {
+                let msg = self.add_folder_dialog();
+                if !msg.is_empty() {
+                    self.tray.notify("MoAI-S", &msg);
+                }
+            }
             _ => {}
         }
     }
@@ -1131,7 +1218,37 @@ impl App {
         }
     }
 
+    //------------------------------------------------------------------
+    // '지금 인덱싱' 을 [예] · [아니요] 창으로 묻기 — 트레이 풍선에는 단추를 넣을 수 없다
+    //=> 창은 답할 때까지 멈추므로 따로 스레드에서 띄운다. 이미 떠 있으면 하나만 둔다
+    //   ([예] 는 기다리는 폴더 전부를 넣으니 창이 둘일 까닭이 없다).
+    //   [아니요] 면 그대로 기다린다 — 문서 수가 바뀌면 다시 묻는다.
+    // -in: msg = 무엇이 기다리는지
+    //------------------------------------------------------------------
+    fn ask_index_now(&self, msg: &str) {
+        static OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if OPEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let p = self.proxy.clone();
+        let text = format!("{}\n\n지금 인덱싱할까요?", msg);
+        std::thread::spawn(move || {
+            let yes = win::ask_yes_no("MoAI-S", &text);
+            OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::info!("app", "지금 인덱싱 물음: {}", if yes { "예" } else { "아니요" });
+            if yes {
+                post(&p, UserEvent::Tray("index_now".into()));
+            }
+        });
+    }
+
     fn on_autoindex(&mut self, kind: &str, msg: &str) {
+        if kind == "ask" {
+            crate::info!("app", "자동 인덱싱 물음: {}", msg);
+            self.ask_index_now(msg);
+            self.update_tooltip();
+            return;
+        }
         if kind == "doc" {
             if self.panel.visible {
                 self.panel.notice(msg);
@@ -1294,9 +1411,14 @@ impl App {
             }
         }
         info["folders"] = json!(folders);
+        // 폴더마다 문서 수 · 진행 · 대기 — 탐색 창 폴더 목록과 같은 값
+        info["roots"] = self.roots_value();
         info["action_msg"] = json!(self.info.action_msg);
         info["folder_msg"] = json!([self.info.folder_msg.as_str(), self.icon_msg.as_str()].iter()
             .filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n"));
+        info["exts"] = json!(self.s.index_exts);
+        info["exts_default"] = json!(settings::DEFAULT_EXTS);
+        info["ext_msg"] = json!(self.info.ext_msg);
         info["ui_mode"] = json!(self.s.ui_mode);
         info["mode_msg"] = json!(self.mode_msg);
         info["page_click"] = json!(self.s.page_click);
@@ -1504,6 +1626,10 @@ impl App {
                 self.info.folder_msg = self.set_folders(v).unwrap_or_else(|e| e);
             }
             "folder_msg" => self.info.folder_msg = m["msg"].as_str().unwrap_or("").to_string(),
+            "set_exts" => {
+                let raw = m["exts"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                self.info.ext_msg = self.set_exts(&raw).unwrap_or_else(|e| e);
+            }
             // 화면 모드(탐색기 · AI) — ini 에 남기고 패널 화면을 바로 바꾼다(다시 시작 없이)
             "ui_mode" => {
                 let mode = if m["value"] == "rag" { "rag" } else { "explorer" };
@@ -1585,6 +1711,115 @@ impl App {
             Some(j) => j.roots.clone(),
             None => self.s.scope_folders.clone(),
         }
+    }
+
+    //------------------------------------------------------------------
+    // 인덱싱 확장자 바꾸기 — INI [AutoIndex] Extensions 저장, 감시 · 워커 · 자동 인덱싱에 알리기
+    //=> 워커는 시작할 때만 확장자를 읽으므로(set_flag 와 같이) 올라가 있으면 다시 올린다.
+    //   뺀 확장자의 문서는 다음 대조에서 인덱스에서 빠지고, 늘린 확장자의 문서는 들어간다.
+    // -in: raw = 공백으로 이은 확장자들
+    // -out: Ok(안내 글) / Err(사유 — 저장하지 않았다)
+    //------------------------------------------------------------------
+    fn set_exts(&mut self, raw: &str) -> Result<String, String> {
+        let (exts, bad) = settings::parse_exts(raw);
+        if !bad.is_empty() {
+            return Err(format!("확장자로 쓸 수 없습니다: {}", bad.join(" ")));
+        }
+        if exts.is_empty() {
+            return Err("확장자가 하나는 있어야 합니다".into());
+        }
+        if exts == self.s.index_exts {
+            return Ok(String::new());
+        }
+        if self.index_running() {
+            return Err("인덱싱이 돌고 있습니다 — 끝난 뒤 다시 적용하세요".into());
+        }
+        settings::save_ini_value(&self.s.ini_path, "AutoIndex", "Extensions", &exts.join(" ")).map_err(|e| {
+            crate::warn!("app", "인덱싱 확장자를 저장하지 못했다: {}", e);
+            e
+        })?;
+        crate::info!("app", "인덱싱 확장자를 바꿨다: {}", exts.join(" "));
+        self.s.index_exts = exts.clone();
+        watcher::set_exts(&exts);
+        Ok(self.apply_index_filter("인덱싱 확장자 변경", true))
+    }
+
+    //------------------------------------------------------------------
+    // 인덱싱 폴더 아래 하위 폴더 빼기 · 다시 넣기 — INI [AutoIndex] ExcludeFolders 저장, 워커 · 자동 인덱싱에 알리기
+    //=> 뺀 폴더의 문서는 다음 대조에서 인덱스에서 빠진다(원본 파일은 그대로). 다시 넣으면 처음부터 인덱싱한다.
+    //   기다리던 새 문서까지 허락한 것은 아니므로 AskAboveDocs 는 그대로 묻는다.
+    // -in: path = 하위 폴더 / on = true 면 빼기, false 면 다시 넣기
+    // -out: Ok(안내 글) / Err(사유 — 저장하지 않았다)
+    //------------------------------------------------------------------
+    fn set_exclude(&mut self, path: &str, on: bool) -> Result<String, String> {
+        let norm = |p: &str| p.trim_end_matches(['\\', '/']).to_lowercase();
+        let target = norm(path);
+        if on && !self.current_folders().iter().any(|r| target.starts_with(&format!("{}\\", norm(r)))) {
+            return Err("인덱싱 폴더의 하위 폴더만 뺄 수 있습니다".into());
+        }
+        if self.index_running() {
+            return Err("인덱싱이 돌고 있습니다 — 끝난 뒤 다시 하세요".into());
+        }
+        // 이 폴더와 그 안쪽 항목을 지운다 — 바깥 폴더를 빼면 안쪽 항목은 필요 없다
+        let mut v: Vec<String> = self.s.exclude_folders.iter().filter(|e| {
+            let low = norm(e);
+            low != target && !low.starts_with(&format!("{}\\", target))
+        }).cloned().collect();
+        if on {
+            v.push(path.trim_end_matches(['\\', '/']).to_string());
+        }
+        settings::save_ini_value(&self.s.ini_path, "AutoIndex", "ExcludeFolders", &v.join(";")).map_err(|e| {
+            crate::warn!("app", "뺀 폴더를 저장하지 못했다: {}", e);
+            e
+        })?;
+        crate::info!("app", "하위 폴더 {}: {}", if on { "빼기" } else { "다시 넣기" }, path);
+        self.s.exclude_folders = v;
+        self.push_roots();
+        Ok(self.apply_index_filter("인덱싱 폴더 변경", false))
+    }
+
+    // 인덱싱이 돌고 있는가 — 인덱싱 대상을 바꾸면 안 되는 때
+    fn index_running(&self) -> bool {
+        self.jobs.as_ref().map(|j| {
+            let st = j.short_state();
+            st.starts_with("인덱싱 중") || st.starts_with("인덱스 확인 중")
+        }).unwrap_or(false)
+    }
+
+    //------------------------------------------------------------------
+    // 인덱싱 대상(확장자 · 뺀 폴더)이 바뀐 뒤 — 워커를 다시 올리고 폴더 대조를 부탁한다
+    //=> 워커는 시작할 때만 대상을 읽으므로 올라가 있으면 다시 올린다(뜰 때 폴더를 대조한다).
+    // -in: why = 로그에 남길 사유 / approve = 다음 대조를 허락받은 것으로 칠까(jobs.filter_changed)
+    // -out: 안내 글
+    //------------------------------------------------------------------
+    fn apply_index_filter(&mut self, why: &str, approve: bool) -> String {
+        let mut restart = false;
+        if let Some(w) = &self.worker {
+            w.set_env("SIMPLERAG_INDEX_EXTS", &self.s.index_exts.join(" "));
+            w.set_env("SIMPLERAG_INDEX_EXCLUDE", &self.s.exclude_folders.join(";"));
+            if w.availability() != "down" {
+                w.unload(why);
+                w.start();
+                w.ensure_started();
+                restart = true;
+            }
+        }
+        let mut msg = "저장했습니다".to_string();
+        match self.jobs.as_mut() {
+            None => {}
+            Some(j) => {
+                j.filter_changed(&self.s, approve, !restart);
+                msg += if !j.enabled {
+                    " — 자동 인덱싱이 꺼져 있어 켜면 반영합니다"
+                } else if restart {
+                    " — 모델을 다시 올린 뒤 폴더에 반영합니다 (10초 안팎)"
+                } else {
+                    " — 폴더에 반영합니다"
+                };
+            }
+        }
+        self.update_tooltip();
+        msg
     }
 
     //------------------------------------------------------------------
@@ -1744,6 +1979,7 @@ fn main() {
         }
     };
     crate::info!("main", "RAGSearchBox-rs 시작 — 설정 {}", s.ini_path);
+    watcher::set_exts(&s.index_exts);
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy: Proxy = Arc::new(Mutex::new(event_loop.create_proxy()));
@@ -1803,7 +2039,9 @@ fn main() {
         Ok((cmd, why)) => {
             crate::info!("app", "워커 명령: {} ({})", cmd.join(" "), why);
             let p = proxy.clone();
-            let w = Worker::new(cmd.clone(), vec![("SIMPLERAG_RELEVANCE_MIN".into(), s.relevance_min.clone()), ("SIMPLERAG_EVIDENCE_FULL".into(), "1".into())],
+            let w = Worker::new(cmd.clone(), vec![("SIMPLERAG_RELEVANCE_MIN".into(), s.relevance_min.clone()), ("SIMPLERAG_EVIDENCE_FULL".into(), "1".into()),
+                                                  ("SIMPLERAG_INDEX_EXTS".into(), s.index_exts.join(" ")),
+                                                  ("SIMPLERAG_INDEX_EXCLUDE".into(), s.exclude_folders.join(";"))],
                                 Box::new(move |e| post(&p, UserEvent::Worker(e))), s.no_stream, s.start_timeout_s, s.answer_timeout_s, s.restart_max, s.idle_unload_min);
             (Some(w), None, cmd)
         }
@@ -1824,7 +2062,7 @@ fn main() {
         info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
                        syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                        ppl_msg: String::new(), ppl_done: Arc::new(Mutex::new(None)), ppl_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                       prec_msg: String::new(), mt_msg: String::new() },
+                       prec_msg: String::new(), mt_msg: String::new(), ext_msg: String::new() },
         history: history::load(&history_path),
         history_path,
         s,
@@ -1841,6 +2079,8 @@ fn main() {
         state_cache: (None, vec![]),
         last_tooltip: String::new(),
         t_tooltip: Instant::now(),
+        roots_ver: 0,
+        t_roots: Instant::now(),
         t_info: Instant::now(),
         quitting: false,
         selftest_done: false,

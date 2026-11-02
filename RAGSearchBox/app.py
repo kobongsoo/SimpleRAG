@@ -31,6 +31,7 @@ import shutil
 import query_filter
 import settings as rsb_settings
 import tray as rsb_tray
+import watcher
 from monitor import Monitor
 from rag_worker import RagWorker
 from scope import Scope
@@ -163,6 +164,9 @@ class App:
                                                     "multiturn": self._act_multiturn},
                                            suggest=self._suggest_synonyms)
 
+        # 감시도 INI 의 확장자를 따른다
+        watcher.TEXT_EXTS = set(s.index_exts)
+
         self.worker = None
         self.worker_error = None          # 실행 파일을 못 찾았을 때의 안내 문구
         cmd, why = rsb_settings.find_worker_cmd(s)
@@ -176,7 +180,9 @@ class App:
                 # 관련 근거 문턱 — 가장 가까운 근거도 동떨어졌으면 답하지 않게(워커가 읽는다)
                 env={"SIMPLERAG_RELEVANCE_MIN": s.relevance_min,
                      # 근거 [...] 팝업에 보일 전체 본문을 워커가 함께 내게 한다
-                     "SIMPLERAG_EVIDENCE_FULL": "1"})
+                     "SIMPLERAG_EVIDENCE_FULL": "1",
+                     # 인덱싱할 확장자 — [AutoIndex] Extensions
+                     "SIMPLERAG_INDEX_EXTS": " ".join(s.index_exts)})
         else:
             self.worker_error = why
             self.log.error("%s", why)

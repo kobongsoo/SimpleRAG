@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use windows::core::HSTRING;
@@ -16,10 +16,16 @@ use windows::Win32::Storage::FileSystem::*;
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent, WaitForMultipleObjects};
 use windows::Win32::System::IO::{CancelIo, GetOverlappedResult, OVERLAPPED};
 
-const TEXT_EXTS: &[&str] = &[".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".hwp", ".hwpx", ".txt", ".md", ".html", ".htm", ".py", ".ipynb"];
+// 지켜볼 확장자 — 시작할 때와 설정 창에서 바꿀 때 set_exts 로 넣는다
+static EXTS: RwLock<Vec<String>> = RwLock::new(Vec::new());
 const BUF_SIZE: usize = 64 * 1024;
 const OPEN_RETRY_S: [u64; 3] = [5, 15, 60];
 const OFFLINE_RETRY_S: u32 = 30;
+
+// 지켜볼 확장자 바꾸기 — 감시를 다시 시작하지 않아도 다음 알림부터 적용된다
+pub fn set_exts(exts: &[String]) {
+    *EXTS.write().unwrap() = exts.to_vec();
+}
 
 //------------------------------------------------------------------
 // 문서 이름인가(임시 파일 제외, 확장자)
@@ -30,7 +36,7 @@ pub fn is_doc_name(path: &str) -> bool {
         return false;
     }
     let ext = name.rfind('.').map(|i| name[i..].to_lowercase()).unwrap_or_default();
-    TEXT_EXTS.contains(&ext.as_str())
+    EXTS.read().unwrap().contains(&ext)
 }
 
 fn is_hidden(path: &str) -> bool {

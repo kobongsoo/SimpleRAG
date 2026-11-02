@@ -5,10 +5,10 @@
 <title>MoAI-S 설정</title>
 <!--
   설정 창 (Python info_window.py 와 같은 구성)
-  - 왼쪽 메뉴: 기본 · 동의어 · 사람 — 누르면 오른쪽 흰 판이 바뀐다
-  - 기본: 묶음 상자 — 모델(1초마다 새 값 · 내리기/다시 올리기 · 올리는 중 진행 막대 %) · 인덱싱 폴더 · 시작 · 대화(이어서 묻기) · 정밀 모드 · 로그 폴더
+  - 왼쪽 메뉴: 기본 · 동의어 · 이름별칭 — 누르면 오른쪽 흰 판이 바뀐다
+  - 기본: 묶음 상자 — 모델(1초마다 새 값 · 내리기/다시 올리기 · 올리는 중 진행 막대 %) · 인덱싱 폴더 · 인덱싱 확장자 · 시작 · 대화(이어서 묻기) · 정밀 모드 · 로그 폴더
   - 동의어: 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 동의어 [빼기] (동의어 설계서 4단계)
-  - 사람: 이름 별칭 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 별칭 [빼기] · "나" (메타데이터 검색 설계서 §7-2)
+  - 이름별칭: 이름 별칭 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 별칭 [빼기] · "나" (메타데이터 검색 설계서 §7-2)
   - 맨 아래 화면 열기 · 닫기
 -->
 <style>
@@ -65,11 +65,27 @@
   .syn .top button { margin: 0 0 0 4px; }
   input[type=text] { font: inherit; border: 1px solid #9aa3b2; padding: 2px 4px; width: 8em; }
   label { cursor: pointer; }
+  /* 폴더 이름을 쳐서 확인하는 창 */
+  .namebox { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(22, 24, 29, .35); }
+  .nb { width: min(420px, calc(100vw - 32px)); background: #fff; border-radius: 6px; padding: 14px 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+    display: flex; flex-direction: column; gap: 6px; }
+  .nb .nb-path { word-break: break-all; }
+  .nb label { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; cursor: default; }
+  .nb input[type=text] { width: 100%; padding: 4px 6px; }
+  .nb .nb-btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+  .nb .nb-btns button { margin: 0; }
+  .nb .nb-ok:not(:disabled) { background: #e5163f; border-color: #e5163f; color: #fff; }
+  .nb .nb-ok:hover:not(:disabled) { background: #c91236; }
+  /* 인덱싱 확장자 — 칩 하나가 확장자 하나, ✕ 로 뺀다 */
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 2px 1px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; }
+  .chip button { padding: 0 5px; margin: 0; border: 0; background: none; color: var(--sub); line-height: 1.4; }
+  .chip button:hover:not(:disabled) { background: var(--hover); color: #b91c1c; }
 </style>
 </head>
 <body>
 <div class="main">
-<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">사람</span></div></div>
+<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div></div>
 <div class="panel">
 <div id="tab_basic">
 <fieldset><legend>모델</legend>
@@ -96,6 +112,14 @@
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
   <label><input type="checkbox" id="folder_icon"> 인덱싱 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
   <div class="note" id="foldernote"></div>
+</fieldset>
+<fieldset><legend>인덱싱 확장자</legend>
+  <div class="chips" id="extchips"></div>
+  <div class="row" style="align-items:center"><input type="text" id="ext_in" placeholder=".csv" aria-label="추가할 확장자"><button id="b_ext_add" style="margin:0">추가</button>
+    <div class="grow"></div><button id="b_ext_default" style="margin:0">기본값으로</button><button id="b_ext_apply" style="margin:0" disabled>적용</button></div>
+  <div class="note">확장자를 빼면 이미 인덱싱된 그 확장자의 문서도 인덱스에서 빠집니다(원본 파일은 그대로). 다시 넣으면 처음부터 인덱싱합니다.</div>
+  <div class="note">글자로 된 파일은 어떤 확장자든 넣을 수 있습니다. 이미지 · 압축 파일처럼 글자를 뽑지 못하는 파일은 실패로 남습니다.</div>
+  <div class="note" id="extnote"></div>
 </fieldset>
 <fieldset><legend>시작</legend>
   <label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label>
@@ -154,8 +178,17 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const send = (o) => window.ipc.postMessage(JSON.stringify(o));
-let folders = null;
+let folders = null, folderSig = null;
 const UP = "모델이 올라가 있지 않음";
+
+// 폴더 뒤에 붙일 수 — " (1,444)", 인덱싱 중 " (10/311)", 허락 대기 " (16 · 대기 304)" (탐색 창 폴더 목록과 같다)
+function folderCount(r) {
+  const n = (v) => Number(v).toLocaleString();
+  if (!r) return "";
+  if (r.progress) return ` (${n(r.progress[0])}/${n(r.progress[1])})`;
+  if (r.count == null) return "";
+  return r.waiting ? ` (${n(r.count)} · 대기 ${n(r.waiting)})` : ` (${n(r.count)})`;
+}
 
 window.rsb = {
   // Rust 가 1초마다 넣어 주는 값
@@ -173,15 +206,21 @@ window.rsb = {
     $("b_reload").disabled = !(up === false);
     $("actnote").textContent = info.action_msg || "";
     const fs = info.folders || [];
-    if (JSON.stringify(fs) !== JSON.stringify(folders)) {
+    // 폴더 뒤에 문서 수 — 수가 바뀌어도 고른 줄이 풀리지 않게 바뀌었을 때만 다시 그리고 고른 폴더를 되살린다
+    const labels = fs.map((f) => f + folderCount((info.roots || []).find((r) => r.path === f)));
+    if (JSON.stringify(labels) !== folderSig) {
+      folderSig = JSON.stringify(labels);
+      const sel = $("folders"), keep = sel.value;
       folders = fs;
-      const sel = $("folders"); sel.innerHTML = "";
-      for (const f of fs) { const o = document.createElement("option"); o.textContent = f; o.value = f; sel.appendChild(o); }
+      sel.innerHTML = "";
+      fs.forEach((f, i) => { const o = document.createElement("option"); o.textContent = labels[i]; o.value = f; sel.appendChild(o); });
+      sel.value = keep;
     }
     let note = !fs.length ? "인덱싱할 폴더가 없습니다 — [추가…] 로 고르세요"
       : (info.docs == null ? "" : "인덱싱된 문서 " + Number(info.docs).toLocaleString() + "건");
     if (info.folder_msg) note = (note ? note + "\n" : "") + info.folder_msg;
     $("foldernote").textContent = note;
+    if (info.exts) syncExts(info);
     if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
     // 정밀 모드 — config.yaml 값으로 매번 맞춘다(파일을 직접 고쳐도 따라간다). 못 찾으면 잠근다
     $("precision").disabled = typeof info.precision !== "boolean";
@@ -222,6 +261,61 @@ function showLoading(st) {
   $("loadnote").textContent = "모델을 올리는 중 · " + (st.pct | 0) + "% · " + (st.sec | 0) + "초" + (d ? " — " + d : "");
 }
 
+// 인덱싱 확장자 — 칩을 고쳐도 [적용] 전에는 저장하지 않는다(적용할 때 모델을 다시 올리므로 한 번에 모아서)
+//   extSaved = 저장된 목록 · extDraft = 화면에서 고치는 목록 · extNote = 화면에서 바로 알릴 글
+let extSaved = null, extDraft = [], extDefault = [], extNote = "", extServerMsg = "";
+const sameExts = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// Rust 가 넣어 준 값에 맞추기 — 고치는 중이 아니면 화면도 저장된 목록을 따른다
+function syncExts(info) {
+  extDefault = info.exts_default || [];
+  const editing = extSaved !== null && !sameExts(extDraft, extSaved);
+  if (extSaved === null || !sameExts(info.exts, extSaved)) {
+    extSaved = info.exts;
+    if (!editing || sameExts(extDraft, extSaved)) { extDraft = extSaved.slice(); extNote = ""; }
+    drawExts();
+  }
+  if ((info.ext_msg || "") !== extServerMsg) { extServerMsg = info.ext_msg || ""; extNote = ""; }
+  $("extnote").textContent = extNote || extServerMsg;
+}
+
+function drawExts() {
+  const box = $("extchips"); box.innerHTML = "";
+  for (const e of extDraft) {
+    const c = document.createElement("span"); c.className = "chip"; c.textContent = e;
+    const x = document.createElement("button"); x.textContent = "✕"; x.title = e + " 빼기";
+    x.onclick = () => { extDraft = extDraft.filter((v) => v !== e); drawExts(); };
+    c.appendChild(x); box.appendChild(c);
+  }
+  $("b_ext_apply").disabled = sameExts(extDraft, extSaved) || !extDraft.length;
+  $("b_ext_default").disabled = sameExts(extDraft, extDefault);
+  $("extnote").textContent = extNote || extServerMsg;
+}
+
+// 칸에 친 글 → 칩 — "csv" 도 받고, 공백 · 쉼표로 여러 개를 한 번에 넣을 수 있다
+function addExts() {
+  const toks = $("ext_in").value.split(/[\s,;]+/).filter(Boolean);
+  const bad = [];
+  for (const t of toks) {
+    const e = "." + t.replace(/^\./, "").toLowerCase();
+    if (!/^\.[a-z0-9_+-]{1,15}$/.test(e)) bad.push(t);
+    else if (!extDraft.includes(e)) extDraft.push(e);
+  }
+  extNote = bad.length ? "확장자로 쓸 수 없습니다: " + bad.join(" ") : "";
+  // 잘못 친 것만 칸에 남겨 고칠 수 있게 한다
+  $("ext_in").value = bad.join(" ");
+  drawExts();
+}
+$("b_ext_add").onclick = addExts;
+$("ext_in").addEventListener("keydown", (e) => { if (e.key === "Enter") addExts(); });
+$("b_ext_default").onclick = () => { extDraft = extDefault.slice(); extNote = ""; drawExts(); };
+$("b_ext_apply").onclick = () => {
+  const gone = extSaved.filter((e) => !extDraft.includes(e));
+  if (gone.length && !confirm(gone.join(" ") + "\n\n이 확장자의 문서가 인덱스에서 빠집니다(원본 파일은 그대로).\n계속할까요?")) return;
+  extNote = "";
+  send({ type: "set_exts", exts: extDraft });
+};
+
 // 왼쪽 메뉴로 판 바꾸기 — 기본 · 동의어 · 사람
 function showTab(name) {
   for (const t of ["basic", "syn", "ppl"]) {
@@ -236,7 +330,7 @@ $("t_ppl").onclick = () => showTab("ppl");
 // 사람 탭 — 동의어 탭과 같이 바뀌었을 때만 다시 그린다
 let pplSig = null, pplListSig = null, pplPairs = [], meShown = null;
 function drawPeople(pp) {
-  $("t_ppl_text").textContent = pp.n_left ? "사람 (" + pp.n_left + ")" : "사람";
+  $("t_ppl_text").textContent = pp.n_left ? "이름별칭 (" + pp.n_left + ")" : "이름별칭";
   const ls = JSON.stringify(pp.approved || []);
   if (ls !== pplListSig) {
     pplListSig = ls; pplPairs = pp.approved || [];
@@ -339,9 +433,33 @@ $("b_remove").onclick = () => {
   const sel = $("folders");
   if (sel.selectedIndex < 0) { send({ type: "folder_msg", msg: "뺄 폴더를 목록에서 고르세요" }); return; }
   const f = folders[sel.selectedIndex];
-  if (!confirm(f + "\n\n이 폴더를 빼면 그 안 문서가 인덱스에서 빠집니다(원본 파일은 그대로).\n계속할까요?")) return;
-  send({ type: "remove_folder", folder: f });
+  confirmByName(f, "이 폴더를 빼면 그 안 문서가 인덱스에서 빠집니다(원본 파일은 그대로).", () => send({ type: "remove_folder", folder: f }));
 };
+// 폴더 이름을 똑같이 쳐야 실행하는 확인 창 — 대소문자는 가리지 않고, 맞을 때만 [폴더 빼기] 가 켜진다
+function confirmByName(path, note, onOk) {
+  const need = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  const box = document.createElement("div"); box.className = "namebox";
+  box.innerHTML = `<div class="nb"><b></b><div class="note nb-path"></div><div class="nb-note"></div><label><span></span><input type="text" spellcheck="false"></label>
+    <div class="nb-btns"><button class="nb-no">취소</button><button class="nb-ok" disabled>폴더 빼기</button></div></div>`;
+  box.querySelector("b").textContent = `"${need}" 폴더를 뺄까요?`;
+  box.querySelector(".nb-path").textContent = path;
+  box.querySelector(".nb-note").textContent = note;
+  box.querySelector("label span").textContent = `확인을 위해 폴더 이름 "${need}" 을(를) 입력하세요`;
+  const inp = box.querySelector("input"), ok = box.querySelector(".nb-ok");
+  const close = () => box.remove();
+  const go = () => { if (!ok.disabled) { close(); onOk(); } };
+  inp.oninput = () => { ok.disabled = inp.value.trim().toLowerCase() !== need.toLowerCase(); };
+  ok.onclick = go;
+  box.querySelector(".nb-no").onclick = close;
+  box.addEventListener("keydown", (e) => {
+    // Esc 가 설정 창까지 닫지 않게 막는다. 한글 조합 중 Enter 는 글자 확정이다
+    e.stopPropagation();
+    if (e.key === "Escape") close();
+    else if (e.key === "Enter" && !e.isComposing) go();
+  });
+  document.body.appendChild(box);
+  inp.focus();
+}
 $("b_rescan").onclick = () => send({ type: "rescan" });
 $("autorun").onchange = () => send({ type: "autorun" });
 $("precision").onchange = () => send({ type: "precision", on: $("precision").checked });

@@ -38,11 +38,37 @@ from ..meta import hook as meta_hook      # 문서 메타데이터(meta.sqlite)�
 
 # 인덱싱 대상 확장자. 여기 없는 것은 조용히 건너뛴다.
 #   - 이미지/압축(jpg/png/zip)은 텍스트가 없다.
-#   - ipynb 는 JSON 이라 별도 처리기로 소스/마크다운 셀만 뽑는다(extract 모듈).
+#   - 웹 문서 · 코드(.html · .htm · .py · .ipynb)는 빼기로 했다(2026-11-02) — 보고서 HTML 한 건이
+#     1만 청크를 넘고 프로그램 폴더의 코드가 검색을 흐렸다.
 TEXT_EXTS = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
-    ".hwp", ".hwpx", ".txt", ".md", ".html", ".htm", ".py", ".ipynb",
+    ".hwp", ".hwpx", ".txt", ".md", ".csv",
 }
+# 대화에 올릴 수 있는 확장자 — 사용자가 고른 문서라 인덱싱 대상보다 넓다
+#   (ipynb 는 JSON 이라 별도 처리기로 소스/마크다운 셀만 뽑는다 — extract 모듈)
+UPLOAD_EXTS = TEXT_EXTS | {".html", ".htm", ".py", ".ipynb"}
+
+
+#------------------------------------------------------------------
+# 지금 인덱싱 대상 확장자 읽기
+#=> RAGSearchBox 는 설정에서 고친 목록을 환경변수로 넘긴다. 없으면 기본값(TEXT_EXTS)이다.
+#    1) SIMPLERAG_INDEX_EXTS 를 공백 · 쉼표 · ; 로 나눈다
+#    2) 소문자로 바꾸고 앞에 점을 붙인다
+#
+# -in: 없음
+#
+# -out: exts = 확장자 집합(비지 않는다)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _load_index_exts():
+    raw = os.environ.get("SIMPLERAG_INDEX_EXTS") or ""
+    toks = raw.replace(",", " ").replace(";", " ").split()
+    exts = {"." + t.lstrip(".").lower() for t in toks if t.lstrip(".")}
+    return exts or set(TEXT_EXTS)
+
+
+# 프로세스가 사는 동안 바뀌지 않는다(값이 바뀌면 워커를 다시 띄운다)
+INDEX_EXTS = _load_index_exts()
 
 
 #------------------------------------------------------------------
@@ -58,7 +84,7 @@ def list_files(root, recursive=True):
 
     def take(path):
         nonlocal skipped
-        if os.path.splitext(path)[1].lower() in TEXT_EXTS and not is_transient(path):
+        if os.path.splitext(path)[1].lower() in INDEX_EXTS and not is_transient(path):
             files.append(path)
         else:
             skipped += 1
@@ -418,15 +444,17 @@ def _reuse_vectors(store, old_ids, hashes):
 # -in: store    = VectorStore
 # -in: ext      = build_extractor() 결과
 # -in: log      = 안내 출력 함수 fn(str)
-# -in: defer    = True 면 새로 임베딩할 청크의 벡터를 비워 둔다(단계형 인덱싱 1단계 — 자리 표시 벡터 +
-#                 vec_pending 표시, 나중에 fill_pending 이 채운다). 기본 False
+# -in: defer_over = 새로 임베딩할 청크가 fresh 까지 합쳐 이 수를 넘으면 벡터를 비워 둔다(단계형 인덱싱 1단계 —
+#                   자리 표시 벡터 + vec_pending 표시, 나중에 fill_pending 이 채운다). None 이면 미루지 않는다.
+#                   청킹이 끝나야 청크 수를 알므로 문서마다 그때 정한다 — 큰 문서 한 건도 미룰 수 있다
+# -in: fresh    = 이번 실행에서 이미 새로 임베딩하거나 미룬 청크 수(기본 0)
 # -in: prepared = 준비 스레드 결과 {chash, parsed?}(None 이면 그 자리에서 해시 · 추출 · 청킹)
 #
 # -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"), chunks, why, kept_old, n_rows, from,
 #               reused(옛 벡터를 다시 쓴 청크 수), embedded(새로 임베딩한 수), deferred(벡터 대기로 둔 수)}
 # -out: error = 추출·임베딩 실패는 ok=False 로 돌려준다. 저장소 쓰기 실패는 예외 전파
 #------------------------------------------------------------------
-def sync_doc(path, fp, state, embedder, store, ext, log=None, defer=False, prepared=None):
+def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, fresh=0, prepared=None):
     log = log or (lambda m: None)
     key = os.path.abspath(path)
     name = os.path.basename(path)
@@ -483,11 +511,13 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer=False, prepa
         reused = _reuse_vectors(store, old_ids, hashes)      # [None | (옛 벡터, 대기였나)]
         # 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 자리 표시 벡터로 둔다
         need = [c for c, r in zip(chunks, reused) if r is None]
+        # 이번 실행에서 새로 임베딩할 청크가 문턱을 넘으면 벡터는 미룬다(큰 문서가 명령 시간 한도를 넘지 않게)
+        defer = defer_over is not None and fresh + len(need) > defer_over
         if defer:
-            fresh = [store_mod.pending_vector(store.dim)] * len(need)
+            new_vecs = [store_mod.pending_vector(store.dim)] * len(need)
         else:
-            fresh = list(embedder.embed_passages(need)) if need else []
-        it = iter(fresh)
+            new_vecs = list(embedder.embed_passages(need)) if need else []
+        it = iter(new_vecs)
         vecs = np.asarray([r[0] if r is not None else next(it) for r in reused], dtype="float32")
         n_reused = len(chunks) - len(need)
     except Exception as e:
@@ -641,6 +671,31 @@ def find_removed(state, root, present, recursive=True):
 
 
 #------------------------------------------------------------------
+# 대상에서 빠진 확장자의 문서 찾기
+#=> 대상을 줄이면 예전에 넣은 문서가 인덱스에 남는다. 사고로 사라진 것이 아니라 정한 일이므로
+#   대량 삭제 확인(delete_guard)을 거치지 않고 뺀다.
+#    1) 이 폴더 아래 문서 가운데 2) 파일은 있는데 3) INDEX_EXTS 에 없는 것
+#
+# -in: state     = 상태 dict
+# -in: root      = 폴더
+# -in: recursive = 하위 폴더까지 (기본 True)
+#
+# -out: 문서 키 목록(정렬)
+# -out: error = 없음
+#------------------------------------------------------------------
+def find_dropped(state, root, recursive=True):
+    base = norm_path(root)
+    prefix = base.rstrip("\\/") + os.sep
+    out = []
+    for key in state["docs"]:
+        k = norm_path(key)
+        inside = k.startswith(prefix) if recursive else os.path.dirname(k) == base
+        if inside and os.path.splitext(key)[1].lower() not in INDEX_EXTS and os.path.exists(key):
+            out.append(key)
+    return sorted(out)
+
+
+#------------------------------------------------------------------
 # 지워도 안전한가 (자동 인덱싱 설계서 §6)
 #=> 드라이브가 빠지거나 네트워크가 끊기면 "파일이 전부 사라졌다" 로 보인다.
 #   그대로 믿고 지우면 인덱스가 통째로 날아간다.
@@ -721,7 +776,9 @@ def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=Fal
         if not ok:
             delete_blocked = why
             removed = []
-    removed = sorted(removed + dup)
+    # 대상에서 빠진 확장자의 문서도 뺀다(--rebuild 는 어차피 처음부터 다시 만든다)
+    dropped = [] if rebuild else find_dropped(state, doc_dir, recursive)
+    removed = sorted(removed + dup + dropped)
 
     return {"files": files, "skipped": skipped, "todo": todo, "removed": removed,
             "moved": moved, "delete_blocked": delete_blocked, "retry_skip": n_retry_skip}
@@ -1004,7 +1061,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
         log("  [삭제] {:<48} {:>4}청크".format(os.path.basename(key)[:46], n))
 
     # ── 추가·수정 ────────────────────────────────────
-    # 단계형 인덱싱 문턱(§3-5-6) — 이번 실행에서 새로 임베딩할 청크가 이만큼 쌓인 뒤로는 벡터를 비워 두고
+    # 단계형 인덱싱 문턱(§3-5-6) — 이번 실행에서 새로 임베딩할 청크가 이만큼을 넘으면 벡터를 비워 두고
     #   BM25 로 먼저 검색되게 한다. 문서 몇 건(자동 인덱싱)은 문턱에 닿지 않아 지금처럼 바로 임베딩한다.
     defer_over = config.DEFER_VECTORS_OVER if config.DEFER_VECTORS_OVER > 0 else None
     fresh_chunks = 0
@@ -1014,8 +1071,8 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
         for n, (path, fp) in enumerate(todo, 1):
             name = os.path.basename(path)
             prepared = prep.next() if prep else None
-            defer = defer_over is not None and fresh_chunks >= defer_over
-            r = sync_doc(path, fp, state, embedder, store, ext, log, defer=defer, prepared=prepared)
+            r = sync_doc(path, fp, state, embedder, store, ext, log, defer_over=defer_over,
+                         fresh=fresh_chunks, prepared=prepared)
             if not r["ok"]:
                 failed.append((name, r["why"] + (" (옛 버전 유지)" if r.get("kept_old") else "")))
                 continue

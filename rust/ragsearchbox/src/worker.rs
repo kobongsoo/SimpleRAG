@@ -318,7 +318,7 @@ struct Inner {
 //------------------------------------------------------------------
 pub struct Worker {
     cmd: Vec<String>,
-    env: Vec<(String, String)>,
+    env: Mutex<Vec<(String, String)>>,
     emit: Box<dyn Fn(WEvent) + Send + Sync>,
     no_stream: bool,
     start_timeout: Duration,
@@ -339,7 +339,7 @@ impl Worker {
         let utf8_stdin = cmd.first().map(|c| c.to_lowercase().contains("simplerag-rs")).unwrap_or(false);
         Arc::new(Worker {
             cmd,
-            env,
+            env: Mutex::new(env),
             emit,
             no_stream,
             start_timeout: Duration::from_secs(start_timeout_s as u64),
@@ -376,6 +376,13 @@ impl Worker {
         }).ok();
     }
 
+    // 다음에 띄울 워커의 환경변수 바꾸기 — 떠 있는 워커에는 닿지 않는다
+    pub fn set_env(&self, key: &str, value: &str) {
+        let mut g = self.env.lock().unwrap();
+        g.retain(|(k, _)| k != key);
+        g.push((key.to_string(), value.to_string()));
+    }
+
     // 모델을 올려 두라
     pub fn ensure_started(&self) {
         let mut g = self.inner.lock().unwrap();
@@ -401,6 +408,16 @@ impl Worker {
         if state == STOPPED {
             (self.emit)(WEvent::State(STARTING.into(), "모델 준비 중 (첫 질문)".into()));
         }
+    }
+
+    // 사용자가 찾기를 눌렀다 — 질문과 같이 센다. 벡터 채우기 · 키워드 색인 같은 뒷일이 비켜 주고, 유휴로 내려가지 않게
+    pub fn note_use(&self) {
+        self.inner.lock().unwrap().t_last_ask = Instant::now();
+    }
+
+    // 지금 인덱싱 명령을 처리하는 중인가 — 새 찾기는 이것이 끝난 뒤 돈다
+    pub fn is_indexing(&self) -> bool {
+        self.inner.lock().unwrap().state == INDEXING
     }
 
     // 인덱싱 명령 맡기기
@@ -551,7 +568,7 @@ impl Worker {
         crate::info!("worker", "워커 실행: {} {}", self.cmd[0], args.join(" "));
         let mut c = Command::new(&self.cmd[0]);
         c.args(&args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        for (k, v) in &self.env {
+        for (k, v) in self.env.lock().unwrap().iter() {
             c.env(k, v);
         }
         {
