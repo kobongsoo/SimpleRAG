@@ -27,6 +27,10 @@ OutputDir={#Dist}
 OutputBaseFilename=MoAISearch_PrecisionModel_Setup_{#AppVersion}
 SetupIconFile=ragsearchbox\RAGSearchBox.ico
 Compression=none
+; GitHub 릴리스는 첨부 파일 하나가 2GB 를 넘지 못한다 — 모델(2.5GB)을 1.9GB 조각(.bin)으로 나눈다.
+;   설치 파일(.exe)과 조각들을 같은 폴더에 두고 .exe 를 실행한다
+DiskSpanning=yes
+DiskSliceSize=1900000000
 WizardStyle=modern
 ; 쓰는 중인 모델 파일을 덮어쓰지 않게 앱을 끈 뒤 설치한다 — main.rs 의 MUTEX_NAME 과 같다
 AppMutex=Local\RAGSearchBox-rs
