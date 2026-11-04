@@ -36,6 +36,10 @@ NOTIFY_AT_LEAST = 3       # 이보다 적게 바뀐 묶음은 트레이로 알�
 OUTSIDE_KEY = "(지정 폴더 밖)"   # waiting_delete 에서 "지정 폴더 밖 문서" 를 가리키는 이름
 PENDING_IDLE_S = 2.0      # 벡터 채우기는 마지막 질문 뒤 이만큼 쉬었을 때만(질문이 먼저 — 인덱싱 속도 개선 설계서 §3-5-5)
 PENDING_STEP = 64         # 한 번에 채울 벡터 대기 청크 수 — 4스레드로 약 1초라 질문이 오면 1초 안에 비켜 준다
+VEC_SHOW_MIN = 500        # 이만큼 넘게 채울 때만 진행 · 완료를 알린다(문서 한 건 저장으로 상태 줄이 깜박이지 않게)
+BM25_MID_DOCS = 20        # 라운드 도중 키워드 색인 반영 — 문서 수나 시간 중 먼저 닿는 쪽(벡터 백그라운드 설계서 §7-2)
+BM25_MID_S = 30
+BM25_MID_REST = 20        # 중간 반영에 든 시간의 이 배수만큼은 쉰다(덧붙임이 커져도 문서 처리를 잡아먹지 않게)
 
 
 #------------------------------------------------------------------
@@ -76,6 +80,9 @@ class IndexJobs:
         self._queued = set()                      # 중복 방지용 (op, 정규화 경로)
         self._inflight = None                     # 보내 놓고 기다리는 일(설명 글)
         self._bm25_needed = False
+        self._bm25_mid_docs = 0                   # 마지막 키워드 색인 반영 뒤 처리한 문서 수
+        self._bm25_mid_at = time.monotonic()      # 마지막 키워드 색인 반영 시각
+        self._bm25_mid_cost = 0.0                 # 지난 중간 반영에 든 초
         # 벡터 대기 청크(단계형 인덱싱) — None 이면 아직 모름(워커가 뜨면 한 번 물어본다)
         self._vec_pending = None
         self._vec_total = 0                       # 채우기 시작할 때의 대기 수(진행 표시의 분모)
@@ -185,16 +192,15 @@ class IndexJobs:
         r = self._round
         if self._inflight or self._docs:
             if r["total"]:
-                return "인덱스 갱신 중 {}/{}".format(r["done"], r["total"])
+                return "문서 처리 중 {}/{}".format(r["done"], r["total"])
             return "인덱스 확인 중"
         if self.waiting_new:
             return "새 문서 {}건 — 트레이 '지금 인덱싱'".format(sum(self.waiting_new.values()))
         if self.waiting_delete:
             return "사라진 문서가 많아 멈춤 — 트레이 '지금 인덱싱'"
-        if self._vec_pending:
-            total = max(self._vec_total, self._vec_pending)
-            return "벡터 채우는 중 {:,} / {:,} — 지금도 검색할 수 있습니다".format(
-                total - self._vec_pending, total)
+        p = self._vec_progress()
+        if p:
+            return "검색 정확도 높이는 중 {:,} / {:,} — 지금도 검색할 수 있습니다".format(*p)
         return ""
 
     #--------------------------------------------------------------
@@ -230,13 +236,13 @@ class IndexJobs:
         if self._inflight or self._docs:
             # 바꿀 문서가 있으면 진행 수를, 대조만 하는 중이면 "확인 중" 으로 구분한다
             if r["total"]:
-                return "인덱싱 중 {}/{}".format(r["done"], r["total"])
+                return "문서 처리 중 {}/{}".format(r["done"], r["total"])
             return "인덱스 확인 중"
         if self.waiting_new or self.waiting_delete:
             return "'지금 인덱싱' 필요"
-        if self._vec_pending:
-            total = max(self._vec_total, self._vec_pending)
-            return "벡터 채우는 중 {:,}/{:,}".format(total - self._vec_pending, total)
+        p = self._vec_progress()
+        if p:
+            return "검색 정확도 높이는 중 {:,}/{:,}".format(*p)
         return ""
 
     #--------------------------------------------------------------
@@ -290,6 +296,10 @@ class IndexJobs:
             self._outside_needed = False
             self._send("/index-outside " + json.dumps({"roots": self.roots}), self._on_outside,
                        "지정 폴더 밖 문서 확인")
+            return
+        # 문서가 많을 때 — 끝까지 기다리면 처리한 문서가 어디서도 안 찾히므로 도중에 키워드 색인에 넣는다
+        if self._bm25_mid_due():
+            self._send("/bm25 " + json.dumps({"merge": False}), self._on_bm25_mid, "키워드 색인 중간 반영")
             return
         if self._docs:
             op, path, root = self._docs.popleft()
@@ -348,7 +358,8 @@ class IndexJobs:
             self.log.info("벡터 대기 청크 %d개 — 질문이 없을 때 채운다", left)
         if not left and was:
             self.log.info("벡터 채우기 끝 — %d청크", self._vec_total)
-            self.notify("info", "벡터 채우기가 끝났습니다 — 이제 일상어 질문도 원래 정확도로 찾습니다")
+            if self._vec_total >= VEC_SHOW_MIN:
+                self.notify("info", "벡터 채우기가 끝났습니다 — 이제 일상어 질문도 원래 정확도로 찾습니다")
             self._vec_total = 0
         self._vec_pending = left
 
@@ -515,7 +526,7 @@ class IndexJobs:
             return
         r = self._round
         r["done"] += 1
-        # 벡터를 미룬 큰 문서 — 차례가 끝나면 /embed-pending 으로 채운다
+        # 벡터를 미룬 문서 — 차례가 끝나면 /embed-pending 으로 채운다
         if res.get("deferred"):
             self._vec_pending = None
         result = res.get("result", "")
@@ -528,6 +539,7 @@ class IndexJobs:
         elif res.get("ok") and result in ("added", "modified", "copied", "removed"):
             # 복사본(copied)은 원본 벡터를 베껴 새 점이 생겼다 — 키워드 색인은 다시 만든다
             self._bm25_needed = True
+            self._bm25_mid_docs += 1
             r["changed"].append(name)
             label = {"added": "추가", "modified": "수정", "copied": "복사", "removed": "삭제"}[result]
             self.log.info("반영 %s: %s (%s청크, %sms)", label, path, res.get("chunks", res.get("removed", "")),
@@ -548,6 +560,8 @@ class IndexJobs:
     def _on_bm25(self, res):
         if res.get("stopped"):
             return                                  # 워커가 없으면 다음 index 명령이 만든다
+        self._bm25_mid_docs = 0
+        self._bm25_mid_at = time.monotonic()
         if res.get("ok"):
             self._bm25_needed = False
             self.log.info("키워드 색인 다시 만듦: %s청크 %sms", res.get("chunks"), res.get("ms"))
@@ -557,6 +571,58 @@ class IndexJobs:
         else:
             self._bm25_needed = False               # 같은 실패를 되풀이하지 않는다
             self.log.warning("키워드 색인 실패: %s", res.get("why"))
+
+    #--------------------------------------------------------------
+    # 벡터 채우기 진행
+    #=> 대기 청크가 없거나 소량이면 알리지 않는다.
+    #
+    # -in: 없음
+    #
+    # -out: (채운 수, 전체) 또는 None
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _vec_progress(self):
+        if not self._vec_pending:
+            return None
+        total = max(self._vec_total, self._vec_pending)
+        return (total - self._vec_pending, total) if total >= VEC_SHOW_MIN else None
+
+    #--------------------------------------------------------------
+    # 키워드 색인 중간 반영을 할 때인가
+    #=> 반영할 문서가 있고 대기열이 남았으며, 문서 수 · 시간 문턱에 닿았을 때 참.
+    #   지난 반영이 오래 걸렸으면 그 배수만큼 쉬어 처리 시간의 약 5% 안으로 묶는다.
+    #
+    # -in: 없음
+    #
+    # -out: True = 지금 /bm25 {"merge": false} 를 보낸다
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _bm25_mid_due(self):
+        if not self._bm25_needed or not self._bm25_mid_docs or not self._docs:
+            return False
+        gap = time.monotonic() - self._bm25_mid_at
+        due = self._bm25_mid_docs >= BM25_MID_DOCS or gap >= BM25_MID_S
+        return due and gap >= self._bm25_mid_cost * BM25_MID_REST
+
+    #--------------------------------------------------------------
+    # 키워드 색인 중간 반영 결과
+    #=> 라운드 끝의 합치기 · 메타 마무리는 남아 있으므로 _bm25_needed 는 그대로 둔다.
+    #
+    # -in: res = 워커 결과 {ok, chunks, mode, pending, ms}
+    #
+    # -out: 없음
+    # -out: error = 없음
+    #--------------------------------------------------------------
+    def _on_bm25_mid(self, res):
+        if res.get("stopped"):
+            return
+        self._bm25_mid_docs = 0
+        self._bm25_mid_at = time.monotonic()
+        self._bm25_mid_cost = (res.get("ms") or 0) / 1000.0
+        if res.get("ok"):
+            self.log.info("키워드 색인 중간 반영: %s청크 %sms (%s)", res.get("chunks"), res.get("ms"), res.get("mode"))
+        else:
+            self.log.warning("키워드 색인 중간 반영 실패: %s", res.get("why"))
 
     # ── 워커가 내려가 있을 때 ─────────────────────────
 

@@ -17,6 +17,7 @@
   :root {
     --bg: #f7f7f8; --surface: #ffffff; --sunken: #f1f2f4; --ink: #16181d; --ink2: #3c4049; --muted: #7a808c; --rule: #e6e8ec;
     --brand: #e5163f; --brand-soft: #fdecef; --sel: #e8eefb; --sel-bar: #2c5aa0; --hover: #f2f4f7; --link: #1f5fbf;
+    --ai-bg: #eaf0fc; --ai-line: #d3dff5;
     --mark: #ffe58a; --fs: __FONT_PX__px;
   }
   * { box-sizing: border-box; }
@@ -51,20 +52,70 @@
   .search input::placeholder { color: var(--muted); font-weight: normal; opacity: 1; }
   .search .hint { color: var(--muted); font-size: calc(var(--fs) * .82); white-space: nowrap; }
   .search .go { background: var(--brand); color: #fff; border-radius: 6px; padding: 3px 10px; font-weight: bold; }
+  .search .go, .search .clr { flex: none; white-space: nowrap; }
+  .search .clr { color: var(--ink2); border: 1px solid var(--rule); border-radius: 6px; padding: 2px 9px; background: var(--surface); }
+  .search .clr:hover { border-color: var(--brand); color: var(--brand); }
 
   /* ── 명령 모음 ── */
   .cmd { display: flex; align-items: center; gap: 4px; padding: 5px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); color: var(--ink2); }
   .cmd .b { padding: 3px 9px; border-radius: 6px; white-space: nowrap; }
   .cmd .b:hover { background: var(--hover); }
   .cmd .b.on { background: var(--sunken); }
+  /* 창 단추(미리 보기 · AI 답변창) — 켜기 전에도 찾기 쉽고, 켜지면 창과 같은 파랑 */
+  .cmd .tog { color: var(--sel-bar); font-weight: bold; box-shadow: inset 0 0 0 1px var(--ai-line); }
+  .cmd .tog:hover { background: var(--sel); }
+  .cmd .tog.on, .cmd .tog.on:hover { background: var(--sel-bar); color: #fff; box-shadow: none; }
+  /* 모두 찾기 — 검색 조건이라 창 단추(파란 채움)와 모양을 달리한 체크박스 */
+  .cmd .fa { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 6px; color: var(--sel-bar); font-weight: bold;
+    box-shadow: inset 0 0 0 1px var(--ai-line); cursor: pointer; white-space: nowrap; }
+  .cmd .fa input { margin: 0; accent-color: var(--sel-bar); }
+  .grp .tg { color: var(--sel-bar); font-weight: bold; padding: 0 4px; }
+  .grp .tg:hover { text-decoration: underline; }
+  .grp.tier { color: var(--sel-bar); }
+  /* 묶음 머리 — 파일 줄과 섞이지 않게 옅은 파란 띠 · 왼쪽 굵은 선 · 개수 알약 */
+  .grp .gh { display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; padding: 0; font: inherit; font-weight: bold; color: inherit; cursor: pointer; }
+  .grp .gh:hover .ga { background: var(--sel-bar); color: #fff; }
+  .grp .ga { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; font-size: .8em; color: var(--sel-bar); background: #fff; border: 1px solid var(--ai-line); }
+  .grp .gc { font-weight: normal; font-size: .9em; color: #fff; background: var(--sel-bar); border-radius: 999px; padding: 1px 9px; }
   .cmd select { font: inherit; color: var(--ink2); border: 1px solid var(--rule); border-radius: 6px; padding: 2px 4px; background: var(--surface); }
   .cmd .sp { flex: 1; }
   .cmd .ai { border: 1px solid var(--rule); border-radius: 999px; padding: 3px 12px; white-space: nowrap; }
   .cmd .ai:hover { border-color: var(--brand); color: var(--brand); }
+  /* 첫 실행 — 환영 화면 */
+  .msg .first { display: inline-block; text-align: left; margin-top: 6px; color: var(--ink2); }
+  .msg .first li { margin: 3px 0; }
+  .msg .pick { margin-top: 14px; padding: 8px 20px; border-radius: 8px; background: var(--sel-bar); color: #fff; font-weight: bold; font-size: 1.05em; cursor: pointer; }
+  .msg .pick:hover { filter: brightness(1.1); }
+  /* 화면 위 안내 — 네 조각 막으로 비춘 곳만 남기고(그곳은 눌러 볼 수 있다), 테두리 · 말풍선 */
+  .tm { position: fixed; z-index: 9000; background: rgba(15, 20, 28, .55); }
+  #tourring { position: fixed; z-index: 9001; border-radius: 8px; outline: 3px solid #7fb0ff; box-shadow: 0 0 0 6px rgba(127, 176, 255, .35); pointer-events: none; transition: all .18s; }
+  #tourbub { position: fixed; z-index: 9002; width: 320px; background: #fff; color: #19212d; border-radius: 10px; padding: 13px 15px 11px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .35); line-height: 1.55; }
+  #tourbub h4 { margin: 0 0 5px; font-size: 1.02em; }
+  #tourbub h4 small { color: var(--sel-bar); font-weight: bold; margin-right: 6px; }
+  #tourbub p { margin: 0 0 10px; color: #3c4656; font-size: .95em; }
+  #tourbub .bt { display: flex; align-items: center; gap: 6px; }
+  #tourbub .bt .sp { flex: 1; }
+  #tourbub .dots { display: inline-flex; gap: 4px; }
+  #tourbub .dots i { width: 7px; height: 7px; border-radius: 50%; background: #d9dee6; }
+  #tourbub .dots i.on { background: var(--sel-bar); }
+  #tourbub button { border: 1px solid #d9dee6; border-radius: 6px; padding: 3px 10px; background: #fff; color: #3c4656; cursor: pointer; }
+  #tourbub button.go { background: var(--sel-bar); border-color: var(--sel-bar); color: #fff; font-weight: bold; }
+  /* 단축키 상자 */
+  #keys { position: fixed; z-index: 9003; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 360px; background: #fff; color: #19212d;
+    border-radius: 10px; padding: 14px 16px; box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
+  #keys h4 { margin: 0 0 8px; }
+  #keys table { width: 100%; border-collapse: collapse; font-size: .95em; }
+  #keys td { padding: 4px 6px; border-bottom: 1px solid #eceff4; }
+  #keys td:first-child { white-space: nowrap; font-weight: bold; color: var(--sel-bar); }
+  #keys .bt { text-align: right; margin-top: 10px; }
+  .cmd .ai .badge { display: inline-block; min-width: 18px; margin-left: 3px; padding: 0 5px; border-radius: 999px; background: var(--brand); color: #fff;
+    font-size: .8em; font-weight: bold; text-align: center; line-height: 1.5; }
 
   /* ── 본문: 탐색 창 | 목록 | 미리 보기 ── */
   /* 창 나눔 — 탐색 창 · 미리 보기 창 너비는 사이 막대(.split)를 끌어 바꾼다(--side · --pv, 이 PC 에 기억) */
-  .main { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--side, 200px) 5px minmax(0, 1fr) 5px var(--pv, 36%); }
+  /* 행 높이를 창에 묶는다 — 없으면 긴 글 미리 보기가 행을 늘려 아래 버튼 · AI 답변창이 창 밖으로 밀려난다 */
+  .main { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: var(--side, 200px) 5px minmax(0, 1fr) 5px var(--pv, 36%); }
   .main.nopv { grid-template-columns: var(--side, 200px) 5px minmax(0, 1fr); }
   .main.nopv .pv, .main.nopv #split2 { display: none; }
   .split { cursor: col-resize; background: var(--surface); position: relative; z-index: 3; }
@@ -94,6 +145,20 @@
   @keyframes busy-blink { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(229, 22, 63, .45); }
     50% { opacity: .2; transform: scale(.75); box-shadow: 0 0 0 4px rgba(229, 22, 63, 0); } }
   @media (prefers-reduced-motion: reduce) { .side .i .cnt.busy::after { animation: none; } }
+  /* 내용 전체 보기 팝업 — 찾은 곳들의 청크 본문 */
+  .chunkbox { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(22, 24, 29, .35); outline: 0; }
+  .cb { width: calc(100vw - 24px); max-width: 720px; height: calc(100vh - 32px); background: var(--surface); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+    display: flex; flex-direction: column; min-height: 0; }
+  .cb .cb-hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+  .cb .cb-hd b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cb .cb-hd span { color: var(--muted); font-size: calc(var(--fs) * .82); flex: none; }
+  .cb .cb-hd button { margin-left: auto; flex: none; width: 26px; height: 26px; border-radius: 6px; color: var(--muted); }
+  .cb .cb-hd button:hover { background: var(--hover); color: var(--ink); }
+  .cb .cb-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 12px; position: relative; }
+  .cb section { padding: 8px 10px; margin-bottom: 8px; border-radius: 6px; background: var(--sunken); border-left: 3px solid transparent; }
+  .cb section.on { border-left-color: var(--brand); }
+  .cb h4 { margin: 0 0 4px; font-size: calc(var(--fs) * .92); color: var(--ink); }
+  .cb .cb-text { white-space: pre-wrap; word-break: break-word; line-height: 1.6; color: var(--ink2); user-select: text; }
   /* 찾는 중 — 검색창 아래로 흐르는 막대(진행률을 알 수 없다) */
   .search { position: relative; }
   .search.finding::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -6px; height: 3px; border-radius: 2px;
@@ -121,7 +186,8 @@
   .side .i .offtag { color: var(--muted); font-size: calc(var(--fs) * .82); flex: none; }
   .side .empty { color: var(--muted); padding: 3px 10px; font-size: calc(var(--fs) * .85); }
 
-  .list { overflow: auto; background: var(--surface); position: relative; }
+  .mid { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .list { flex: 1; min-height: 0; overflow: auto; background: var(--surface); position: relative; }
   /* 목록 열 — 이름·위치·내용 열은 남는 너비를 채우고, 쪽 · 관련도 · 수정한 날짜 열은 머리글 경계(.cg)를 끌어 바꾼다 */
   .cols, .r { display: grid; grid-template-columns: minmax(0, 1fr) var(--c-page, 64px) var(--c-rel, 70px) var(--c-date, 92px);
     gap: 8px; align-items: center; padding: 0 12px; }
@@ -136,7 +202,9 @@
   .cols > .hc { cursor: pointer; align-self: stretch; display: flex; align-items: center; margin: -6px 0; padding: 6px 0; }
   .cols > .hc:hover { background: var(--hover); color: var(--ink); }
   .cols > .hc.on { color: var(--ink); font-weight: bold; }
-  .grp { color: var(--muted); font-size: calc(var(--fs) * .82); padding: 10px 12px 3px; }
+  .grp { color: var(--sel-bar); font-size: calc(var(--fs) * .9); padding: 6px 12px; margin: 10px 0 4px; background: var(--ai-bg);
+    border-left: 4px solid var(--sel-bar); border-top: 1px solid var(--ai-line); border-bottom: 1px solid var(--ai-line); }
+  .grp:first-child { margin-top: 0; }
   .r { padding-top: 4px; padding-bottom: 4px; cursor: default; user-select: none; }
   .r:hover { background: var(--hover); }
   .r.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--sel-bar); }
@@ -163,36 +231,55 @@
   .msg b { color: var(--ink); }
   .msg img { width: 72px; height: 72px; object-fit: contain; background: #fff; border-radius: 20px; padding: 6px;
     box-shadow: 0 6px 18px rgba(20,24,33,.10), 0 0 0 1px var(--rule); margin-bottom: 10px; }
+  .msg img.big { width: 116px; height: 116px; border-radius: 30px; padding: 10px; margin-bottom: 14px; }
+  .msg .cpr { display: inline-flex; align-items: center; gap: 7px; margin-top: 36px; white-space: nowrap; color: #9aa3b2; font-size: calc(var(--fs) * .82); letter-spacing: .02em; }
+  .msg .cpr svg { width: 15px; height: 18px; color: #2c5aa0; opacity: .75; }
 
-  /* AI 답 카드 */
-  .ai-card { margin: 10px 12px; border: 1px solid var(--rule); border-left: 3px solid var(--brand); border-radius: 8px; padding: 8px 12px; background: var(--surface); }
-  .ai-card .hd { display: flex; gap: 8px; align-items: center; font-weight: bold; }
-  .ai-card .hd .x { margin-left: auto; color: var(--muted); }
-  .ai-card .body { white-space: pre-wrap; line-height: 1.6; margin-top: 4px; }
-  /* AI 답 근거 — 답 글의 [n] · 아래 근거 줄. 누르면 미리 보기 창에 그 근거 */
-  .ai-card .cite { color: var(--link); font-weight: bold; padding: 0 1px; border-radius: 3px; }
-  .ai-card .cite:hover, .ai-card .cite.on { background: var(--sel); }
-  .ai-card .srcs { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 8px; font-size: calc(var(--fs) * .85); }
-  .ai-card .srcs .lb { color: var(--muted); }
-  .ai-card .src { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; border: 1px solid var(--rule); border-radius: 999px;
-    padding: 1px 9px 1px 6px; background: var(--surface); }
-  .ai-card .src span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
-  .ai-card .src i { color: var(--muted); font-style: normal; }
-  .ai-card .src:hover, .ai-card .src.on { border-color: var(--sel-bar); background: var(--sel); }
-  .ai-card .ft { color: var(--muted); font-size: calc(var(--fs) * .8); margin-top: 4px; }
-
+  /* 목록 아래 가로 경계 — AI 답변창 높이를 바꾼다(--ai, 이 PC 에 기억) */
+  .split.rowy { flex: none; height: 5px; cursor: row-resize; }
+  .split.rowy::after { top: 2px; bottom: auto; left: 0; right: 0; width: auto; height: 1px; }
+  .split.rowy:hover::after, .split.rowy.drag::after { top: 1px; left: 0; width: auto; height: 3px; }
+  /* AI 답변창 — 목록과 구분되게 파란 톤 + 줄마다 카드. 빨강은 오류처럼 보여 쓰지 않는다 */
+  .aip { flex: none; height: var(--ai, 34%); min-height: 140px; overflow: auto; padding: 0 14px 10px; background: var(--ai-bg); border-top: 3px solid var(--sel-bar); line-height: 1.6; }
+  body.panel .aip { height: auto; max-height: 45%; }
+  .aip .hd { position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; padding: 8px 0 6px; background: var(--ai-bg); }
+  .tt { flex: none; padding: 2px 11px; border-radius: 999px; background: var(--sel-bar); color: #fff; font-weight: bold; white-space: nowrap; }
+  .aip .hd small { color: var(--ink2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .aip .hd .sp { flex: 1; }
+  .aip .hd button { color: var(--ink2); padding: 0 6px; border-radius: 4px; white-space: nowrap; }
+  .aip .hd button:hover { background: var(--ai-line); color: var(--sel-bar); }
+  .aip .ph2 { color: var(--ink2); padding: 10px 2px; }
+  .aip .ln { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 9px; margin: 6px 0; padding: 7px 11px; background: var(--surface);
+    border: 1px solid var(--ai-line); border-left: 3px solid var(--sel-bar); border-radius: 8px; box-shadow: 0 1px 2px rgba(44,90,160,.08); }
+  .aip .ln em { grid-column: 2; color: var(--muted); font-style: normal; font-size: calc(var(--fs) * .8); }
+  .aip .ln .dopen { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; width: 20px; height: 20px; margin-left: 6px; padding: 0;
+    border: 1px solid var(--ai-line); border-radius: 5px; background: var(--surface); color: var(--sel-bar); cursor: pointer; }
+  .aip .ln .dopen:hover { background: var(--sel-bar); border-color: var(--sel-bar); color: #fff; }
+  .aip .ln .ex { color: #8a5a00; background: #fff3d6; font-style: normal; font-size: calc(var(--fs) * .8); border-radius: 4px; padding: 1px 5px; }
+  .aip .ln .wr { color: var(--sel-bar); animation: aiwrite 1.2s ease-in-out infinite; }
+  @keyframes aiwrite { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .aip .ln .wr { animation: none; } }
+  .aip .cite { min-width: 22px; height: 22px; line-height: 22px; align-self: start; margin-top: 1px; padding: 0 5px; border-radius: 6px; background: var(--sel-bar); color: #fff; font-weight: bold; text-align: center; }
+  .aip .cite:hover { filter: brightness(1.15); }
+  .aip .cite.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sel-bar); }
+  .aip .er { color: #b4462f; margin-top: 4px; }
+  .aip .ft { color: var(--ink2); font-size: calc(var(--fs) * .8); margin-top: 8px; }
+  .aip .ft button { color: var(--link); font-size: inherit; }
   /* 미리 보기 창 */
-  .pv { border-left: 1px solid var(--rule); background: var(--sunken); display: flex; flex-direction: column; min-width: 0; }
-  .pv .ph { display: flex; gap: 8px; align-items: center; padding: 8px 10px 6px; color: var(--ink2); font-size: calc(var(--fs) * .85); }
+  /* AI 답변창과 같은 틀 — 파란 띠 · 알약 제목 · 흰 카드. PDF 는 #pvframe 자리에 뜬다 */
+  .pv { border-left: 1px solid var(--rule); border-top: 3px solid var(--sel-bar); background: var(--ai-bg); display: flex; flex-direction: column; min-width: 0; }
+  .pv .ph { display: flex; gap: 8px; align-items: center; padding: 8px 12px 6px; color: var(--ink2); }
+  .pv .ph #pvx { color: var(--ink2); padding: 0 6px; border-radius: 4px; }
+  .pv .ph #pvx:hover { background: var(--ai-line); color: var(--sel-bar); }
   .pv .ph .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
-  #pvframe { flex: 1; margin: 0 10px; background: var(--surface); border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.12); overflow: auto; min-height: 0; }
+  #pvframe { flex: 1; margin: 0 12px; background: var(--surface); border: 1px solid var(--ai-line); border-radius: 8px; box-shadow: 0 1px 2px rgba(44,90,160,.08); overflow: auto; min-height: 0; }
   #pvtext { padding: 12px 14px; white-space: pre-wrap; line-height: 1.7; font-size: calc(var(--fs) * .92); }
   #pvtext .sec { font-weight: bold; margin-bottom: 6px; color: var(--ink2); }
   #pvtext .note { color: var(--muted); font-size: calc(var(--fs) * .8); margin-top: 10px; }
-  .pv .empty { color: var(--muted); padding: 30px 14px; text-align: center; }
-  .pv .acts { display: flex; gap: 6px; padding: 8px 10px 10px; }
-  .pv .acts button { flex: 1; border: 1px solid var(--rule); border-radius: 6px; padding: 5px 0; background: var(--surface); color: var(--ink2); }
-  .pv .acts button.p { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: bold; }
+  .pv .empty { color: var(--ink2); padding: 30px 14px; text-align: center; }
+  .pv .acts { display: flex; gap: 6px; padding: 8px 12px 10px; }
+  .pv .acts button { flex: 1; border: 1px solid var(--ai-line); border-radius: 6px; padding: 5px 0; background: var(--surface); color: var(--sel-bar); }
+  .pv .acts button.p { background: var(--sel-bar); border-color: var(--sel-bar); color: #fff; font-weight: bold; }
   .pv .acts button:disabled { opacity: .45; cursor: default; }
 
   /* 상태 표시줄 */
@@ -205,6 +292,12 @@
   .st #stvec::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: 1px;
     background: var(--brand); animation: busy-blink 1s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .st #stvec::before { animation: none; } }
+  /* 모델 준비 진행 — 목록 위 띠. 검색 결과를 그려도 지워지지 않고, 맨 아래 줄과 달리 놓치지 않는다 */
+  #loadband { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--rule); background: var(--surface); }
+  #loadband.hidden { display: none; }
+  #loadband b { white-space: nowrap; }
+  #loadbar { flex: 1; min-width: 80px; height: 10px; accent-color: var(--brand); }
+  #loadtxt { color: var(--muted); white-space: nowrap; }
 
   /* 오른쪽 클릭 메뉴 */
   #menu { position: fixed; z-index: 30; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 4px;
@@ -336,30 +429,48 @@
     <button class="navbtn" id="again" title="다시 찾기 (F5)">⟳</button>
     <div class="crumb" id="crumb"></div>
     <div class="search"><span>🔍</span><input id="q" placeholder="예: 작년 내가 작성한 AI 제안서 찾아줘." autocomplete="off" spellcheck="false">
-      <span class="hint">Enter 찾기 · Shift+Enter AI 답</span><button class="go" id="go">찾기</button></div>
+      <span class="hint">Enter 찾기</span><button class="go" id="go">찾기</button><button class="clr" id="clr">초기화</button></div>
   </div>
   <div class="cmd">
     <span>선택</span>
     <select id="group"><option value="doc">문서별</option><option value="page">쪽 목록</option></select>
     <span style="margin-left:6px">정렬</span>
     <select id="sort"><option value="score">관련도</option><option value="name">이름</option><option value="date">수정한 날짜</option></select>
-    <button class="b on" id="pvtoggle" title="미리 보기 창 (Alt+P)">◫ 미리 보기 창</button>
+    <label class="fa" id="fawrap" title="상위 20개로 자르지 않고, 검색어가 들어 있는 문서를 모두 보여 줍니다"><input type="checkbox" id="findall" checked> 모두 찾기</label>
+    <button class="b tog on" id="pvtoggle" title="미리 보기 창 (Alt+P)">◫ 미리 보기 창</button>
+    <button class="b tog" id="aitoggle" title="AI 답변창 — 찾은 문서를 정리해 줍니다 (Alt+A)">✦ AI 답변창</button>
     <span class="sp"></span>
-    <button class="ai" id="askai" title="같은 검색어로 AI 답 받기 (Shift+Enter)">✦ AI에게 묻기</button>
     <button class="ai" id="toai" title="채팅 모드로 바꾸기 — 탐색기 옆 대화 패널에서 AI 가 문서를 근거로 답합니다">💬 채팅 모드</button>
+    <button class="ai" id="toset" title="설정 — 검색 폴더 · 인덱싱 · AI 모델 · 화면">⚙ 설정</button>
+    <button class="ai" id="tohelp" title="도움말 — 사용 안내 다시 보기 · 사용 설명서 · 단축키">?</button>
   </div>
   <div class="chips hidden" id="chips"></div>
+  <div class="hidden" id="loadband"><b>AI 모델 준비 중</b><progress id="loadbar" max="100" value="0"></progress><span id="loadtxt"></span></div>
   <div class="main" id="main">
     <div class="side" id="side"></div>
     <div class="split" id="split1" title="끌어서 탐색 창 너비 바꾸기 (두 번 누르면 처음대로)"></div>
-    <div class="list" id="list"></div>
+    <div class="mid" id="mid">
+      <div class="list" id="list"></div>
+      <div class="split rowy hidden" id="split3" title="끌어서 AI 답변창 높이 바꾸기 (두 번 누르면 처음대로)"></div>
+      <div class="aip hidden" id="aip"></div>
+    </div>
     <div class="split" id="split2" title="끌어서 미리 보기 창 너비 바꾸기 (두 번 누르면 처음대로)"></div>
     <div class="pv" id="pv">
-      <div class="ph"><span class="t" id="pvtitle">미리 보기</span><span id="pvpage"></span></div>
-      <div id="pvframe"><div class="empty" id="pvempty">쪽을 고르면 여기에 그 쪽을 보여 줍니다.</div><div id="pvtext" class="hidden"></div></div>
-      <div class="acts"><button class="p" id="pvopen" disabled>열기 ↗</button><button id="pvreveal" disabled>폴더 열기</button></div>
+      <div class="ph"><span class="tt">◫ 미리 보기</span><span class="t" id="pvtitle"></span><span id="pvpage"></span><button id="pvx" title="닫기">✕</button></div>
+      <div id="pvframe"><div class="empty" id="pvempty">쪽을 클릭하면 여기에 그 내용이 보여 줍니다.</div><div id="pvtext" class="hidden"></div></div>
+      <div class="acts"><button class="p" id="pvopen" disabled>문서 열기 ↗</button><button id="pvreveal" disabled>폴더 열기</button></div>
     </div>
   </div>
+  <div id="keys" class="hidden"><h4>단축키</h4><table>
+    <tr><td>Enter</td><td>찾기</td></tr>
+    <tr><td>Ctrl+F · F3</td><td>검색창으로</td></tr>
+    <tr><td>F5</td><td>같은 검색어로 다시 찾기</td></tr>
+    <tr><td>Alt+P</td><td>미리 보기 창 켜기 · 끄기</td></tr>
+    <tr><td>Alt+A</td><td>AI 답변창 켜기 · 끄기</td></tr>
+    <tr><td>Alt+← · Alt+→ · Alt+↑</td><td>뒤로 · 앞으로 · 위 폴더</td></tr>
+    <tr><td>쪽 한 번 · 두 번 누르기</td><td>미리 보기 · 문서 열기</td></tr>
+    <tr><td>오른쪽 클릭</td><td>문서 · 폴더 메뉴</td></tr>
+  </table><div class="bt"><button id="keysx">닫기</button></div></div>
   <div class="st"><span id="st1">찾을 내용을 쓰고 Enter</span><span id="st2"></span><span id="st3"></span><span id="stvec" class="hidden"></span><span class="sp"></span><span id="st4"></span></div>
 </div>
 
@@ -372,10 +483,11 @@
     <button class="ibtn" id="big" title="크게 보기 — MoAI 탐색기 창">⤢</button>
     <button class="ibtn" id="pclose" title="닫기 (Esc)">✕</button>
   </div>
-  <div class="psearch"><div class="search"><span>🔍</span><input id="pq" placeholder="예: 작년 내가 작성한 AI 제안서" autocomplete="off" spellcheck="false"><button class="go" id="pgo">찾기</button></div></div>
+  <div class="psearch"><div class="search"><span>🔍</span><input id="pq" placeholder="예: 작년 내가 작성한 AI 제안서" autocomplete="off" spellcheck="false"><button class="go" id="pgo">찾기</button><button class="clr" id="pclr">초기화</button></div></div>
   <div class="chips hidden" id="pchips"></div>
   <div class="cards" id="cards"></div>
-  <div class="st"><span id="pst1">이 폴더(하위 포함)에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)">✦ AI에게 묻기</button></div>
+  <div class="aip hidden" id="paip"></div>
+  <div class="st"><span id="pst1">이 폴더(하위 포함)에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)" title="찾은 문서를 정리해 줍니다">✦ AI 답변창</button></div>
 </div>
 
 <div id="menu" class="hidden"></div>
@@ -388,11 +500,17 @@ const send = (o) => window.ipc.postMessage(JSON.stringify(o));
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const base = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const isPdf = (p) => /\.pdf$/i.test(p || "");
+// 열기 단추 글 — 쪽으로 바로 갈 수 있는 것은 PDF 뿐이다(Office · 한글은 쪽 지정 인자가 없어 파일만 연다)
+const openLabel = (path, page) => (isPdf(path) && page != null ? `${page}쪽 열기` : "문서 열기");
 
 // ── 상태 ─────────────────────────────────────────────────
 let roots = [];          // 인덱싱 폴더 [{path, name, drive}]
 let excluded = [];       // 인덱싱에서 뺀 하위 폴더 경로들([AutoIndex] ExcludeFolders)
 let scope = null;        // 찾는 범위 폴더(null = 인덱싱 폴더 전체)
+let scopeWant = null;
+let candN = 0;
+let firstRun = false;    // 검색 폴더가 하나도 없는 첫 실행 — 처음 화면 대신 환영 화면(앱이 setFirstRun 으로 알려 준다)
+let manualOk = false;    // 설치 폴더에 사용 설명서가 있나 — 없으면 [?] 메뉴의 설명서 줄을 흐린다           // 고를 사전 후보 수(동의어 + 이름 별칭) — 앱이 setCandCount 로 알려 준다    // 되살릴 지난 검색 폴더 — 폴더 목록(setRoots)이 와야 맞는지 안다
 let lastQ = "";          // 마지막으로 찾은 검색어
 let docs = [];           // 결과 문서 [{meta, pages:[…]}]
 let done = null;         // @find_done
@@ -405,8 +523,21 @@ let openDirs = new Set();
 let hist = [], histPos = -1;   // 뒤로 · 앞으로 (검색어 · 범위)
 let pageClick = "preview";
 let pendingSelect = null;      // 크게 보기로 넘어온 쪽(결과가 오면 고른다)
+// 지난 실행의 화면 상태 — 앱이 INI [UI] BrowseState 를 읽어 넣는다(처음 실행이면 비어 있다)
+//   웹 화면의 localStorage 는 HTML 글로 띄운 창에서 막힐 수 있어(실측) 앱 설정 파일에 둔다
+const UI_SAVED = (() => { try { const v = __UISTATE__; return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } })();
 let pvShown = true;
-let ai = null;                 // AI 답 카드 {q, text, ev, info, err}
+let findAll = true;            // 모두 찾기(기본 켬) — 설정 [UI] FindAll 을 앱이 setFindAll 로 알려 준다
+let grpShut = new Set();       // 접은 묶음 머리 — 새 찾기마다 "검색어 일부 포함"만 접는다(①이 0개면 펼친다)
+let pagesAsked = new Set();    // 나머지 쪽 줄을 이미 부탁한 문서
+let aiOn = false;              // AI 답변창이 켜져 있나 — 시작할 때 지난 상태(처음이면 켬)로 맞춘다
+let ai = null;                 // 지금 정리 {key, q, text, items, info, err, done, stopped, pick, empty}
+let briefBusy = false;         // 워커가 정리를 쓰는 중이다
+let briefDrop = false;         // 멈추라고 했다 — 끝남 사건까지 그 정리의 글은 버린다
+let briefNext = false;         // 끝남 사건이 오면 지금 목록을 다시 정리한다
+let briefTimer = 0;
+const briefCache = new Map();  // 끝난 정리 — 표식 → ai
+let idxNote = null;            // 마지막 검색 결과를 보낼 때의 인덱싱 단계 {stage, n, total}
 let busy = false;
 // 조건 칩 상태 — 같은 검색어 안에서만 유지(새 검색어면 지운다)
 //   off = 끈 조건 종류 · widen = 기간을 넓힌 햇수 · labels = 끈 칩을 다시 보이려고 기억한 글
@@ -415,14 +546,24 @@ const CHIP_ICON = { person: "👤", date: "📅", format: "📄", recv: "📨", 
 
 // 최근 검색 — 이 PC 의 이 화면에만 남긴다(지워져도 동작에는 영향 없음)
 //   HTML 글로 띄운 화면은 localStorage 가 막혀 있을 수 있어(실측) 메모리 목록을 함께 둔다
-let recentMem = [];
-function recent() {
-  try { const v = JSON.parse(localStorage.getItem("moai.recent") || "null"); if (Array.isArray(v)) return v; } catch (e) { /* 막힘 */ }
-  return recentMem;
-}
+let recentMem = Array.isArray(UI_SAVED.recent) ? UI_SAVED.recent.filter((x) => typeof x === "string").slice(0, 8) : [];
+function recent() { return recentMem; }
 function remember(q) {
   recentMem = [q].concat(recent().filter((x) => x !== q)).slice(0, 8);
-  try { localStorage.setItem("moai.recent", JSON.stringify(recentMem)); } catch (e) { /* 저장 못 해도 그만 */ }
+  saveUi();
+}
+
+//------------------------------------------------------------------
+// 화면 상태 저장 — 바뀔 때마다 잠깐 모았다가 앱에 넘긴다(INI [UI] BrowseState)
+//   미리 보기 창 · AI 답변창 켜짐, 묶기 · 정렬, 창 나눔 · 열 너비, 최근 검색. 탐색기 창에서만 쓴다
+//------------------------------------------------------------------
+let uiTimer = 0;
+function saveUi() {
+  if (LAYOUT !== "window") return;
+  clearTimeout(uiTimer);
+  uiTimer = setTimeout(() => send({ type: "ui_state", state: {
+    pv: pvShown, ai: aiOn, group: $("group").value, sort: $("sort").value, asc: sortAsc, lay, recent: recentMem, scope,
+  } }), 400);
 }
 
 // ── 찾기 ─────────────────────────────────────────────────
@@ -445,6 +586,8 @@ function setFindBusy(on) {
 function runFind(q, push) {
   q = (q || "").trim();
   if (!q || busy) return;
+  // 워커는 한 번에 한 일만 한다 — 쓰던 정리를 멈춰야 찾기가 기다리지 않는다
+  stopBrief();
   // 다른 검색어면 조건 칩에서 고친 것을 버린다
   if (q !== cond.q) cond = { q, off: [], widen: 0, labels: {} };
   lastQ = q;
@@ -457,17 +600,56 @@ function runFind(q, push) {
   }
   remember(q);
   setStatus("찾는 중…");
-  send({ type: "find", q, folder: scope, off: cond.off, widen: cond.widen });
+  send({ type: "find", q, folder: scope, off: cond.off, widen: cond.widen, all: LAYOUT === "window" && findAll });
   drawNav();
 }
 
+// [초기화] — 검색어 · 결과 · AI 정리 · 조건 칩 · 미리 보기를 지우고 처음 화면으로. 찾는 범위(폴더)는 그대로 둔다
+//   찾는 중이었으면 늦게 온 결과는 검색어가 달라 onResults 가 버린다
+function resetFind() {
+  setFindBusy(false);
+  stopBrief();
+  lastQ = ""; docs = []; done = null; ai = null; selIdx = -1; pendingSelect = null;
+  briefCache.clear();
+  openDocs.clear(); moreDocs.clear(); cardPick = {};
+  cond = { q: "", off: [], widen: 0, labels: {} };
+  const inp = $(LAYOUT === "window" ? "q" : "pq");
+  inp.value = "";
+  render();
+  redrawAi();
+  drawChips();
+  if (LAYOUT === "window") {
+    setStatus("찾을 내용을 쓰고 Enter");
+    $("st3").textContent = ""; $("st4").textContent = "";
+    pvTarget = null;
+    send({ type: "preview_hide" });
+    $("pvtitle").textContent = ""; $("pvtitle").title = ""; $("pvpage").textContent = "";
+    $("pvopen").textContent = "문서 열기 ↗"; $("pvopen").disabled = true; $("pvreveal").disabled = true;
+    $("pvtext").classList.add("hidden"); $("pvempty").classList.remove("hidden");
+  } else {
+    setStatus("이 폴더(하위 포함)에서 찾습니다");
+  }
+  inp.focus();
+}
+
 // Rust 가 /find 결과를 넘긴다
+// 결과가 비었을 때 글 — 인덱싱이 끝나지 않았으면 "없다" 가 아니라 "아직 안 들어왔다" 고 알린다
+function noResultMsg(q, more) {
+  const n = idxNote;
+  if (n && n.stage === "model") return `<b>AI 모델을 준비하고 있습니다</b><br>끝나면 인덱싱을 시작하고, 그 뒤에 찾을 수 있습니다.`;
+  if (n && n.total) return `<b>아직 인덱싱 중입니다</b> (${fmtN(n.n)} / ${fmtN(n.total)})<br>끝나면 더 많은 문서를 찾을 수 있습니다.`;
+  if (n) return `<b>문서를 확인하고 있습니다</b><br>끝나면 다시 찾아 보세요.`;
+  return `<b>"${esc(q)}"</b> 와 맞는 문서를 찾지 못했습니다.${more}`;
+}
+
 function onResults(r) {
   setFindBusy(false);
   if (!r || r.q !== lastQ) { /* 지난 검색의 늦은 결과는 버린다 */ if (r && r.q) return; }
+  idxNote = (r && r.indexing) || null;
   if (!r.ok) {
     docs = []; done = null;
     drawChips();
+    ai = null; redrawAi();
     showMessage("<b>찾지 못했습니다</b><br>" + esc((r.done && r.done.error) || r.why || "워커가 응답하지 않았습니다"));
     setStatus((r.done && r.done.error) || r.why || "찾지 못함", true);
     return;
@@ -484,6 +666,10 @@ function onResults(r) {
     }
   }
   done = r.done || {};
+  // 모두 찾기를 부탁했는데 모르는 워커(옛 빌드)면 체크박스를 숨기고 지금처럼 쓴다
+  if (LAYOUT === "window" && findAll && !done.all) $("fawrap").classList.add("hidden");
+  grpShut = new Set(done.tiers && done.tiers[0] > 0 ? ["t2"] : []);
+  pagesAsked = new Set();
   drawChips();
   openDocs = new Set();
   moreDocs = new Set();
@@ -491,6 +677,7 @@ function onResults(r) {
   if (first) openDocs.add(first.meta.doc_path);
   selIdx = -1;
   render();
+  scheduleBrief();
   // 크게 보기로 넘어온 쪽이 있으면 그 줄을, 아니면 첫 쪽 줄을 고른다
   let target = -1;
   if (pendingSelect) {
@@ -506,10 +693,10 @@ function status() {
   if (!done) return;
   const places = docs.reduce((n, d) => n + d.pages.length, 0);
   const sec = done.ms != null ? (done.ms / 1000).toFixed(2) + "초" : "";
-  const sc = scope ? base(scope) : "인덱싱 폴더 전체";
+  const sc = scope ? base(scope) : "검색 폴더 전체";
   const sd = done.scope_docs != null ? `(문서 ${done.scope_docs}개)` : "";
   if (LAYOUT === "window") {
-    $("st1").textContent = `문서 ${docs.length}개 · 위치 ${places}곳`;
+    $("st1").textContent = `문서 ${docs.length}개 · 위치 ${done.all && done.places != null ? done.places : places}곳`;
     $("st1").classList.remove("err");
     $("st2").textContent = sec ? "검색 " + sec : "";
     $("st3").textContent = `범위: ${sc}${sd}`;
@@ -571,12 +758,18 @@ function marked(text, marks) {
   }
   return out + esc(ch.slice(at).join(""));
 }
+// 관련도 막대 구간 — 5칸 · 4칸 · 3칸 · 2칸의 최저 리랭커 점수(그 아래는 1칸). 쓰면서 조정할 제안값이다
+const REL_BARS = [5, 3, 1, -2];
 function bars(score, low) {
-  // 리랭커 점수 숫자는 뜻이 없으므로 1등 문서 기준 5칸 막대로(점수 2 차이마다 한 칸)
-  const top = docs.reduce((m, d) => (d.meta.score != null && d.meta.score > m ? d.meta.score : m), -1e9);
-  let n = score == null ? 1 : Math.max(1, Math.min(5, Math.round(5 - (top - score) / 2)));
-  if (low) n = 1;
-  let h = '<span class="rel">';
+  // 리랭커 점수의 절대 구간으로 5칸 막대 — 결과가 전부 나쁘면 1등도 낮게 보이도록. 수치는 마우스를 올리면 보인다
+  //   -50 아래는 리랭킹하지 않은 후보다(find.rs 가 순서만 잡으려고 -100 대 값을 준다)
+  const unscored = score != null && score < -50;
+  const at = REL_BARS.findIndex((v) => score >= v);
+  const n = score == null || unscored || low || at < 0 ? 1 : 5 - at;
+  const tip = score == null ? "관련도 수치 없음 — 이름 · 조건으로 찾은 문서"
+    : unscored ? "관련도 채점 안 됨 — 앞쪽 후보만 채점합니다"
+    : `관련도 ${Number(score).toFixed(2)}${low ? " (낮음)" : ""}`;
+  let h = `<span class="rel" title="${esc(tip)}">`;
   for (let i = 0; i < 5; i++) h += `<i class="${i < n ? "f" : ""}"></i>`;
   return h + "</span>";
 }
@@ -644,12 +837,16 @@ function sortBy(k) {
   if ($("sort").value === k) sortAsc = !sortAsc;
   else { $("sort").value = k; sortAsc = SORT_ASC_DEF[k]; }
   render();
+  saveUi();
 }
+// 환영 화면의 [검색 폴더 고르기] — 왼쪽 아래 [＋ 폴더 추가] 와 같은 일(목록이 다시 그려져도 듣도록 문서에 건다)
+document.addEventListener("click", (e) => {
+  if (e.target.closest && e.target.closest("[data-firstpick]")) send({ type: "add_folder" });
+});
 function showMessage(html) {
   const box = LAYOUT === "window" ? $("list") : $("cards");
-  box.innerHTML = aiCard() + `<div class="msg">${html}</div>`;
+  box.innerHTML = `<div class="msg">${html}</div>`;
   rows = [];
-  bindAi();
 }
 
 // ── 그리기: 독립 창 목록 ─────────────────────────────────
@@ -658,7 +855,7 @@ function render() {
   rows = [];
   const L = $("list");
   if (!docs.length) {
-    showMessage(lastQ ? `<b>"${esc(lastQ)}"</b> 와 맞는 문서를 찾지 못했습니다.<br>다른 말로 바꾸거나 범위를 넓혀 보세요.` : welcome());
+    showMessage(lastQ ? noResultMsg(lastQ, "<br>다른 말로 바꾸거나 범위를 넓혀 보세요.") : welcome());
     return;
   }
   // 머리글 경계(.cg)를 끌면 오른쪽 열 너비가 바뀐다 — 이름 · 위치 · 내용 열은 남는 너비를 채운다
@@ -667,46 +864,71 @@ function render() {
   const sk = sortKey();
   // 정렬 칸 — 칸(span) 전체에 data-sort 를 건다. 경계 손잡이(.cg)는 누름을 칸으로 넘기지 않는다
   const hc = (k, label, grip) => `<span class="hc ${sk === k ? "on" : ""}" data-sort="${k}" title="눌러서 ${label} 순으로 정렬 (다시 누르면 반대로)">${grip || ""}${label}${sk === k ? (sortAsc ? " ▲" : " ▼") : ""}</span>`;
-  let h = aiCard() + `<div class="cols">${hc("name", "이름 · 위치 · 내용")}<span>${cg("page")}쪽</span>${hc("score", "관련도", cg("rel"))}${hc("date", "수정한 날짜", cg("date"))}</div>`;
+  let h = `<div class="cols">${hc("name", "이름 · 위치 · 내용")}<span>${cg("page")}쪽</span>${hc("score", "관련도", cg("rel"))}${hc("date", "수정한 날짜", cg("date"))}</div>`;
   const byName = docs.filter((d) => d.meta.name_hit);
   const content = docs.filter((d) => d.pages.length);
   // 조건만 있는 질의(본문 검색어 없음) — 조건에 맞는 문서 줄만 온다
   const byMeta = docs.filter((d) => d.meta.meta_hit && !d.pages.length && !d.meta.name_hit);
   const places = content.reduce((n, d) => n + d.pages.length, 0);
+  // 묶음 머리 — 누르면 접고 펼친다. 접힌 묶음은 줄을 그리지 않는다
+  const head = (key, label, n, unit, cls, extra) => `<div class="grp ${cls || ""}"><button class="gh" data-grp="${key}" title="눌러서 ${grpShut.has(key) ? "펼치기" : "접기"}">`
+    + `<span class="ga">${grpShut.has(key) ? "▸" : "▾"}</span>${label}<span class="gc">${unit || `문서 ${n}개`}</span></button>${extra || ""}</div>`;
+  const open = (key) => !grpShut.has(key);
   if ($("group").value === "page") {
-    // 쪽 목록 — 모든 쪽 줄을 관련도 순으로 한 줄씩(문서 이름을 함께)
+    // 쪽 목록 — 모든 쪽 줄을 관련도 순으로 한 줄씩(문서 이름을 함께). 모두 찾기면 나머지 쪽도 가져온다
+    askPages(content.filter((d) => d.meta.pages_left > 0).map((d) => d.meta.doc_path));
     const all = [];
     for (const d of content) for (const p of d.pages) all.push({ d, p });
     // 정렬 기준을 따른다 — 관련도는 쪽 점수, 이름 · 날짜는 그 쪽의 문서(같으면 쪽 점수 높은 것부터)
     const pv = ({ d, p }) => sk === "name" ? d.meta.doc_name : sk === "date" ? d.meta.mtime || null : p.score;
     all.sort((a, b) => cmpBy(pv(a), pv(b), sortAsc) || cmpBy(a.p.score, b.p.score, false));
-    h += `<div class="grp">내용 일치 — 위치 ${all.length}곳</div>`;
-    for (const { d, p } of all) h += pageRow(d, p, true);
+    h += head("pg", "내용 일치", 0, `위치 ${all.length}곳`);
+    if (open("pg")) for (const { d, p } of all) h += pageRow(d, p, true);
   } else {
     if (byMeta.length) {
-      h += `<div class="grp">조건 일치 (${byMeta.length})</div>`;
-      for (const d of sortedDocs(byMeta)) h += docRow(d, true, "조건 일치");
+      h += head("meta", "조건 일치", byMeta.length);
+      if (open("meta")) for (const d of sortedDocs(byMeta)) h += docRow(d, true, "조건 일치");
     }
     if (byName.length) {
-      h += `<div class="grp">파일 이름 일치 (${byName.length})</div>`;
-      for (const d of sortedDocs(byName)) h += docRow(d, true);
+      h += head("name", "파일 이름 일치", byName.length);
+      if (open("name")) for (const d of sortedDocs(byName)) h += docRow(d, true);
     }
-    if (content.length) {
-      h += `<div class="grp">내용 일치 — 문서 ${content.length}개 · 위치 ${places}곳</div>`;
-      for (const d of sortedDocs(content)) {
-        h += docRow(d, false);
-        if (!openDocs.has(d.meta.doc_path)) continue;
-        const pgs = sortedPages(d);
-        const show = moreDocs.has(d.meta.doc_path) ? pgs : pgs.slice(0, 3);
-        for (const p of show) h += pageRow(d, p, false);
-        if (d.pages.length > show.length) {
-          h += `<div class="more"><button data-more="${esc(d.meta.doc_path)}">＋ ${d.pages.length - show.length}곳 더 보기</button></div>`;
-        }
+    // 문서와 펼친 쪽 줄 — 남은 쪽(모두 찾기 pages_left)도 더 보기 수에 넣는다
+    const docBlock = (d) => {
+      let b = docRow(d, false);
+      if (!openDocs.has(d.meta.doc_path)) return b;
+      const pgs = sortedPages(d);
+      const show = moreDocs.has(d.meta.doc_path) ? pgs : pgs.slice(0, 3);
+      for (const p of show) b += pageRow(d, p, false);
+      const left = d.pages.length - show.length + (d.meta.pages_left || 0);
+      if (left > 0) b += `<div class="more"><button data-more="${esc(d.meta.doc_path)}">＋ ${left}곳 더 보기</button></div>`;
+      return b;
+    };
+    if (content.length && done && done.all) {
+      // 모두 찾기 — ① 모두 포함 · ② 일부 포함(접힘) · ③ 비슷한 내용
+      const t = (n) => content.filter((d) => d.meta.tier === n);
+      const [t1, t2, t3] = [t(1), t(2), t(3)];
+      if (t1.length) {
+        h += head("t1", "검색어 모두 포함", t1.length, "", "tier");
+        if (open("t1")) for (const d of sortedDocs(t1)) h += docBlock(d);
       }
+      if (t2.length) {
+        h += head("t2", "검색어 일부 포함", t2.length, "", "tier");
+        if (open("t2")) for (const d of sortedDocs(t2)) h += docBlock(d);
+      }
+      if (t3.length) {
+        h += head("t3", "비슷한 내용", t3.length, "", "tier");
+        if (open("t3")) for (const d of sortedDocs(t3)) h += docBlock(d);
+      }
+    } else if (content.length) {
+      // 체크를 끈 경우 — 지금처럼. 잘렸을 수 있으니 모두 찾기로 바로 켜는 링크를 둔다
+      const link = LAYOUT === "window" && !findAll && !$("fawrap").classList.contains("hidden")
+        ? ` · <button class="tg" data-allon="1">검색어가 든 문서 모두 보기</button>` : "";
+      h += head("ct", "내용 일치", 0, `문서 ${content.length}개 · 위치 ${places}곳`, "", link);
+      if (open("ct")) for (const d of sortedDocs(content)) h += docBlock(d);
     }
   }
   L.innerHTML = h;
-  bindAi();
   L.querySelectorAll("[data-col]").forEach(bindColGrip);
   L.querySelectorAll("[data-sort]").forEach((el) => { el.onclick = () => sortBy(el.dataset.sort); });
   L.querySelectorAll("[data-row]").forEach((el) => {
@@ -719,8 +941,17 @@ function render() {
     el.onclick = (e) => { e.stopPropagation(); toggleDoc(rows[+el.dataset.tw].doc); };
   });
   L.querySelectorAll("[data-more]").forEach((el) => {
-    el.onclick = () => { moreDocs.add(el.dataset.more); render(); };
+    el.onclick = () => {
+      moreDocs.add(el.dataset.more);
+      const d = docs.find((x) => x.meta.doc_path === el.dataset.more);
+      if (d && d.meta.pages_left > 0) askPages([d.meta.doc_path]);
+      render();
+    };
   });
+  L.querySelectorAll("[data-grp]").forEach((el) => {
+    el.onclick = () => { const k = el.dataset.grp; if (grpShut.has(k)) grpShut.delete(k); else grpShut.add(k); render(); };
+  });
+  L.querySelectorAll("[data-allon]").forEach((el) => { el.onclick = () => setFindAllOn(true); });
   if (selIdx >= 0 && selIdx < rows.length) markSel();
 }
 function docRow(d, nameGroup, why) {
@@ -728,11 +959,11 @@ function docRow(d, nameGroup, why) {
   const m = d.meta;
   const open = openDocs.has(m.doc_path);
   const tw = d.pages.length && !nameGroup ? `<span class="tw" data-tw="${i}">${open ? "▾" : "▸"}</span>` : `<span class="tw"></span>`;
-  const cnt = why ? `· ${why}` : nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length}곳`;
+  const cnt = why ? `· ${why}` : nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length + (m.pages_left || 0)}곳`;
   const who = whoOf(m);
   return `<div class="r doc ${m.low ? "low" : ""}" data-row="${i}" title="${esc(tipOf(m))}">
     <span class="n">${tw}${docIcon(m.doc_path)}<span class="t">${esc(m.doc_name)}</span><span class="cnt">${cnt}</span>${who ? `<span class="who">${esc(who)}</span>` : ""}</span>
-    <span></span><span>${bars(m.score, m.low)}</span><span class="date">${dateOf(m)}</span></div>`;
+    <span></span><span>${bars(m.score == null && m.tier ? -100 : m.score, m.low)}</span><span class="date">${dateOf(m)}</span></div>`;
 }
 function pageRow(d, p, withDoc) {
   const i = rows.push({ kind: "page", doc: d, page: p }) - 1;
@@ -741,11 +972,27 @@ function pageRow(d, p, withDoc) {
   return `<div class="r pg ${p.low ? "low" : ""}" data-row="${i}" ${withDoc ? 'style="padding-left:12px"' : ""}>
     <span class="n">${withDoc ? `<div class="dn">${docIcon(d.meta.doc_path)}</div><div class="dn">${esc(d.meta.doc_name)}</div>` : ""}
       ${sec ? `<div class="sec">${sec}${more}</div>` : ""}<div class="snip">${marked(p.snippet, p.marks)}</div></span>
-    <span>${pageLabel(p)}</span><span>${bars(p.score, p.low)}</span><span></span></div>`;
+    <span>${pageLabel(p)}</span><span>${bars(p.score == null && p.ids ? -100 : p.score, p.low)}</span><span></span></div>`;
+}
+// 이노테나 마크 — 네모 · 위 오른쪽 조각 · 아래 왼쪽 조각 (색은 currentColor)
+const INNOTENA_SVG = `<svg viewBox="0 0 35 42" aria-hidden="true"><g fill="currentColor"><rect x="0" y="0" width="12.5" height="12"/>
+  <path d="M24 1H34.5V12.5L23 22.5V12.5H12.5Z"/><path d="M12.5 11.5V29.5L0 42V23Z"/></g></svg>`;
+//------------------------------------------------------------------
+// 첫 실행 환영 화면 — 무엇을 하는 앱인지 · 폴더를 왜 고르는지 · [검색 폴더 고르기]
+//------------------------------------------------------------------
+function welcomeFirst() {
+  return `<img class="big" src="data:image/png;base64,__MOAI__" alt=""><br><b style="font-size:1.25em">MoAI-S 에 오신 것을 환영합니다</b><br>
+    내 PC 문서에서 <b>문장으로 찾고</b>, 찾은 <b>문서 · 쪽 · 해당 부분</b>을 바로 보여 줍니다. 문서는 이 PC 밖으로 나가지 않습니다.<br>
+    <ol class="first"><li>찾을 문서가 든 <b>폴더</b>를 고릅니다 (드라이브 전체 · 네트워크 · 클라우드 폴더는 넣을 수 없습니다)</li>
+    <li>문서를 읽는 동안 화면 사용법을 짧게 안내해 드립니다</li></ol><br>
+    <button class="pick" data-firstpick="1">📁 검색 폴더 고르기</button><br><small>나중에 하려면 왼쪽 아래 [＋ 폴더 추가]</small>
+    <br><span class="cpr">${INNOTENA_SVG}ⓒ Innotena. All rights reserved.</span>`;
 }
 function welcome() {
-  return `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>무엇을 찾을까요?</b><br>
-    문장으로 쓰면 그 내용이 있는 <b>문서 · 쪽 · 해당 부분</b>을 찾아 줍니다.<br>쪽을 고르면 오른쪽에 그 쪽이 보이고, 두 번 누르면 그 쪽에서 문서가 열립니다.`;
+  if (firstRun && LAYOUT === "window") return welcomeFirst();
+  return `<img class="big" src="data:image/png;base64,__MOAI__" alt=""><br><b>무엇을 찾을까요?</b><br>
+    문장으로 쓰면 그 내용이 있는 <b>문서 · 쪽 · 해당 부분</b>을 찾아 줍니다.<br>쪽을 클릭하면 미리보기창에 내용이 보이고, 더블클릭하면 해당 문서가 열립니다.
+    <br><span class="cpr">${INNOTENA_SVG}ⓒ Innotena. All rights reserved.</span>`;
 }
 function toggleDoc(d) {
   const k = d.meta.doc_path;
@@ -753,6 +1000,22 @@ function toggleDoc(d) {
   const cur = rows[selIdx];
   render();
   if (cur) { const j = rows.findIndex((x) => x.doc === cur.doc && x.page === cur.page); if (j >= 0) select(j, false); }
+}
+
+// ── 모두 찾기 ───────────────────────────────────────────
+// 나머지 쪽 줄 부탁하기 — 이미 부탁한 문서는 빼고 한 번에
+function askPages(paths) {
+  const want = paths.filter((p) => !pagesAsked.has(p));
+  if (!want.length || !done || !done.kws) return;
+  want.forEach((p) => pagesAsked.add(p));
+  send({ type: "find_doc", q: lastQ, kws: done.kws, paths: want });
+}
+// 모두 찾기 켜고 끄기 — 체크 · 링크 공통. 이 PC 에 기억하고 지금 검색어로 다시 찾는다
+function setFindAllOn(on) {
+  findAll = !!on;
+  $("findall").checked = findAll;
+  send({ type: "find_all", on: findAll });
+  if (lastQ) runFind(lastQ, false);
 }
 
 // ── 고르기 · 미리 보기 · 열기 ────────────────────────────
@@ -774,7 +1037,7 @@ function pageOf(row) {
   if (row.kind === "page") return row.page;
   return row.doc.pages[0] || null;
 }
-// 미리 보기 창이 지금 보여 주는 문서 · 쪽 — [열기] · [폴더 열기] 가 쓴다(목록 줄 또는 AI 답 근거)
+// 미리 보기 창이 지금 보여 주는 문서 · 쪽 — [열기] · [폴더 열기] 가 쓴다(목록 줄 또는 AI 답변창 번호)
 let pvTarget = null;
 function showPreview(row) {
   if (LAYOUT !== "window" || !row) return;
@@ -784,7 +1047,7 @@ function showPreview(row) {
   $("pvtitle").title = d.meta.doc_path;
   $("pvpage").textContent = p && p.page != null ? `${p.exact ? "" : "약 "}${p.page}쪽` : "";
   $("pvopen").disabled = false;
-  $("pvopen").textContent = p && p.page != null ? `${p.page}쪽 열기 ↗` : "열기 ↗";
+  $("pvopen").textContent = openLabel(d.meta.doc_path, p ? p.page : null) + " ↗";
   $("pvreveal").disabled = false;
   if (!pvShown) return;
   if (isPdf(d.meta.doc_path) && p && p.page != null) {
@@ -799,9 +1062,11 @@ function showPreview(row) {
     $("pvempty").classList.add("hidden");
     const t = $("pvtext");
     t.classList.remove("hidden");
+    // 모두 찾기 쪽 줄은 본문 없이 온다 — 발췌를 먼저 보이고 본문을 가져온다
+    if (p && p.text == null && p.ids && !p.asked) { p.asked = true; send({ type: "find_page", ids: p.ids, q: lastQ }); }
     t.innerHTML = p ? `${p.section ? `<div class="sec">${esc(p.section)}</div>` : ""}${hl(p.text || p.snippet)}
-      <div class="note">글 미리 보기 — 원본 모양(표 서식 · 그림)은 "열기"로 보세요.</div>`
-      : `<div class="note">이 문서는 이름만 맞았습니다. "열기"로 보세요.</div>`;
+      <div class="note">글 미리 보기 — 원본 모양(표 서식 · 그림)은 "문서 열기"로 보세요.</div>`
+      : `<div class="note">이 문서는 이름만 맞았습니다. "문서 열기"로 보세요.</div>`;
   }
 }
 // 글 미리 보기 강조 — 검색어 낱말(두 글자 이상)을 표시
@@ -833,10 +1098,11 @@ function sendRect() {
 function showMenu(x, y, row) {
   const p = pageOf(row);
   const items = [
-    [p && p.page != null ? `${p.page}쪽 열기` : "열기", () => openPage(row)],
+    [openLabel(row.doc.meta.doc_path, p ? p.page : null), () => openPage(row)],
     ["폴더 열기", () => send({ type: "reveal", path: row.doc.meta.doc_path })],
     ["경로 복사", () => copy(row.doc.meta.doc_path)],
     ["이 폴더에서만 찾기", () => { scope = row.doc.meta.doc_path.replace(/[\\/][^\\/]+$/, ""); runFind(lastQ); }],
+    ["문서 속성 보기", () => send({ type: "properties", path: row.doc.meta.doc_path })],
   ];
   popMenu(x, y, items);
 }
@@ -924,40 +1190,188 @@ document.addEventListener("contextmenu", (e) => {
   hideMenu();
 });
 
-// ── AI 답 카드 ───────────────────────────────────────────
-function askAi() {
-  const q = (LAYOUT === "window" ? $("q").value : $("pq").value).trim() || lastQ;
-  if (!q) return;
-  ai = { q, text: "", ev: null, info: null, err: null };
-  send({ type: "ask_ai", q, folder: scope });
+// ── AI 답변창 ────────────────────────────────────────────
+//   미리 보기 창처럼 켜고 끈다. 찾은 문서를 다시 검색하지 않고 문서별로 정리한다(설계서 §4 · §5).
+//   워커는 한 번에 한 일만 하므로, 쓰는 중에 새 일이 오면 /cancel 로 멈추고 끝남 사건을 기다린 뒤 다음 일을 한다.
+const BRIEF_CANDS = 8;      // 겹치는 문서를 빼도 3건이 남도록 넉넉히 보낸다
+const BRIEF_DELAY = 1000;   // 찾기가 끝난 뒤 이만큼 있다가 정리한다 — 연달아 찾을 때 시작하지 않게
+const BRIEF_CACHE = 20;
+
+// 지금 목록을 가리키는 표식 — 같은 검색어 · 범위 · 조건이면 같은 정리다
+function briefKey() { return JSON.stringify([lastQ, scope, cond.off, cond.widen]); }
+
+//------------------------------------------------------------------
+// 정리할 후보 — 화면 정렬과 상관없이 관련도 순(찾기 결과 순서)
+//=> 관련도 낮은 문서 · 글이 없는 문서는 뺀다. 쪽 줄이 없는 문서는 경로만 보내면 워커가 앞쪽 글을 읽는다.
+//------------------------------------------------------------------
+function briefItems() {
+  const out = [];
+  // 모두 찾기는 묶음 순서라 관련도 순이 아니다 — 리랭킹 점수가 있는 문서만 점수 순으로(설계서 §5)
+  const list = done && done.all
+    ? docs.filter((d) => d.meta.score != null && d.meta.score > -50).sort((a, b) => b.meta.score - a.meta.score) : docs;
+  for (const d of list) {
+    if (out.length >= BRIEF_CANDS) break;
+    if (d.meta.low || d.meta.no_text) continue;
+    const p = d.pages.find((x) => !x.low && (x.text || x.ids));
+    if (d.pages.length && !p) continue;
+    out.push({ doc: d.meta.doc_name, path: d.meta.doc_path, page: p ? p.page : null, text: p && p.text ? p.text : "",
+      ids: p && p.ids ? p.ids : [], snippet: p ? p.snippet : "" });
+  }
+  return out;
+}
+// 찾은 문서가 있는데 정리할 후보가 없을 때의 안내
+function briefEmptyText() {
+  if (docs.some((d) => !d.meta.low && d.meta.no_text)) return "글을 읽을 수 없는 문서라 정리하지 못했습니다.";
+  return "관련도가 낮은 문서만 찾았습니다 — 정리하지 않았습니다.";
+}
+
+//------------------------------------------------------------------
+// 쓰는 중인 정리 멈추기 — 끝남 사건이 올 때까지 그 정리의 글은 버린다
+//------------------------------------------------------------------
+function stopBrief() {
+  clearTimeout(briefTimer);
+  briefNext = false;
+  // 멈춘 정리는 다 쓴 것이 아니다 — 같은 목록을 다시 찾으면 새로 정리한다
+  if (ai && !ai.done) ai.stopped = true;
+  if (briefBusy && !briefDrop) {
+    briefDrop = true;
+    send({ type: "brief_cancel" });
+  }
+}
+
+//------------------------------------------------------------------
+// 지금 목록을 정리하기 시작 — 창이 꺼져 있으면 아무것도 하지 않는다
+//=> 1) 같은 목록의 끝난 정리가 있으면 그대로 보여 준다
+//   2) 앞선 정리가 도는 중이면 멈추고, 끝남 사건에서 다시 시작한다
+//------------------------------------------------------------------
+function startBrief() {
+  clearTimeout(briefTimer);
+  if (!aiOn) return;
+  if (!lastQ || !docs.length) { ai = null; redrawAi(); return; }
+  const key = briefKey();
+  if (ai && ai.key === key && !ai.stopped && !briefDrop) return;
+  if (briefCache.has(key)) { ai = briefCache.get(key); redrawAi(); return; }
+  const items = briefItems();
+  if (!items.length) { ai = { key, q: lastQ, text: "", empty: briefEmptyText(), done: true }; redrawAi(); return; }
+  if (briefBusy) stopBrief();
+  ai = { key, q: lastQ, text: "", items: null, info: null, err: null, done: false };
+  if (briefBusy) {
+    briefNext = true;
+    redrawAi();
+    return;
+  }
+  briefBusy = true;
+  send({ type: "brief", q: lastQ, items });
   redrawAi();
 }
-// 답 글의 [n] 을 누를 수 있는 근거 표시로 — 그 번호의 근거가 있을 때만
-function citeHtml(text) {
-  return esc(text).replace(/\[(\d{1,2})\]/g, (m, n) => evItem(+n)
-    ? `<button class="cite ${ai.pick === +n ? "on" : ""}" data-ev="${n}" title="${esc(evItem(+n).doc)} — 미리 보기">[${n}]</button>` : m);
+// 찾기가 끝났다 — 창이 열려 있으면 잠시 뒤 정리한다
+function scheduleBrief() {
+  clearTimeout(briefTimer);
+  if (aiOn) briefTimer = setTimeout(startBrief, BRIEF_DELAY);
 }
+// 쓰던 정리가 끝났다 — 끝난 정리는 기억하고, 기다리던 일이 있으면 이어서 한다
+function briefEnded() {
+  briefBusy = false;
+  if (briefDrop) {
+    briefDrop = false;
+    // 기다리던 자리표시를 비워야 startBrief 가 진행 중으로 착각하지 않는다
+    if (briefNext) { briefNext = false; ai = null; startBrief(); }
+  }
+}
+
+// 켜고 끄기 — 켜면 지금 목록을 정리하고, 끄면 쓰던 정리를 멈춘다
+function toggleAi() {
+  aiOn = !aiOn;
+  if (LAYOUT === "window") {
+    $("aip").classList.toggle("hidden", !aiOn);
+    $("split3").classList.toggle("hidden", !aiOn);
+    $("aitoggle").classList.toggle("on", aiOn);
+    applyLayout();
+  } else {
+    $("paip").classList.toggle("hidden", !aiOn);
+    $("pask").classList.toggle("on", aiOn);
+  }
+  saveUi();
+  if (aiOn) { redrawAi(); startBrief(); return; }
+  stopBrief();
+}
+
+//------------------------------------------------------------------
+// 쌓인 글을 줄로 나누기
+//=> "[n] 글" 은 문서 줄, "[n!] 글" 은 그 줄을 원문 발췌로 바꿈, "[겹침] n" · "[오류] 글".
+//------------------------------------------------------------------
+function briefParts(text) {
+  const r = { lines: {}, dropped: 0, err: "" };
+  for (const ln of String(text || "").split("\n")) {
+    const m = ln.match(/^\[(겹침|오류|\d+!?)\]\s?(.*)$/);
+    if (!m) continue;
+    const k = m[1];
+    if (k === "겹침") r.dropped = +m[2] || 0;
+    else if (k === "오류") r.err = m[2];
+    else if (k.endsWith("!")) r.lines[parseInt(k, 10)] = { text: m[2], ex: true };
+    else r.lines[+k] = { text: m[2], ex: false };
+  }
+  return r;
+}
+// 문서 열기 아이콘(바깥으로 나가는 화살표)
+const OPEN_SVG = `<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M9 2h5v5M14 2 7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 function evItem(n) { return ai && ai.items ? ai.items.find((e) => +e.no === n) : null; }
-function aiCard() {
-  if (!ai) return "";
-  const ev = ai.ev != null ? `근거 ${ai.ev}건` : "찾는 중…";
-  const body = ai.err ? `<span style="color:#b4462f">${esc(ai.err)}</span>` : citeHtml(ai.text) || (ai.ev != null ? "답을 쓰는 중…" : "");
-  const ft = ai.info ? (ai.info.timing_text || "") : "";
-  // 근거 줄 — [1] 문서 이름 · 쪽 (누르면 미리 보기 창에 그 근거)
-  const src = ai.items && ai.items.length ? `<div class="srcs"><span class="lb">근거</span>${ai.items.map((e) =>
-    `<button class="src ${ai.pick === +e.no ? "on" : ""}" data-ev="${e.no}" title="${esc(e.path || e.doc)}">${docIcon(e.path || e.doc)}<b>[${e.no}]</b> <span>${esc(e.doc)}</span>${e.page != null ? ` <i>p.${e.page}</i>` : ""}</button>`).join("")}</div>` : "";
-  return `<div class="ai-card"><div class="hd">✦ AI 답 — ${esc(ai.q)}<span class="cnt" style="font-weight:normal;color:var(--muted)">· ${ev}</span>
-    <button class="x" id="aix" title="닫기">✕</button></div><div class="body">${body}</div>${src}${ft ? `<div class="ft">${esc(ft)}</div>` : ""}
-    <div class="ft">AI 요약 — 근거 문서로 확인하세요. [번호]를 누르면 그 근거를 미리 보기에 보여 줍니다.</div></div>`;
+
+// 창 안의 글 — 머리 · 문서별 줄 · 맨 아래 안내
+function aiPaneHtml() {
+  const head = (sub, stop) => `<div class="hd"><span class="tt">✦ AI 참고 답변</span>${sub ? `<small>${esc(sub)}</small>` : ""}<span class="sp"></span>
+    ${stop ? `<button id="aistop" title="정리 멈추기">■ 중지</button>` : ""}<button id="aix" title="닫기">✕</button></div>`;
+  if (!ai) return head("", false) + `<div class="ph2">찾은 문서가 있으면 여기에 정리해 드립니다.</div>`;
+  if (ai.empty) return head("", false) + `<div class="ph2">${esc(ai.empty)}</div>`;
+  const p = briefParts(ai.text);
+  const items = ai.items || [];
+  const sub = !ai.items ? "문서를 고르는 중…" :
+    `찾은 문서 ${docs.length}건 중 상위 ${items.length}건` + (p.dropped ? ` · 겹침 ${p.dropped}건 제외` : "");
+  let body = "";
+  // "쓰는 중…" 은 앞 줄이 끝난 뒤에만 — 줄이 끝나면 글 끝이 줄바꿈이다
+  const next = !ai.text || ai.text.endsWith("\n") ? items.findIndex((e) => !(p.lines[+e.no] && p.lines[+e.no].text)) : -1;
+  items.forEach((e, i) => {
+    const l = p.lines[+e.no];
+    const writing = !ai.done && !ai.stopped && i === next;
+    if (!(l && l.text) && !writing) return;
+    body += `<div class="ln"><button class="cite ${ai.pick === +e.no ? "on" : ""}" data-ev="${e.no}" title="${esc(e.path || e.doc)} — 미리 보기">${e.no}</button>`
+      + `<span>${l && l.ex ? `<i class="ex">원문 발췌</i> ` : ""}${l && l.text ? esc(l.text) : `<span class="wr">쓰는 중…</span>`}</span>`
+      + `<em>${esc(e.doc)}${e.page != null ? ` · p.${e.page}` : ""}`
+      // 문서 이름 옆 작은 열기 아이콘 — 미리 보기를 거치지 않고 바로 연다
+      + (e.path ? `<button class="dopen" data-open="${e.no}" title="${esc(e.doc)} 열기" aria-label="${esc(e.doc)} 열기">${OPEN_SVG}</button>` : "")
+      + `</em></div>`;
+  });
+  if (ai.err || p.err) body += `<div class="er">${esc(ai.err || p.err)}</div>`;
+  if (!body) body = `<div class="ph2">${ai.items && !items.length ? esc(briefEmptyText()) : "정리하는 중…"}</div>`;
+  const cost = ai.info && ai.info.total_s != null ? ` · 첫 글자 ${ai.info.ttft_s}초 · 완료 ${ai.info.total_s}초` : "";
+  return head(sub, briefBusy && !briefDrop) + body +
+    `<div class="ft">${ai.stopped ? "중지했습니다 · " : ""}검색된 부분을 바탕으로 만든 참고 답변입니다. 원문 확인을 권장합니다.${cost}
+      · <button id="aichat" title="채팅 모드에서 문서를 근거로 묻습니다">💬 채팅에서 이어 묻기</button></div>`;
 }
-function bindAi() {
+function redrawAi() {
+  const box = $(LAYOUT === "window" ? "aip" : "paip");
+  if (!aiOn) return;
+  const top = box.scrollTop;
+  box.innerHTML = aiPaneHtml();
+  box.scrollTop = top;
   const x = $("aix");
-  if (x) x.onclick = () => { ai = null; render(); };
-  document.querySelectorAll(".ai-card [data-ev]").forEach((b) => { b.onclick = () => showEvidence(+b.dataset.ev); });
+  if (x) x.onclick = toggleAi;
+  const st = $("aistop");
+  if (st) st.onclick = () => { stopBrief(); redrawAi(); };
+  const c = $("aichat");
+  if (c) c.onclick = () => send(LAYOUT === "window" ? { type: "switch_mode", mode: "rag", folder: scope } : { type: "mode", mode: "rag" });
+  box.querySelectorAll("[data-ev]").forEach((b) => { b.onclick = () => showEvidence(+b.dataset.ev); });
+  box.querySelectorAll("[data-open]").forEach((b) => {
+    b.onclick = () => {
+      const e = evItem(+b.dataset.open);
+      // 쪽을 알면 그 쪽에서 연다
+      if (e && e.path) send({ type: "open_page", path: e.path, page: e.page != null ? e.page : null });
+    };
+  });
 }
 //------------------------------------------------------------------
-// AI 답 근거 보이기 — 미리 보기 창이 꺼져 있어도 켜서 그 근거를 보여 준다
-//   PDF 이고 쪽을 알면 그 쪽(PDF 뷰어), 아니면 근거 글 전체(글 미리 보기). 좁은 패널이면 문서를 그 쪽에서 연다
+// [n] 누름 — 미리 보기 창이 꺼져 있어도 켜서 그 문서 · 쪽을 보여 준다
+//   PDF 이고 쪽을 알면 그 쪽(PDF 뷰어), 아니면 정리에 쓴 글(글 미리 보기). 좁은 패널이면 문서를 그 쪽에서 연다
 //------------------------------------------------------------------
 function showEvidence(n) {
   const e = evItem(n);
@@ -967,12 +1381,13 @@ function showEvidence(n) {
   const path = e.path || "";
   if (LAYOUT !== "window") { if (path) send({ type: "open_page", path, page: e.page != null ? e.page : null }); return; }
   if (!pvShown) togglePv();
+  // 눌린 문서를 미리 보기 창에 — 목록 선택과 따로 움직인다
   pvTarget = path ? { path, page: e.page != null ? e.page : null } : null;
   $("pvtitle").textContent = `[${n}] ${e.doc}`;
   $("pvtitle").title = path;
   $("pvpage").textContent = e.page != null ? `${e.page}쪽` : "";
   $("pvopen").disabled = !path;
-  $("pvopen").textContent = e.page != null ? `${e.page}쪽 열기 ↗` : "열기 ↗";
+  $("pvopen").textContent = openLabel(path, e.page) + " ↗";
   $("pvreveal").disabled = !path;
   $("pvempty").classList.add("hidden");
   if (isPdf(path) && e.page != null) {
@@ -983,20 +1398,10 @@ function showEvidence(n) {
     send({ type: "preview_hide" });
     const t = $("pvtext");
     t.classList.remove("hidden");
-    t.innerHTML = `<div class="sec">AI 답 근거 [${n}]</div>${hl(e.full || e.snippet || "")}
-      <div class="note">AI 가 답에 쓴 근거 글입니다 — 원본 모양(표 서식 · 그림)은 "열기"로 보세요.</div>`;
+    t.innerHTML = `<div class="sec">AI 참고 답변 [${n}]</div>${hl(e.full || e.snippet || "")}
+      <div class="note">AI 가 정리에 쓴 글입니다 — 원본 모양(표 서식 · 그림)은 "문서 열기"로 보세요.</div>`;
     t.scrollTop = 0;
   }
-}
-function redrawAi() {
-  const box = LAYOUT === "window" ? $("list") : $("cards");
-  const old = box.querySelector(".ai-card");
-  const tmp = document.createElement("div");
-  tmp.innerHTML = aiCard();
-  if (old && tmp.firstElementChild) old.replaceWith(tmp.firstElementChild);
-  else if (old) old.remove();
-  else if (tmp.firstElementChild) box.prepend(tmp.firstElementChild);
-  bindAi();
 }
 
 // ── 탐색 창 · 주소줄 ─────────────────────────────────────
@@ -1007,6 +1412,7 @@ function rootOf(p) {
 }
 function setScope(p) {
   scope = p;
+  saveUi();
   drawNav();
   if (lastQ) runFind(lastQ); else drawCrumb();
 }
@@ -1021,7 +1427,7 @@ function drawCrumb() {
     let acc = r.path.replace(/[\\/]+$/, "");
     for (const part of rest) { acc += "\\" + part; h += `<span class="sep">›</span><button data-p="${esc(acc)}">${esc(part)}</button>`; }
   } else {
-    h += `<span class="sep">›</span><button data-p="">인덱싱 폴더 전체</button>`;
+    h += `<span class="sep">›</span><button data-p="">검색 폴더 전체</button>`;
   }
   c.innerHTML = h;
   c.querySelectorAll("button").forEach((b) => { b.onclick = () => setScope(b.dataset.p || null); });
@@ -1057,9 +1463,9 @@ function drawNav() {
   const rc = recent();
   h += rc.length ? rc.map((q) => `<button class="i" data-q="${esc(q)}"><svg width="14" height="14" style="color:var(--muted)"><use href="#i-clock"/></svg><span class="n">${esc(q)}</span></button>`).join("")
     : `<div class="empty">아직 없습니다</div>`;
-  h += `<div class="h">인덱싱 폴더</div>`;
+  h += `<div class="h">검색 폴더</div>`;
   // 문서 수 — 인덱싱 폴더마다 Rust 가 상태 파일로 센 값(count). 모든 인덱싱 폴더는 그 합
-  h += `<button class="i ${scope ? "" : "on"}" data-p=""><span class="tw"></span><span class="n">모든 인덱싱 폴더</span><span class="cnt" id="cntall">${esc(totalText())}</span></button>`;
+  h += `<button class="i ${scope ? "" : "on"}" data-p=""><span class="tw"></span><span class="n">모든 검색 폴더</span><span class="cnt" id="cntall">${esc(totalText())}</span></button>`;
   const node = (path, name, depth, icon, root) => {
     const on = scope && scope.toLowerCase() === path.toLowerCase();
     const open = openDirs.has(path);
@@ -1072,11 +1478,11 @@ function drawNav() {
     return out;
   };
   for (const r of roots) h += node(r.path, r.name, 0, r.drive ? "i-drive" : "i-moai", r);
-  if (!roots.length) h += `<div class="empty">아래 [＋ 폴더 추가] 로 인덱싱할 폴더를 넣으세요</div>`;
+  if (!roots.length) h += `<div class="empty">아래 [＋ 폴더 추가] 로 검색할 폴더를 넣으세요</div>`;
   // 폴더 빼기는 인덱싱 폴더(맨 위 폴더)를 골랐을 때만 — 그 아래 하위 폴더는 뺄 수 없다
   const picked = scope && roots.find((r) => r.path.toLowerCase().replace(/[\\/]+$/, "") === scope.toLowerCase().replace(/[\\/]+$/, ""));
-  h += `<div class="fbar"><button id="fadd" title="인덱싱할 폴더를 고르기 창으로 넣습니다">＋ 폴더 추가</button>
-    <button id="frem" ${picked ? "" : "disabled"} title="${picked ? esc(picked.path) + " 을(를) 인덱싱 폴더에서 뺍니다" : "뺄 인덱싱 폴더를 위 목록에서 고르세요"}">－ 폴더 빼기</button></div>`;
+  h += `<div class="fbar"><button id="fadd" title="검색할 폴더를 고르기 창으로 넣습니다">＋ 폴더 추가</button>
+    <button id="frem" ${picked ? "" : "disabled"} title="${picked ? esc(picked.path) + " 을(를) 검색 폴더에서 뺍니다" : "뺄 검색 폴더를 위 목록에서 고르세요"}">－ 폴더 빼기</button></div>`;
   s.innerHTML = h;
   $("fadd").onclick = () => send({ type: "add_folder" });
   $("frem").onclick = () => { if (picked) removeRoot(picked); };
@@ -1097,17 +1503,40 @@ function drawNav() {
   });
 }
 
+// 내용 전체 보기 팝업 — 이 문서에서 찾은 곳들의 청크 본문을 모두 보여 주고, 고른 쪽으로 스크롤한다
+function showChunks(d, pick) {
+  const box = document.createElement("div"); box.className = "chunkbox"; box.tabIndex = -1;
+  const parts = d.pages.map((p, k) => `<section class="${k === pick ? "on" : ""}"><h4>${p.page != null ? `${p.page}쪽` : "위치 " + (k + 1)}${p.section ? ` · ${esc(p.section)}` : ""}</h4>
+    <div class="cb-text">${hl(p.text || p.snippet)}</div></section>`).join("");
+  box.innerHTML = `<div class="cb"><div class="cb-hd"><b></b><span></span><button title="닫기 (Esc)">✕</button></div><div class="cb-body">${parts}</div></div>`;
+  box.querySelector("b").textContent = d.meta.doc_name;
+  box.querySelector(".cb-hd span").textContent = `찾은 곳 ${d.pages.length}개`;
+  const close = () => box.remove();
+  box.querySelector(".cb-hd button").onclick = close;
+  // 바깥(어두운 곳)을 누르면 닫는다
+  box.onclick = (e) => { if (e.target === box) close(); };
+  box.addEventListener("keydown", (e) => {
+    // Esc 가 패널까지 닫지 않게 막는다
+    e.stopPropagation();
+    if (e.key === "Escape") close();
+  });
+  document.body.appendChild(box);
+  box.focus();
+  const on = box.querySelector("section.on");
+  if (on) box.querySelector(".cb-body").scrollTop = on.offsetTop - 8;
+}
+
 // ── 그리기: 좁은 패널 카드 ───────────────────────────────
 let cardPick = {};   // 문서 경로 → 고른 쪽 줄 번호
 function renderCards() {
   rows = [];
   const C = $("cards");
   if (!docs.length) {
-    showMessage(lastQ ? `<b>"${esc(lastQ)}"</b> 와 맞는 문서를 찾지 못했습니다.` :
+    showMessage(lastQ ? noResultMsg(lastQ, "") :
       `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>이 폴더에서 찾기</b><br>문장으로 쓰면 그 내용이 있는<br>문서 · 쪽 · 해당 부분을 찾아 줍니다.`);
     return;
   }
-  let h = aiCard();
+  let h = "";
   for (const d of docs) {
     const m = d.meta;
     const di = rows.push({ kind: "doc", doc: d }) - 1;
@@ -1120,20 +1549,25 @@ function renderCards() {
       <div class="m">${m.meta_hit && !d.pages.length ? "조건 일치" : m.name_hit && !d.pages.length ? "이름에 검색어" : d.pages.length + "곳"} · ${bars(m.score, m.low)}${whoOf(m) ? " · " + esc(whoOf(m)) : ""}</div>
       ${d.pages.length ? `<div class="pgs">${chips}</div>` : ""}
       ${p ? `<div class="sn">${p.section ? `<b>${esc(p.section)}</b>` : ""}${marked(p.snippet, p.marks)}
-        <div class="acts"><button data-open="${di}:${pick}">${p.page != null ? p.page + "쪽 " : ""}열기 ↗</button><button data-reveal="${di}">폴더 열기</button></div></div>` : ""}
-      ${!d.pages.length ? `<div class="sn"><div class="acts"><button data-open="${di}:-1">열기 ↗</button><button data-reveal="${di}">폴더 열기</button></div></div>` : ""}
+        <div class="acts"><button data-open="${di}:${pick}">${openLabel(m.doc_path, p.page)} ↗</button><button data-reveal="${di}">폴더 열기</button><button data-full="${di}:${pick}">내용 전체 보기</button></div></div>` : ""}
+      ${!d.pages.length ? `<div class="sn"><div class="acts"><button data-open="${di}:-1">문서 열기 ↗</button><button data-reveal="${di}">폴더 열기</button></div></div>` : ""}
     </div>`;
   }
   C.innerHTML = h;
-  bindAi();
   C.querySelectorAll("[data-chip]").forEach((b) => {
     b.onclick = () => {
       const [di, k] = b.dataset.chip.split(":").map(Number);
       const d = rows[di].doc;
       cardPick[d.meta.doc_path] = k;
-      // 쪽 칩 — 설정이 "기본 앱" 이면 바로 열고, 아니면 크게 보기 창의 미리 보기로
-      if (pageClick === "app") { send({ type: "open_page", path: d.meta.doc_path, page: d.pages[k].page }); renderCards(); }
-      else { renderCards(); send({ type: "big", q: lastQ, folder: scope, select: { path: d.meta.doc_path, page: d.pages[k].page } }); }
+      // 쪽 칩 — 설정이 "기본 앱" 이면 바로 열고, 아니면 이 카드의 발췌만 그 쪽으로 바꾼다(창을 띄우지 않는다)
+      if (pageClick === "app") send({ type: "open_page", path: d.meta.doc_path, page: d.pages[k].page });
+      renderCards();
+    };
+  });
+  C.querySelectorAll("[data-full]").forEach((b) => {
+    b.onclick = () => {
+      const [di, k] = b.dataset.full.split(":").map(Number);
+      showChunks(rows[di].doc, k);
     };
   });
   C.querySelectorAll("[data-open]").forEach((b) => {
@@ -1150,11 +1584,9 @@ function renderCards() {
 // ── 창 나눔 · 열 너비 — 끌어서 바꾸고 이 PC 에 기억 ────────
 //   탐색 창(--side) · 미리 보기 창(--pv) · 목록의 쪽 · 관련도 · 수정한 날짜 열(--c-*). 두 번 누르면 처음대로.
 //   pv 가 null 이면 처음 비율(36%)을 그대로 쓴다.
-const LAYOUT_DEF = { side: 200, pv: null, page: 64, rel: 70, date: 92 };
-let lay = Object.assign({}, LAYOUT_DEF, (() => {
-  try { return JSON.parse(localStorage.getItem("moai.layout") || "{}") || {}; } catch (e) { return {}; }
-})());
-function saveLayout() { try { localStorage.setItem("moai.layout", JSON.stringify(lay)); } catch (e) { /* 저장 못 해도 그만 */ } }
+const LAYOUT_DEF = { side: 200, pv: null, page: 64, rel: 70, date: 92, ai: null };
+let lay = Object.assign({}, LAYOUT_DEF, UI_SAVED.lay && typeof UI_SAVED.lay === "object" ? UI_SAVED.lay : {});
+function saveLayout() { saveUi(); }
 function applyLayout() {
   const m = $("main").style;
   // 창이 기억한 너비보다 작아졌으면 목록이 300px 은 남게 그 자리에서만 줄인다(기억한 값은 그대로)
@@ -1162,6 +1594,9 @@ function applyLayout() {
   const side = Math.max(120, Math.min(lay.side, W - 310 - (pvShown ? 220 : 0)));
   m.setProperty("--side", side + "px");
   if (lay.pv) m.setProperty("--pv", Math.max(220, Math.min(lay.pv, W - side - 310)) + "px"); else m.removeProperty("--pv");
+  // AI 답변창 높이 — 목록이 120px 은 남게. 처음에는 34%
+  if (lay.ai) $("mid").style.setProperty("--ai", clamp(lay.ai, 140, Math.max(140, $("mid").getBoundingClientRect().height - 125)) + "px");
+  else $("mid").style.removeProperty("--ai");
   // 열 너비는 목록 상자에 걸어 머리글과 모든 줄이 같은 너비를 쓴다
   const l = $("list").style;
   l.setProperty("--c-page", lay.page + "px");
@@ -1200,12 +1635,139 @@ function bindSplits() {
     lay.pv = Math.round(clamp(s - dx, 220, W() - lay.side - 310));
   });
   $("split2").ondblclick = () => { lay.pv = null; applyLayout(); saveLayout(); };
+  // AI 답변창 — 아래 끝이 고정이므로 위로 끌면 높아진다. 미리 보기 자리는 바뀌지 않는다
+  const s3 = $("split3");
+  s3.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const y0 = e.clientY, h0 = $("aip").getBoundingClientRect().height;
+    s3.setPointerCapture(e.pointerId);
+    s3.classList.add("drag");
+    const move = (ev) => { lay.ai = Math.round(h0 - (ev.clientY - y0)); applyLayout(); };
+    const up = () => {
+      s3.removeEventListener("pointermove", move); s3.removeEventListener("pointerup", up); s3.removeEventListener("pointercancel", up);
+      s3.classList.remove("drag");
+      saveLayout();
+    };
+    s3.addEventListener("pointermove", move); s3.addEventListener("pointerup", up); s3.addEventListener("pointercancel", up);
+  });
+  s3.ondblclick = () => { lay.ai = null; applyLayout(); saveLayout(); };
 }
 // 목록 머리글의 열 경계 — 열의 왼쪽 경계라 왼쪽으로 끌면 그 열이 넓어진다(이름 열이 그만큼 준다)
 function bindColGrip(g) {
   const k = g.dataset.col;
   dragX(g, () => g.parentElement.getBoundingClientRect().width, (s, dx) => { lay[k] = Math.round(clamp(s - dx, 36, 360)); });
   g.ondblclick = (e) => { e.stopPropagation(); lay[k] = LAYOUT_DEF[k]; applyLayout(); saveLayout(); };
+}
+
+// ── 사용 안내(첫 실행 안내 설계서 §5) ───────────────────
+//   실제 화면 위에 막을 깔고 한 곳만 비춘다. 막은 비춘 곳 둘레의 네 조각이라 비춘 곳은 눌러 볼 수 있다.
+//   맨 아래 상태줄은 늘 밝게 둔다(인덱싱 진행이 보이게). 비출 요소가 안 보이면 그 단계를 건너뛴다.
+const TOUR_STEPS = [
+  { sel: "#side button:has([data-cnt])", title: "문서를 읽는 중", text: "고른 폴더의 문서를 읽고 있습니다. 폴더 옆 숫자(<b>읽은 문서 / 전체</b>)로 진행을 볼 수 있고, <b>끝나기 전에도</b> 읽은 문서부터 찾을 수 있습니다." },
+  { sel: ".search", title: "문장으로 찾기", text: "낱말뿐 아니라 <b>문장</b>으로 써도 됩니다. 예: “작년 내가 작성한 AI 제안서”, “출장비 정산 기준”." },
+  { sel: "#fawrap", title: "모두 찾기", text: "검색어가 들어 있는 문서를 모두, <b>문서 › 쪽 › 발췌</b>로 보여 줍니다. 끄면 관련도 높은 문서만 봅니다." },
+  { sel: "#pvtoggle", title: "미리 보기", text: "쪽을 <b>한 번</b> 누르면 미리 보기 창에 그 쪽이 보이고, <b>두 번</b> 누르면 문서가 열립니다. (Alt+P)" },
+  { sel: "#aitoggle", title: "AI 정리", text: "찾은 문서 중 상위 3건을 AI 가 한 줄씩 정리합니다. 문서 이름 옆 아이콘으로 원문을 바로 엽니다. (Alt+A)" },
+  { sel: "#toai", title: "AI 에게 묻기", text: "문서를 근거로 AI 에게 질문하고 답을 받는 <b>채팅 모드</b>입니다. 답 아래에 근거 문서가 함께 나옵니다." },
+  { sel: "#toset", title: "설정 · 폴더", text: "검색 폴더 추가 · 빼기와 동의어 · 이름 별칭 사전은 [⚙ 설정] 과 왼쪽 아래 [＋ 폴더 추가] 에서. 창을 닫아도 <b>트레이 아이콘</b>에 남고, 두 번 누르면 다시 열립니다. 이 안내는 [?] 에서 다시 볼 수 있습니다." },
+];
+let tourAt = -1;         // 지금 단계(-1 = 안내 중 아님)
+function tourEl(i) {
+  const el = document.querySelector(TOUR_STEPS[i].sel);
+  if (!el || el.closest(".hidden")) return null;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? el : null;
+}
+//------------------------------------------------------------------
+// 안내 시작 — 막 · 테두리 · 말풍선을 만들고 1단계로. PDF 미리 보기는 막이 덮지 못해 잠시 숨긴다
+//------------------------------------------------------------------
+function startTour() {
+  hideMenu();
+  $("keys").classList.add("hidden");
+  if (!document.querySelector(".tm")) {
+    for (const k of ["t", "b", "l", "r"]) { const d = document.createElement("div"); d.className = "tm"; d.dataset.tm = k; document.body.appendChild(d); }
+    const ring = document.createElement("div"); ring.id = "tourring"; document.body.appendChild(ring);
+    const bub = document.createElement("div"); bub.id = "tourbub"; document.body.appendChild(bub);
+  }
+  send({ type: "preview_hide" });
+  tourAt = -1;
+  tourGo(1);
+}
+// 다음 · 앞 단계로 — 비출 요소가 없는 단계는 건너뛴다
+function tourGo(dir) {
+  let i = tourAt + dir;
+  while (i >= 0 && i < TOUR_STEPS.length && !tourEl(i)) i += dir;
+  if (i < 0) return;
+  if (i >= TOUR_STEPS.length) { endTour(); return; }
+  tourAt = i;
+  tourDraw();
+}
+//------------------------------------------------------------------
+// 지금 단계 그리기 — 요소 자리에 테두리, 둘레에 막, 아래(넘치면 위)에 말풍선
+//------------------------------------------------------------------
+function tourDraw() {
+  if (tourAt < 0) return;
+  const el = tourEl(tourAt);
+  if (!el) { tourGo(1); return; }
+  const pad = 4, r = el.getBoundingClientRect();
+  const x = Math.max(0, r.left - pad), y = Math.max(0, r.top - pad), w = r.width + pad * 2, h = r.height + pad * 2;
+  const st = document.querySelector(".st");
+  // 막의 아래 끝 — 상태줄 위까지(상태줄은 늘 밝게)
+  const bottom = st ? st.getBoundingClientRect().top : innerHeight;
+  const set = (k, l, t, ww, hh) => Object.assign(document.querySelector(`[data-tm="${k}"]`).style,
+    { left: l + "px", top: t + "px", width: Math.max(0, ww) + "px", height: Math.max(0, hh) + "px" });
+  set("t", 0, 0, innerWidth, y);
+  set("b", 0, Math.min(y + h, bottom), innerWidth, bottom - Math.min(y + h, bottom));
+  set("l", 0, y, x, Math.min(h, bottom - y));
+  set("r", x + w, y, innerWidth - x - w, Math.min(h, bottom - y));
+  Object.assign($("tourring").style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+  const s = TOUR_STEPS[tourAt], n = TOUR_STEPS.length, last = tourAt === n - 1;
+  const b = $("tourbub");
+  b.innerHTML = `<h4><small>${tourAt + 1} / ${n}</small>${esc(s.title)}</h4><p>${s.text}</p>
+    <div class="bt"><span class="dots">${TOUR_STEPS.map((_, k) => `<i class="${k <= tourAt ? "on" : ""}"></i>`).join("")}</span><span class="sp"></span>
+    ${last ? "" : `<button data-tour="skip">건너뛰기</button>`}${tourAt > 0 ? `<button data-tour="prev">←</button>` : ""}
+    <button class="go" data-tour="next">${last ? "시작하기" : "다음 →"}</button></div>`;
+  b.querySelectorAll("[data-tour]").forEach((k) => {
+    k.onclick = () => { const a = k.dataset.tour; if (a === "skip") endTour(); else tourGo(a === "prev" ? -1 : 1); };
+  });
+  // 말풍선 자리 — 아래에 자리가 없으면 위로, 가로는 화면 안으로
+  const bh = b.offsetHeight, bw = b.offsetWidth;
+  const top = y + h + 10 + bh <= innerHeight ? y + h + 10 : Math.max(8, y - bh - 10);
+  b.style.top = top + "px";
+  b.style.left = clamp(x, 8, innerWidth - bw - 8) + "px";
+  b.querySelector(".go").focus();
+}
+//------------------------------------------------------------------
+// 안내 끝(끝까지 · 건너뛰기 · Esc) — 막을 걷고 본 것으로 기록, 숨긴 PDF 미리 보기를 되살린다
+//------------------------------------------------------------------
+function endTour() {
+  if (tourAt < 0) return;
+  tourAt = -1;
+  document.querySelectorAll(".tm, #tourring, #tourbub").forEach((e) => e.remove());
+  send({ type: "tour_done" });
+  if (pvShown && rows[selIdx]) showPreview(rows[selIdx]);
+  if (LAYOUT === "window") $("q").focus();
+}
+// 안내 중 키 — →/Enter 다음, ← 앞, Esc 끝. 다른 단축키보다 먼저 받는다
+document.addEventListener("keydown", (e) => {
+  if (tourAt < 0) return;
+  if (e.key === "ArrowRight" || e.key === "Enter") { e.preventDefault(); e.stopImmediatePropagation(); tourGo(1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); e.stopImmediatePropagation(); tourGo(-1); }
+  else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); endTour(); }
+}, true);
+// 창 크기 · 비춘 곳을 눌러 화면 배치가 바뀌면 자리를 다시 잰다
+window.addEventListener("resize", () => { if (tourAt >= 0) tourDraw(); });
+document.addEventListener("click", () => { if (tourAt >= 0) setTimeout(tourDraw, 80); }, true);
+
+// [?] 메뉴 — 사용 안내 다시 보기 · 사용 설명서 · 단축키
+function showHelpMenu() {
+  const r = $("tohelp").getBoundingClientRect();
+  popMenu(r.right - 190, r.bottom + 4, [
+    ["사용 안내 다시 보기", startTour],
+    [manualOk ? "사용 설명서 열기" : "사용 설명서 (설치판에만 있음)", () => { if (manualOk) send({ type: "open_manual" }); else setStatus("사용 설명서는 설치판의 doc 폴더에 있습니다"); }],
+    ["단축키", () => $("keys").classList.remove("hidden")],
+  ]);
 }
 
 // ── 키보드 ───────────────────────────────────────────────
@@ -1223,6 +1785,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "F5") { e.preventDefault(); if (lastQ) runFind(lastQ, false); return; }
   if (LAYOUT !== "window") return;
   if (e.altKey && (e.key === "p" || e.key === "P")) { e.preventDefault(); togglePv(); return; }
+  if (e.altKey && (e.key === "a" || e.key === "A")) { e.preventDefault(); toggleAi(); return; }
   if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goHist(-1); return; }
   if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); goHist(1); return; }
   if (e.altKey && e.key === "ArrowUp") { e.preventDefault(); goUp(); return; }
@@ -1263,6 +1826,7 @@ function togglePv() {
   applyLayout();
   sendRect();
   if (pvShown && rows[selIdx]) showPreview(rows[selIdx]);
+  saveUi();
 }
 
 // ── Rust 가 부르는 함수들 ────────────────────────────────
@@ -1271,7 +1835,15 @@ const api = {
     roots = v || [];
     // 트레이 · 설정 창에서 지금 고른 폴더를 뺐으면 범위를 푼다 — 없는 폴더에서 찾지 않게
     const low = (p) => p.toLowerCase().replace(/[\\/]+$/, "") + "\\";
-    if (scope && !roots.some((r) => low(scope).startsWith(low(r.path)))) scope = null;
+    if (scope && !roots.some((r) => low(scope).startsWith(low(r.path)))) { scope = null; saveUi(); }
+    // 폴더가 생겼으면 환영 화면을 거둔다(어디서 넣었든)
+    if (firstRun && roots.length) { firstRun = false; if (!lastQ && LAYOUT === "window") showMessage(welcome()); }
+    // 지난 실행의 검색 폴더 — 폴더 목록이 처음 온 때 한 번, 아직 검색 폴더 안이면 되살린다
+    if (scopeWant && roots.length) {
+      if (!scope && roots.some((r) => low(scopeWant).startsWith(low(r.path)))) scope = scopeWant;
+      scopeWant = null;
+      if (!lastQ) drawCrumb();
+    }
     drawNav();
   },
   // 인덱싱 진행 — 숫자만 고친다(0.5초마다 오므로 탐색 창을 다시 그리면 누르던 것이 끊긴다)
@@ -1287,6 +1859,58 @@ const api = {
   setExcluded(v) { excluded = v || []; drawNav(); },
   setDirs(path, names) { dirs[path] = names || []; drawNav(); },
   setPageClick(v) { pageClick = v || "preview"; },
+  // 첫 실행(검색 폴더 없음) — 처음 화면을 환영 화면으로
+  setFirstRun(v) {
+    firstRun = !!v;
+    if (LAYOUT === "window" && !lastQ) showMessage(welcome());
+  },
+  // 사용 안내 시작(첫 폴더를 넣은 직후 · [?] · 트레이 "사용 안내")
+  startTour() { if (LAYOUT === "window") startTour(); },
+  // 사용 설명서가 설치 폴더에 있나
+  setManual(v) { manualOk = !!v; },
+  // 고를 사전 후보 수 — [⚙ 설정] 버튼에 숫자로(알림을 놓쳐도 보이게)
+  setCandCount(n) {
+    candN = +n || 0;
+    if (LAYOUT !== "window") return;
+    const b = $("toset");
+    b.innerHTML = candN ? `⚙ 설정 <span class="badge">${candN}</span>` : "⚙ 설정";
+    b.title = candN ? `설정 — 등록할 동의어 · 이름 별칭 후보 ${candN}개가 있습니다` : "설정 — 검색 폴더 · 인덱싱 · AI 모델 · 화면";
+  },
+  // 모두 찾기 설정(기본 켬)
+  setFindAll(v) {
+    findAll = v !== false;
+    if (LAYOUT === "window") $("findall").checked = findAll;
+  },
+  // 모두 찾기 — 문서들의 나머지 쪽 줄. 이미 있는 쪽(같은 쪽 번호)은 그대로 두고 잇는다
+  docPages(r) {
+    if (!r || !r.req || r.req.q !== lastQ || !r.ok) return;
+    const byPath = {};
+    for (const d of docs) byPath[d.meta.doc_path] = d;
+    for (const path of r.req.paths || []) if (byPath[path]) byPath[path].meta.pages_left = 0;
+    for (const l of r.lines || []) {
+      const d = byPath[l.doc_path];
+      if (!d) continue;
+      if (d.pages.some((p) => p.page === l.page)) continue;
+      l.doc = d.meta.doc;
+      d.pages.push(l);
+    }
+    const cur = rows[selIdx];
+    render();
+    if (cur) { const j = rows.findIndex((x) => x.doc === cur.doc && x.page === cur.page); if (j >= 0) select(j, false); }
+    status();
+  },
+  // 모두 찾기 — 쪽 본문. 지금 미리 보기가 그 쪽이면 다시 그린다
+  pageText(r) {
+    if (!r || !r.req || r.req.q !== lastQ) return;
+    // 응답은 늦게 올 수 있다 — 같은 청크 id 를 가진 쪽 줄에 넣는다
+    const key = JSON.stringify(r.req.ids || []);
+    const line = (r.lines || [])[0];
+    for (const d of docs) for (const p of d.pages) {
+      if (p.ids && p.text == null && JSON.stringify(p.ids) === key) p.text = line && line.text ? line.text : p.snippet || "";
+    }
+    const cur = pageOf(rows[selIdx]);
+    if (cur && JSON.stringify(cur.ids || []) === key) showPreview(rows[selIdx]);
+  },
   // 탐색기 옆 패널 — 지금 탐색기가 보는 폴더가 찾는 범위
   setFolder(f) {
     if (LAYOUT !== "panel") return;
@@ -1312,22 +1936,46 @@ const api = {
     $("stvec").textContent = t || "";
     $("stvec").classList.toggle("hidden", !t);
   },
+  // 모델 준비 진행 — 값이 없으면 감춘다. % 는 경과 시간으로 어림한 값이라 "약" 을 붙이고, 95% 에서 기다릴 수 있어 초도 보인다
+  setLoad(v) {
+    if (LAYOUT !== "window") return;
+    // 띠가 나타나고 사라지면 아래 영역 높이가 바뀐다 — 미리 보기 자리를 다시 알린다
+    const was = !$("loadband").classList.contains("hidden");
+    $("loadband").classList.toggle("hidden", !v);
+    if (was !== !!v) sendRect();
+    if (!v) return;
+    $("loadbar").value = v.pct | 0;
+    $("loadtxt").textContent = `약 ${v.pct | 0}% · ${v.sec | 0}초` + (roots.length ? " — 끝나면 인덱싱을 시작합니다" : "");
+  },
   // 찾기를 맡겼는데 워커가 인덱싱 명령을 처리하는 중이다
   findWaiting() { findWaits = busy; },
   error(t) {
     setFindBusy(false);
-    if (ai && ai.text === "" && ai.info == null) { ai.err = t; redrawAi(); }
+    briefDrop = false; briefNext = false; briefBusy = false;
+    if (ai && !ai.done) { ai.err = t; ai.stopped = true; redrawAi(); }
     setStatus(t, true);
   },
-  // AI 답(RAG) — 같은 검색어로 묻고 흘러나오는 답을 카드에
-  evidence(items) { if (ai) { ai.items = items || []; ai.ev = ai.items.length; redrawAi(); } },
-  token(t) { if (ai) { ai.text += t; redrawAi(); } },
-  raw(t) { if (ai) { ai.text += t; redrawAi(); } },
+  // AI 답변창 — 흘러나오는 정리를 쌓는다. 멈추라고 한 정리의 글은 버린다
+  evidence(items) { if (ai && !briefDrop) { ai.items = items || []; redrawAi(); } },
+  token(t) { if (ai && !briefDrop) { ai.text += t; redrawAi(); } },
+  raw(t) { if (ai && !briefDrop) { ai.text += t; redrawAi(); } },
   finish(info) {
-    if (!ai) return;
+    const live = !briefDrop;
+    briefEnded();
+    if (!ai || !live) { redrawAi(); return; }
     ai.info = info || {};
-    if (info && info.answer && !ai.text) ai.text = info.answer;
+    ai.done = true;
+    if (!ai.stopped) {
+      briefCache.set(ai.key, ai);
+      // 오래된 것부터 지워 기억을 묶어 둔다
+      if (briefCache.size > BRIEF_CACHE) briefCache.delete(briefCache.keys().next().value);
+    }
     redrawAi();
+  },
+  // 채팅 질문이 먼저 들어와 쓰던 정리가 멈췄다 — 끝남 사건은 채팅 쪽으로 간다
+  briefStopped() {
+    briefBusy = false; briefDrop = false; briefNext = false;
+    if (ai && !ai.done) { ai.stopped = true; redrawAi(); }
   },
 };
 // 이 화면이 모르는 함수(대화 패널 전용 — setHistory · uploadDone …)는 조용히 넘긴다
@@ -1337,37 +1985,56 @@ window.rsb = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => {}) });
 if (LAYOUT === "window") {
   $("win").classList.remove("hidden");
   $("go").onclick = () => runFind($("q").value);
+  $("clr").onclick = resetFind;
   $("q").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (e.shiftKey) askAi(); else runFind($("q").value); }
+    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); runFind($("q").value); }
   });
-  $("askai").onclick = askAi;
-  $("toai").onclick = () => send({ type: "switch_mode", mode: "rag" });
+  $("aitoggle").onclick = toggleAi;
+  // 고른 폴더(없으면 맨 처음 인덱싱 폴더)를 열면서 채팅 모드로
+  $("toai").onclick = () => send({ type: "switch_mode", mode: "rag", folder: scope });
+  $("toset").onclick = () => send({ type: "settings", cand: candN > 0 });
+  // 문서 클릭(메뉴 닫기)보다 먼저 받아, 띄운 메뉴가 바로 닫히지 않게 한다
+  $("tohelp").onclick = (e) => { e.stopPropagation(); showHelpMenu(); };
+  $("keysx").onclick = () => $("keys").classList.add("hidden");
   $("again").onclick = () => { if (lastQ) runFind(lastQ, false); };
   $("back").onclick = () => goHist(-1);
   $("fwd").onclick = () => goHist(1);
   $("up").onclick = goUp;
-  $("group").onchange = render;
-  // 정렬 상자로 기준을 바꾸면 그 기준의 기본 방향으로
-  $("sort").onchange = () => { sortAsc = SORT_ASC_DEF[$("sort").value]; render(); };
+  $("group").onchange = () => { render(); saveUi(); };
+  // 모두 찾기 체크 — 바꾸면 이 PC 에 기억하고 지금 검색어로 다시 찾는다
+  $("findall").onchange = () => setFindAllOn($("findall").checked);  // 정렬 상자로 기준을 바꾸면 그 기준의 기본 방향으로
+  $("sort").onchange = () => { sortAsc = SORT_ASC_DEF[$("sort").value]; render(); saveUi(); };
   $("pvtoggle").onclick = togglePv;
-  // 미리 보기에 지금 보이는 것(목록 줄 · AI 답 근거)을 연다
+  // 미리 보기에 지금 보이는 것(목록 줄 · AI 답변창 번호)을 연다
   $("pvopen").onclick = () => { if (pvTarget) send({ type: "open_page", path: pvTarget.path, page: pvTarget.page }); };
   $("pvreveal").onclick = () => { if (pvTarget) send({ type: "reveal", path: pvTarget.path }); };
+  // ✕ — 명령줄의 [미리 보기 창] 버튼을 끈 것과 같다
+  $("pvx").onclick = () => { if (pvShown) togglePv(); };
   applyLayout();
   bindSplits();
   new ResizeObserver(sendRect).observe($("pvframe"));
   window.addEventListener("resize", () => { applyLayout(); sendRect(); });
   $("list").innerHTML = `<div class="msg">${welcome()}</div>`;
+  // 지난 화면 상태 되살리기 — 처음 실행이면 미리 보기 창 · AI 답변창 모두 켠다
+  if ([...$("group").options].some((o) => o.value === UI_SAVED.group)) $("group").value = UI_SAVED.group;
+  if ([...$("sort").options].some((o) => o.value === UI_SAVED.sort)) {
+    $("sort").value = UI_SAVED.sort;
+    sortAsc = typeof UI_SAVED.asc === "boolean" ? UI_SAVED.asc : SORT_ASC_DEF[UI_SAVED.sort];
+  }
+  if (typeof UI_SAVED.scope === "string" && UI_SAVED.scope) scopeWant = UI_SAVED.scope;
+  if (UI_SAVED.pv === false) togglePv();
+  if (UI_SAVED.ai !== false) toggleAi();
   drawNav();
   setTimeout(() => $("q").focus(), 50);
 } else {
   document.body.classList.add("panel");
   $("pnl").classList.remove("hidden");
   $("pgo").onclick = () => runFind($("pq").value);
+  $("pclr").onclick = resetFind;
   $("pq").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (e.shiftKey) askAi(); else runFind($("pq").value); }
+    if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); runFind($("pq").value); }
   });
-  $("pask").onclick = askAi;
+  $("pask").onclick = toggleAi;
   $("big").onclick = () => send({ type: "big", q: lastQ, folder: scope });
   $("torag").onclick = () => send({ type: "mode", mode: "rag" });
   $("pclose").onclick = () => send({ type: "close" });

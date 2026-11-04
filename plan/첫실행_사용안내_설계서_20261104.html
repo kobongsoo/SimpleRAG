@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>첫 실행 사용 안내</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card { margin: 0; }
+.flow .card h3 { margin-top: 0; }
+.flow ol, .flow ul { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; white-space: pre-wrap; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.kpi .v { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); line-height: 1.2; }
+.kpi .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+ul.tight { margin: 6px 0; padding-left: 20px; }
+ul.tight li { margin: 4px 0; }
+/* 화면 시안 */
+.mock { background: var(--sunken); border-radius: 12px; padding: 16px; margin: 16px 0; overflow-x: auto; }
+.mwin { min-width: 640px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; font-size: 13px; line-height: 1.5; overflow: hidden; }
+.mbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+.msel { border: 1px solid var(--rule); border-radius: 6px; padding: 2px 8px; }
+.mbtn { border-radius: 6px; padding: 2px 9px; white-space: nowrap; }
+.mbtn.on { background: var(--accent); color: var(--surface); font-weight: 600; }
+.mchk { border: 2px solid var(--accent); border-radius: 6px; padding: 1px 9px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+.mchk.on { background: var(--accent-soft); }
+.mhead { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; color: var(--muted); border-bottom: 1px solid var(--rule); }
+.mhead a { color: var(--accent); }
+.mgroup { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mrow { display: flex; justify-content: space-between; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--rule); }
+.mrow i { font-style: normal; color: var(--bad); white-space: nowrap; }
+.mpage { display: flex; justify-content: space-between; gap: 12px; padding: 4px 12px 4px 28px; color: var(--ink-2); border-bottom: 1px solid var(--rule); }
+.mpage i { font-style: normal; color: var(--bad); white-space: nowrap; }
+.mmore { padding: 3px 12px 3px 28px; color: var(--accent); border-bottom: 1px solid var(--rule); font-size: 12px; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 13px; }
+/* 안내 시안 전용 */
+.tour { position: relative; min-width: 640px; border-radius: 10px; overflow: hidden; border: 1px solid var(--rule); background: var(--surface); font-size: 13px; line-height: 1.5; }
+.tour .dim { position: absolute; inset: 0; background: rgba(15, 20, 28, .55); }
+.tour .spot { position: relative; z-index: 2; outline: 3px solid #7fb0ff; outline-offset: 2px; border-radius: 6px; background: var(--surface); box-shadow: 0 0 0 4px rgba(127,176,255,.35); }
+.tour .bubble { position: absolute; z-index: 3; width: 300px; background: #fff; color: #19212d; border-radius: 10px; padding: 12px 14px; box-shadow: 0 10px 28px rgba(0,0,0,.35); }
+.tour .bubble h4 { margin: 0 0 4px; font-size: 14px; }
+.tour .bubble p { margin: 0 0 10px; font-size: 13px; color: #3c4656; }
+.tour .bubble .bt { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #647083; }
+.tour .bubble .bt .sp { flex: 1; }
+.tour .bubble .bt b { background: #2c5aa0; color: #fff; border-radius: 6px; padding: 3px 12px; font-weight: 600; }
+.tour .bubble .bt u { text-decoration: none; border: 1px solid #d9dee6; border-radius: 6px; padding: 2px 10px; color: #3c4656; }
+.tour .dots { display: inline-flex; gap: 4px; }
+.tour .dots i { width: 7px; height: 7px; border-radius: 50%; background: #d9dee6; }
+.tour .dots i.on { background: #2c5aa0; }
+.wel { min-width: 640px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 28px 20px; text-align: center; font-size: 13.5px; color: var(--ink-2); }
+.wel .logo { width: 64px; height: 64px; margin: 0 auto 10px; border-radius: 18px; background: var(--accent-soft); display: grid; place-items: center; font-size: 30px; }
+.wel h4 { margin: 0 0 6px; font-size: 18px; color: var(--ink); }
+.wel .go { display: inline-block; margin-top: 14px; background: var(--accent); color: var(--surface); border-radius: 8px; padding: 7px 18px; font-weight: 600; }
+.wel ol { text-align: left; display: inline-block; margin: 12px 0 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · RAGSearchBox (MoAI Search) · 2026-11-04</div>
+  <h1>첫 실행 사용 안내 설계서</h1>
+  <p class="lede">처음 설치해 실행한 사람에게 <b>환영 화면 → 검색 폴더 고르기 → 실제 화면 위에서 7단계로 짚어 주는 안내</b>를 차례로 보여 준다.
+  안내는 첫 인덱싱이 도는 동안 띄워 기다리는 시간을 쓰고, 한 번 본 뒤에는 <b>[?]</b> 메뉴에서 언제든 다시 볼 수 있게 한다.</p>
+  <p class="meta">상태: 구현 완료(2026-11-04, 커밋 전) · 결과는 <a href="#s11">§11</a></p>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결론</a></li>
+    <li><a href="#s2">지금 첫 실행 흐름과 문제</a></li>
+    <li><a href="#s3">새 첫 실행 흐름</a></li>
+    <li><a href="#s4">환영 화면</a></li>
+    <li><a href="#s5">화면 위 안내 7단계</a></li>
+    <li><a href="#s6">다시 보기 · 사용 설명서</a></li>
+    <li><a href="#s7">동작 규칙</a></li>
+    <li><a href="#s8">구현 설계</a></li>
+    <li><a href="#s9">검증 계획</a></li>
+    <li><a href="#s10">남은 결정</a></li>
+    <li><a href="#s11">구현 결과</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="verdict"><strong>채택</strong> — 슬라이드를 넘기는 별도 창이 아니라 <b>실제 MoAI 탐색기 창 위에 어두운 막을 깔고 설명할 곳만 밝게 비추는 안내</b>(코치 마크)로 만든다.
+  버튼이 실제로 어디 있는지 그 자리에서 익히게 하기 위해서다. 지금의 Windows 알림 창("검색 폴더를 지정해 주세요")은 탐색기 창 안의 <b>환영 화면</b>으로 바꾼다.</div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">1 + 7</div><div class="l">환영 화면 1장 + 화면 위 안내 7단계</div></div>
+    <div class="kpi"><div class="v">1회</div><div class="l">자동으로는 처음 한 번만 (INI <code>[UI] TourDone</code>)</div></div>
+    <div class="kpi"><div class="v">0</div><div class="l">기존 사용자에게 자동으로 띄우는 일 (검색 폴더가 이미 있으면)</div></div>
+    <div class="kpi"><div class="v">[?]</div><div class="l">다시 보기 · 사용 설명서 · 단축키 — 명령줄과 트레이</div></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>지금 첫 실행 흐름과 문제</h2>
+  <div class="pipe"><span>설치 · 실행</span><b>→</b><span>탐색기 창</span><b>→</b><span class="hl">알림 창 "검색 폴더를 지정해 주세요"</span><b>→</b><span>폴더 고르기 창</span><b>→</b><span>인덱싱 시작</span><b>→</b><span>(안내 없음)</span></div>
+  <div class="tbl"><table>
+    <tr><th>문제</th><th>왜 문제인가</th></tr>
+    <tr><td>알림 창 한 장뿐</td><td>무엇을 하는 앱인지, 폴더를 왜 고르는지 설명 없이 Windows 기본 알림 창이 뜬다. 앱 화면과 따로 놀아 낯설다.</td></tr>
+    <tr><td>기능을 알려 주지 않음</td><td>문장 검색 · 모두 찾기 · 미리 보기 창 · AI 답변창 · 채팅 모드 · 사전 후보는 버튼만 있고 설명이 없다. 처음 쓰는 사람은 낱말 하나로 찾고 끝내기 쉽다.</td></tr>
+    <tr><td>첫 인덱싱 동안 할 일 없음</td><td>첫 인덱싱은 문서 수에 따라 몇 분 ~ 수십 분 걸린다. 결과가 비어 "안 되는 앱"처럼 보이기 쉽다.</td></tr>
+    <tr><td>도움말로 가는 길 없음</td><td>앱 안에 사용 설명서 버튼 · 메뉴가 없고 설치 파일에도 설명서가 들어 있지 않다(<code>installer.iss</code>).</td></tr>
+  </table></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>새 첫 실행 흐름</h2>
+  <div class="pipe"><span>설치 · 실행</span><b>→</b><span class="hl">환영 화면 (탐색기 창 안)</span><b>→</b><span>[검색 폴더 고르기]</span><b>→</b><span>인덱싱 시작</span><b>→</b><span class="hl">화면 위 안내 7단계</span><b>→</b><span>끝 · TourDone 기록</span></div>
+  <div class="flow">
+    <div class="card"><h3>처음 설치한 사람</h3>
+      <ol><li>검색 폴더가 없고 TourDone 이 없으면 환영 화면</li><li>폴더를 고르면 인덱싱을 시작하고 곧바로 안내 1단계</li><li>끝까지 보거나 [건너뛰기] 하면 TourDone 기록</li><li>폴더 고르기를 취소하면 환영 화면이 그대로 남는다(다시 누를 수 있다)</li></ol></div>
+    <div class="card"><h3>이미 쓰던 사람 (업데이트)</h3>
+      <ol><li>검색 폴더가 있으면 환영 화면 · 안내를 자동으로 띄우지 않는다</li><li>시작할 때 TourDone 을 조용히 기록한다</li><li>[?] → "사용 안내 다시 보기"로만 볼 수 있다</li></ol></div>
+  </div>
+  <div class="note">안내를 폴더를 고르기 <b>전</b>에 띄우지 않는 까닭 — 인덱스가 비어 있으면 모두 찾기 · 미리 보기 · AI 답변창이 보여 줄 것이 없고, 사용자는 어차피 첫 인덱싱을 기다려야 한다. 그 기다리는 시간에 안내를 본다.</div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>환영 화면</h2>
+  <p>지금 처음 화면(“무엇을 찾을까요?”) 자리에 대신 그린다. 알림 창 · 폴더 고르기 창이 갑자기 뜨는 대신, 사용자가 읽고 버튼을 누른다.</p>
+  <div class="mock">
+    <div class="wel">
+      <div class="logo">🗿</div>
+      <h4>MoAI-S 에 오신 것을 환영합니다</h4>
+      내 PC 문서에서 <b>문장으로 찾고</b>, 찾은 <b>문서 · 쪽 · 해당 부분</b>을 바로 보여 줍니다. 문서는 이 PC 밖으로 나가지 않습니다.
+      <br><ol><li>찾을 문서가 든 <b>폴더</b>를 고릅니다 (드라이브 전체 · 네트워크 · 클라우드 폴더는 안 됩니다)</li><li>문서를 읽는 동안 화면 사용법을 짧게 안내해 드립니다</li></ol>
+      <br><span class="go">📁 검색 폴더 고르기</span>
+      <div style="margin-top:10px;font-size:12px;color:var(--muted)">나중에 하려면 왼쪽 아래 [＋ 폴더 추가]</div>
+    </div>
+  </div>
+  <ul class="tight">
+    <li>[검색 폴더 고르기] 는 지금의 <code>add_folder_dialog</code> 를 그대로 부른다(드라이브 · 네트워크 · 클라우드 거르기 포함). 거절되면 그 안내 글을 환영 화면 아래에 보인다.</li>
+    <li>좁은 패널(채팅 모드)로 처음 시작하는 경우는 드물다 — 처음 기본은 탐색기 모드. 패널에서는 지금처럼 알림 창 흐름을 남긴다.</li>
+  </ul>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>화면 위 안내 7단계</h2>
+  <p>어두운 막 위로 설명할 곳 하나만 밝게 비추고, 그 옆에 말풍선을 띄운다. 말풍선은 <b>한두 문장</b>, 버튼은 <b>[다음]</b> · <b>[건너뛰기]</b> (마지막은 [시작하기]).</p>
+  <div class="mock">
+    <div class="tour" style="height:230px">
+      <div class="mbar" style="position:relative;z-index:1"><span class="msel">문서별 ▾</span><span class="msel">관련도 ▾</span><span class="mchk on spot">☑ 모두 찾기</span><span class="mbtn on">◫ 미리 보기 창</span><span class="mbtn on">✦ AI 답변창</span><span style="flex:1"></span><span class="mbtn">💬 채팅 모드</span><span class="mbtn">⚙ 설정</span><span class="mbtn">?</span></div>
+      <div class="dim"></div>
+      <div class="bubble" style="left:110px;top:56px">
+        <h4>3 / 7 · 모두 찾기</h4>
+        <p>검색어가 들어 있는 문서를 모두, <b>문서 › 쪽 › 발췌</b>로 보여 줍니다. 끄면 관련도 높은 문서만 봅니다.</p>
+        <div class="bt"><span class="dots"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></span><span class="sp"></span><u>건너뛰기</u><b>다음 →</b></div>
+      </div>
+    </div>
+  </div>
+  <div class="tbl"><table>
+    <tr><th>#</th><th>비추는 곳 (요소)</th><th>제목</th><th>말풍선 글</th></tr>
+    <tr><td>1</td><td>왼쪽 검색 폴더 줄(문서 수)</td><td>문서를 읽는 중</td><td>고른 폴더의 문서를 읽고 있습니다. 폴더 옆 숫자(읽은 문서 / 전체)로 진행을 볼 수 있고, <b>끝나기 전에도</b> 읽은 문서부터 찾을 수 있습니다. (실제 앱 시험에서 진행이 상태줄이 아니라 폴더 옆 숫자에 보여 바꿈)</td></tr>
+    <tr><td>2</td><td>검색창 <code>#q</code></td><td>문장으로 찾기</td><td>낱말뿐 아니라 <b>문장</b>으로 써도 됩니다. 예: “작년 내가 작성한 AI 제안서”, “출장비 정산 기준”.</td></tr>
+    <tr><td>3</td><td>☑ 모두 찾기 <code>#fawrap</code></td><td>모두 찾기</td><td>검색어가 들어 있는 문서를 모두, 문서 › 쪽 › 발췌로 보여 줍니다. 끄면 관련도 높은 문서만 봅니다.</td></tr>
+    <tr><td>4</td><td>◫ 미리 보기 창 <code>#pvtoggle</code></td><td>미리 보기</td><td>쪽을 <b>한 번</b> 누르면 이 창에 그 쪽이 보이고, <b>두 번</b> 누르면 문서가 열립니다. (Alt+P)</td></tr>
+    <tr><td>5</td><td>✦ AI 답변창 <code>#aitoggle</code></td><td>AI 정리</td><td>찾은 문서 중 상위 3건을 AI 가 한 줄씩 정리합니다. 원문 확인을 위해 문서 이름 옆 아이콘으로 바로 엽니다. (Alt+A)</td></tr>
+    <tr><td>6</td><td>💬 채팅 모드 <code>#toai</code></td><td>AI 에게 묻기</td><td>문서를 근거로 AI 에게 질문하고 답을 받는 모드입니다. 답 아래 근거 문서가 함께 나옵니다.</td></tr>
+    <tr><td>7</td><td>⚙ 설정 <code>#toset</code> + 왼쪽 아래 <code>#fadd</code></td><td>설정 · 폴더</td><td>검색 폴더 추가 · 빼기, 동의어 · 이름 별칭 사전은 여기서. 창을 닫아도 <b>트레이 아이콘</b>에 남고, 두 번 누르면 다시 열립니다.</td></tr>
+  </table></div>
+  <div class="note">글은 구현 때 화면 문구에 맞춰 다듬는다. 7단계를 넘기지 않는다 — 길면 끝까지 보는 사람이 줄어든다. 자세한 내용은 사용 설명서에 맡긴다.</div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>다시 보기 · 사용 설명서</h2>
+  <div class="flow">
+    <div class="card"><h3>명령줄 [?] 버튼 — [⚙ 설정] 오른쪽</h3>
+      <ul><li><b>사용 안내 다시 보기</b> — 7단계를 처음부터</li><li><b>사용 설명서 열기</b> — 설치 폴더의 HTML 설명서를 기본 브라우저로</li><li><b>단축키</b> — Alt+P · Alt+A · Enter · 쪽 두 번 누르기 (작은 표)</li></ul></div>
+    <div class="card"><h3>트레이 메뉴</h3>
+      <ul><li>"설정…" 아래에 <b>"사용 안내"</b> 한 줄 — 탐색기 창을 열고 안내 1단계부터</li><li>설명서는 [?] 에서만(트레이 메뉴를 길게 만들지 않는다)</li></ul></div>
+  </div>
+  <ul class="tight">
+    <li>사용 설명서는 설치 파일에 <code>{app}\doc\MoAISearch-사용자-설명서.html</code> 로 담는다. 지금 설명서의 스크린샷은 예전 화면이라, 담기 전에 새로 찍는다(§10).</li>
+    <li>설명서 파일이 없으면(개발 실행) [사용 설명서 열기] 를 흐리게 하고 툴팁으로 까닭을 보인다.</li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>동작 규칙</h2>
+  <div class="tbl"><table>
+    <tr><th>상황</th><th>동작</th></tr>
+    <tr><td>안내 중 다른 곳을 누름</td><td>막아 둔다(막 위 클릭은 무시). 비춘 곳은 눌러 볼 수 있다 — 예: 4단계에서 [미리 보기 창] 을 눌러 껐다 켜 볼 수 있다.</td></tr>
+    <tr><td>키보드</td><td>→ · Enter = 다음, ← = 앞, Esc = 건너뛰기</td></tr>
+    <tr><td>창 크기 바꿈 · 미리 보기 창 · AI 답변창 켜고 끔</td><td>비춘 자리와 말풍선을 다시 잰다(resize · 레이아웃 바뀜 때).</td></tr>
+    <tr><td>비출 요소가 보이지 않음</td><td>(예: 옛 워커라 모두 찾기 체크가 숨김) 그 단계를 건너뛴다.</td></tr>
+    <tr><td>말풍선 자리</td><td>요소 아래에 두되 화면 밖으로 넘치면 위로. 상태줄(1단계)은 위로.</td></tr>
+    <tr><td>PDF 미리 보기</td><td>미리 보기 PDF 는 화면 위에 따로 뜬 WebView 라 막이 덮지 못한다 → 안내 중에는 PDF 미리 보기를 잠시 숨긴다(<code>preview_hide</code>), 끝나면 되살린다.</td></tr>
+    <tr><td>안내 중 인덱싱 · 모델 준비</td><td>그대로 진행한다. 상태줄 진행은 막 위에서도 보이도록 1단계 외에도 막에서 뺀다(맨 아래 줄은 늘 밝게).</td></tr>
+    <tr><td>안내 중 알림(폴더 추가 결과 등)</td><td>지금처럼 화면 알림 줄에 보인다(막 위).</td></tr>
+    <tr><td>끝 · 건너뛰기</td><td>앱에 <code>{type:"tour_done"}</code> → INI <code>[UI] TourDone = 1</code>. 다음 실행부터 자동으로 띄우지 않는다.</td></tr>
+    <tr><td>안내 중 창을 닫음 · 앱 종료</td><td>본 것으로 친다(TourDone 기록) — 또 띄우면 성가시다. [?] 로 다시 볼 수 있다.</td></tr>
+    <tr><td>앞으로 화면이 크게 바뀜</td><td>TourDone 을 숫자(안내 판)로 두어, 판을 올리면 바뀐 단계만 다시 보여 줄 수 있게 한다(지금은 1).</td></tr>
+  </table></div>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>구현 설계</h2>
+  <div class="tbl"><table>
+    <tr><th>파일</th><th>바꿀 것</th></tr>
+    <tr><td><code>ui/browse.html</code></td><td>
+      · 환영 화면 <code>welcomeFirst()</code> — [검색 폴더 고르기] → <code>{type:"add_folder"}</code><br>
+      · 안내 막 · 말풍선(한 벌의 DOM) · 단계 표 <code>TOUR_STEPS = [{sel, title, text, place}]</code><br>
+      · <code>startTour()</code> · <code>tourStep(i)</code> · <code>endTour(done)</code> — 요소 자리(<code>getBoundingClientRect</code>)로 비춤 상자를 맞추고 resize 에 다시 잰다<br>
+      · [?] 버튼과 작은 메뉴(다시 보기 · 설명서 · 단축키)<br>
+      · 앱이 부르는 <code>rsb.setFirstRun(bool)</code> · <code>rsb.startTour()</code> · <code>rsb.setManual(있나)</code></td></tr>
+    <tr><td><code>src/main.rs</code></td><td>
+      · <code>ask_first_folder</code> — 탐색기 창이면 알림 창 대신 <code>setFirstRun(true)</code>(패널은 지금처럼)<br>
+      · 첫 폴더를 넣고 인덱싱을 시작했으면 <code>startTour()</code> — TourDone 이 없을 때만<br>
+      · IPC <code>tour_done</code> → INI, <code>open_manual</code> → 설명서 열기(ShellExecute)<br>
+      · 시작 때 폴더가 이미 있고 TourDone 이 없으면 조용히 기록(기존 사용자)</td></tr>
+    <tr><td><code>src/settings.rs</code></td><td><code>tour_done: u32</code> — <code>[UI] TourDone</code></td></tr>
+    <tr><td><code>src/tray.rs</code></td><td>메뉴 "사용 안내" (<code>tour</code>) → 탐색기 창 열고 <code>startTour()</code></td></tr>
+    <tr><td><code>installer.iss</code></td><td>사용 설명서 HTML 을 <code>{app}\doc</code> 에 담기</td></tr>
+  </table></div>
+  <p>Python 판(RAGSearchBox)은 이번 범위에 넣지 않는다 — 설치판은 Rust 판이다.</p>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>검증 계획</h2>
+  <ul class="tight">
+    <li><b>새 설치처럼</b> — 빈 데이터 폴더 · 빈 ini 로 띄워: 환영 화면 → 폴더 고르기 취소(환영 화면 남음) → 다시 골라 인덱싱 시작 → 안내 7단계 → TourDone 기록 → 다시 실행 시 안내 없음</li>
+    <li><b>기존 사용자</b> — 지금 설치판 ini 로 띄워 안내가 뜨지 않고 TourDone 만 기록되는지</li>
+    <li><b>단계마다</b> 비춘 자리가 요소와 맞는지 — 창 크기 1240×780 · 최대화 · 최소 크기(760×420), 배율 100% · 200% 모니터</li>
+    <li><b>PDF 미리 보기</b>가 안내 중 숨고 끝나면 되살아나는지</li>
+    <li><b>건너뛰기 · Esc · 창 닫기</b> 모두 TourDone 기록</li>
+    <li><b>[?] 메뉴</b> — 다시 보기 · 설명서 열기(설치판) · 설명서 없음(개발 실행) 흐림</li>
+    <li>트레이 "사용 안내" — 창이 숨겨져 있어도 열고 1단계부터</li>
+  </ul>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>남은 결정</h2>
+  <div class="tbl"><table>
+    <tr><th>항목</th><th>제안</th></tr>
+    <tr><td>사용 설명서 스크린샷</td><td>설치 파일에 담기 전에 새 화면(AI 답변창 · 모두 찾기 · 묶음 머리 · 설정 버튼)으로 다시 찍는다. 안내 구현과 따로 진행해도 된다.</td></tr>
+    <tr><td>채팅 모드(패널) 안내</td><td>이번에는 넣지 않는다. 처음 [채팅 모드] 로 바꿨을 때 짧은 3단계(질문 · 근거 · 탐색기 모드로 돌아가기)를 나중에 따로 검토.</td></tr>
+    <tr><td>예시 검색 실행</td><td>넣지 않는다 — 인덱싱이 덜 끝나면 결과가 비어 실패처럼 보인다. 2단계 말풍선의 예시 문장만 보인다.</td></tr>
+    <tr><td>안내 글 다듬기</td><td>구현 뒤 실제 화면에서 한 번 읽어 보고 고친다.</td></tr>
+  </table></div>
+</section>
+
+<section id="s11">
+  <h2><span class="no">11</span>구현 결과</h2>
+  <div class="tbl"><table>
+    <tr><th>항목</th><th>결과</th></tr>
+    <tr><td>환영 화면</td><td>검색 폴더가 없으면 알림 창 대신 탐색기 창 안에 표시 · [검색 폴더 고르기] → 폴더 추가와 같은 일 · 폴더가 생기면(어디서 넣든) 거둠</td></tr>
+    <tr><td>안내 시작</td><td>첫 폴더를 넣은 직후(환영 화면 · 왼쪽 아래 · 트레이 어디서든) TourDone 이 없으면 시작</td></tr>
+    <tr><td>안내 7단계</td><td>막 네 조각 + 테두리 + 말풍선 · 비춘 곳은 눌러 볼 수 있음 · 상태줄은 늘 밝게 · 안 보이는 요소의 단계는 건너뜀 · →/Enter · ← · Esc · 창 크기 바뀌면 다시 잼 · PDF 미리 보기는 안내 중 숨김</td></tr>
+    <tr><td>기록</td><td>끝 · 건너뛰기 · Esc → INI <code>[UI] TourDone = 1</code> · 기존 사용자(폴더 있음)는 화면이 뜰 때 조용히 기록</td></tr>
+    <tr><td>[?] 메뉴</td><td>사용 안내 다시 보기 · 사용 설명서 열기(설치판 <code>doc\MoAISearch-사용자-설명서.html</code>, 없으면 흐린 안내) · 단축키 상자</td></tr>
+    <tr><td>트레이</td><td>"설정" 아래 "사용 안내" — 탐색기 창을 열고 1단계부터</td></tr>
+    <tr><td>설치 파일</td><td><code>build_dist.ps1</code> 이 doc 의 최신 설명서를 <code>dist-rust\doc</code> 에 날짜 없는 이름으로 담고, <code>installer.iss</code> 가 <code>{app}\doc</code> 에 설치</td></tr>
+    <tr><td>시험(화면)</td><td>환영 화면 · 버튼 IPC · 폴더 도착 시 거둠 · 7단계 키 진행 · 끝에 tour_done 1회 · 모두 찾기 숨김 시 3단계 건너뜀 · ← 되돌아감 · Esc 종료 · [?] 메뉴 3줄 · 단축키 상자 열고 닫기</td></tr>
+  </table></div>
+  <p><b>실제 앱 시험(2026-11-04)</b> — dist-rust 를 빈 인덱스 · 빈 ini 의 따로 된 폴더로 띄워(WebView2 원격 디버깅으로 조작, 폴더 고르기 창은 Win32 메시지로 입력) 확인했다.</p>
+  <div class="tbl"><table>
+    <tr><th>시험</th><th>결과</th></tr>
+    <tr><td>새 설치</td><td>환영 화면 → [검색 폴더 고르기] → 폴더 고르기 창 → 폴더 추가 즉시 환영 화면이 걷히고 안내 1단계 시작 → 7단계 끝 → <code>TourDone = 1</code> 기록 (두 번, 48개 · 6개 문서 폴더)</td></tr>
+    <tr><td>배율</td><td>탐색기 창 200% 모니터에서 비춤 자리 · 말풍선 자리 맞음 · 설정 창은 100% 모니터에서 720×720</td></tr>
+    <tr><td>기존 사용자</td><td>폴더가 있고 TourDone 이 없는 ini 로 다시 띄우면 안내 없이 TourDone 만 기록</td></tr>
+    <tr><td>트레이 "사용 안내"</td><td>메뉴 명령으로 안내 1단계 시작</td></tr>
+    <tr><td>[?] 메뉴</td><td>다시 보기 · 사용 설명서 열기(설치 폴더 doc 에 설명서 있음 → 켜짐) · 단축키</td></tr>
+  </table></div>
+  <div class="note"><b>시험에서 고친 것</b> — 1단계가 상태줄을 비췄으나 인덱싱 진행은 왼쪽 폴더 옆 숫자(읽은 문서 / 전체)에 보여, 1단계를 검색 폴더 줄로 바꿨다. 상태줄은 모든 단계에서 밝게 둔다.</div>
+  <p><b>확인하지 않은 것</b> — 설치 파일(Inno Setup)을 새로 만들어 설치하는 시험, 설명서 열기 버튼으로 실제 브라우저를 띄우는 동작(파일 유무만 확인).</p>
+</section>
+
+<footer>
+  근거: rust/ragsearchbox/src/main.rs <code>ask_first_folder</code> · <code>add_folder_dialog</code> · rust/installer.iss · 2026-11-04 대화의 검토
+</footer>
+
+</div>
+</body>
+</html>

@@ -151,6 +151,8 @@ pub struct Config {
     pub embed_prefetch: bool,
     // 한 번에 새로 임베딩할 청크가 이보다 많으면 단계형 인덱싱(index.defer_vectors_over, 기본 500, 0 = 끔)
     pub defer_vectors_over: i64,
+    // 앱 워커의 문서 반영은 벡터를 모두 뒤로 미룬다(index.vectors_background, 기본 켬 — 벡터 백그라운드 설계서 §7)
+    pub vectors_background: bool,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -393,6 +395,10 @@ fn build() -> Result<Config, ConfigError> {
         None => pick_bool(&y, "embed.prefetch", true),
     };
     let defer_vectors_over = pick_int(&y, "index.defer_vectors_over", 500, Some("SIMPLERAG_DEFER_VECTORS_OVER"))?;
+    let vectors_background = match env("SIMPLERAG_VECTORS_BACKGROUND") {
+        Some(v) => v != "0",
+        None => pick_bool(&y, "index.vectors_background", true),
+    };
 
     let gen_backend = std::env::var("SIMPLERAG_GEN_BACKEND").unwrap_or_else(|_| "auto".into()).trim().to_lowercase();
     // Vulkan / CPU 판 llama.cpp DLL 폴더(프로그램 폴더 기준) — 데이터 루트를 옮겨도 iGPU 가 꺼지지 않게
@@ -454,6 +460,7 @@ fn build() -> Result<Config, ConfigError> {
         embed_threads,
         embed_prefetch,
         defer_vectors_over,
+        vectors_background,
     })
 }
 
@@ -609,6 +616,7 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
         ]),
         ("index", vec![
             ("defer_vectors_over", Check::Int(0, 100_000_000)),
+            ("vectors_background", Check::Bool),
         ]),
         ("rerank", vec![
             ("mode", Check::RerankMode),

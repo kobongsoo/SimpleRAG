@@ -107,10 +107,10 @@
     <label style="margin:0"><input type="radio" name="pclick" id="pc_app" value="app"> 기본 PDF 앱에서 그 쪽</label></div>
   <div class="note" id="modenote"></div>
 </fieldset>
-<fieldset><legend>인덱싱 폴더</legend>
+<fieldset><legend>검색 폴더</legend>
   <div class="row"><div class="grow"><select id="folders" size="3"></select></div>
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
-  <label><input type="checkbox" id="folder_icon"> 인덱싱 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
+  <label><input type="checkbox" id="folder_icon"> 검색 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
   <div class="note" id="foldernote"></div>
 </fieldset>
 <fieldset><legend>인덱싱 확장자</legend>
@@ -123,6 +123,9 @@
 </fieldset>
 <fieldset><legend>시작</legend>
   <label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label>
+</fieldset>
+<fieldset><legend>알림</legend>
+  <label><input type="checkbox" id="candnotify"> 사전 후보 알림 (쉬는 동안 동의어 · 이름 별칭 후보를 만들고, 새 후보가 있으면 하루 한 번 알림 · 기본 켬)</label>
 </fieldset>
 <fieldset><legend>대화</legend>
   <label><input type="checkbox" id="multiturn"> 이어서 묻기 (멀티턴 — 같은 대화의 앞 질문 이어 받기 · 기본 켬)</label>
@@ -216,12 +219,13 @@ window.rsb = {
       fs.forEach((f, i) => { const o = document.createElement("option"); o.textContent = labels[i]; o.value = f; sel.appendChild(o); });
       sel.value = keep;
     }
-    let note = !fs.length ? "인덱싱할 폴더가 없습니다 — [추가…] 로 고르세요"
+    let note = !fs.length ? "검색할 폴더가 없습니다 — [추가…] 로 고르세요"
       : (info.docs == null ? "" : "인덱싱된 문서 " + Number(info.docs).toLocaleString() + "건");
     if (info.folder_msg) note = (note ? note + "\n" : "") + info.folder_msg;
     $("foldernote").textContent = note;
     if (info.exts) syncExts(info);
     if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
+    if (typeof info.cand_notify === "boolean") $("candnotify").checked = info.cand_notify;
     // 정밀 모드 — config.yaml 값으로 매번 맞춘다(파일을 직접 고쳐도 따라간다). 못 찾으면 잠근다
     $("precision").disabled = typeof info.precision !== "boolean";
     if (typeof info.precision === "boolean") $("precision").checked = info.precision;
@@ -462,6 +466,7 @@ function confirmByName(path, note, onOk) {
 }
 $("b_rescan").onclick = () => send({ type: "rescan" });
 $("autorun").onchange = () => send({ type: "autorun" });
+$("candnotify").onchange = () => send({ type: "cand_notify", on: $("candnotify").checked });
 $("precision").onchange = () => send({ type: "precision", on: $("precision").checked });
 $("multiturn").onchange = () => send({ type: "multiturn", on: $("multiturn").checked });
 for (const id of ["m_explorer", "m_rag"]) $(id).onchange = () => send({ type: "ui_mode", value: $(id).value });

@@ -205,6 +205,9 @@ EMBED_PREFETCH = ((os.environ["SIMPLERAG_EMBED_PREFETCH"] != "0") if os.environ.
 # 단계형 인덱싱 문턱 — 이번 실행에서 새로 임베딩할 청크가 이만큼 쌓인 뒤로는 벡터를 비워 두고
 #   BM25 로 먼저 검색되게 한다(index.defer_vectors_over, 기본 500, 0 = 끔 — 설계서 §3-5)
 DEFER_VECTORS_OVER = _setting("index.defer_vectors_over", 500, "SIMPLERAG_DEFER_VECTORS_OVER")
+# 앱 워커의 문서 반영은 벡터를 모두 뒤로 미룬다(index.vectors_background, 기본 켬 — 벡터 백그라운드 설계서 §7)
+VECTORS_BACKGROUND = ((os.environ["SIMPLERAG_VECTORS_BACKGROUND"] != "0") if os.environ.get("SIMPLERAG_VECTORS_BACKGROUND")
+                      else bool(_YAML.get("index.vectors_background", True)))
 
 
 #------------------------------------------------------------------
@@ -401,6 +404,11 @@ GEN_MODELS = {
     "kanana-1.5-2.1b-q4": "kanana-1.5-2.1b-instruct-Q4_K_M.gguf",  # 카카오, Apache-2.0, 2.1B
     # 정밀 모드(generation.precision) 전용 — 골든 100문항 이웃 청크와 함께 정답 50 → 59, 답 완료 약 2배
     "qwen3-4b-q4": "Qwen3-4B-Q4_K_M.gguf",
+    # Qwen3.5 비교 측정용(unsloth GGUF). 파일이 없으면 그 모델을 고를 때만 실패한다.
+    "qwen3.5-2b-q4": "Qwen3.5-2B-Q4_K_M.gguf",
+    "qwen3.5-4b-q4": "Qwen3.5-4B-Q4_K_M.gguf",
+    # LG EXAONE 4.0 1.2B (공식 GGUF, EXAONE 라이선스 — 비상업) 비교 측정용
+    "exaone-4.0-1.2b-q4": "EXAONE-4.0-1.2B-Q4_K_M.gguf",
 }
 # 모델별 채팅 형식(generate/chatformat.py). 적지 않은 별칭은 qwen3 로 본다 —
 #   형식이 틀리면 학습 때 본 적 없는 입력이 들어가 품질 비교가 무의미해진다.
@@ -410,6 +418,10 @@ GEN_MODEL_FORMATS = {
     "midm-2.0-mini-q4": "midm",
     "kanana-1.5-2.1b-q4": "kanana",
     "qwen3-4b-q4": "qwen3",
+    # Qwen3.5 도 ChatML(<|im_start|>) + 빈 <think> 로 사고를 끄는 같은 형식
+    "qwen3.5-2b-q4": "qwen3",
+    "qwen3.5-4b-q4": "qwen3",
+    "exaone-4.0-1.2b-q4": "exaone4",
 }
 # 정밀 모드(계획서 D8 ③ / REPORT §44): 1.7B 는 506문항 정답 377 → 399(p=0.007),
 #   골든셋 v2 must 57 → 80 이라 기본으로 쓴다. 대신 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).

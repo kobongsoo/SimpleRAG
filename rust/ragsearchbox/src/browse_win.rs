@@ -30,12 +30,15 @@ pub struct Browse {
     pv_rect: (f64, f64, f64, f64),
     pv_show: bool,
     pv_pdf: bool,
+    placed: bool,
+    // 기억한 창 자리(x, y 는 물리 픽셀, 안쪽 너비 · 높이는 논리 픽셀, 최대화) — 숨길 때 잰다. 처음 보일 때 크기 · 최대화만 쓴다(위치는 쓰지 않음)
+    pub place: Option<(i32, i32, u32, u32, bool)>,
 }
 
 impl Browse {
     pub fn new(window: Window, webview: WebView, preview: Option<WebView>) -> Browse {
         Browse { window, webview, preview, visible: false, ready: false, queued: vec![], pv_url: String::new(),
-                 pv_rect: (0.0, 0.0, 0.0, 0.0), pv_show: true, pv_pdf: false }
+                 pv_rect: (0.0, 0.0, 0.0, 0.0), pv_show: true, pv_pdf: false, placed: false, place: None }
     }
 
     pub fn hwnd(&self) -> isize {
@@ -55,6 +58,9 @@ impl Browse {
     pub fn call(&mut self, func: &str, arg: Value) {
         self.js(format!("rsb.{}({})", func, arg));
     }
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
     pub fn on_ready(&mut self) {
         self.ready = true;
         for c in std::mem::take(&mut self.queued) {
@@ -66,6 +72,15 @@ impl Browse {
     // 보이기 — 최소화돼 있으면 되살리고 앞으로
     //------------------------------------------------------------------
     pub fn show(&mut self) {
+        if !self.placed {
+            self.placed = true;
+            // 지난 크기만 되살린다 — 위치는 기억하지 않고 Windows 가 고른 자리를 화면 안으로(창을 잃어버리지 않게)
+            let max = self.restore_size();
+            self.fit_on_screen();
+            if max {
+                self.window.set_maximized(true);
+            }
+        }
         self.window.set_visible(true);
         self.window.set_minimized(false);
         self.window.set_focus();
@@ -73,9 +88,91 @@ impl Browse {
         crate::win::bring_to_front(self.hwnd());
     }
 
+    //------------------------------------------------------------------
+    // 처음 보일 때 창을 화면 안으로 — Windows 가 고른 자리에 그대로 두면 아래가 작업 표시줄 뒤로 가려
+    // 맨 아래 상태줄(모델 준비 · 인덱싱 진행)이 안 보인다. 그래도 넘치면 높이를 줄인다
+    //------------------------------------------------------------------
+    fn fit_on_screen(&self) {
+        let (Some(m), Ok(pos)) = (self.window.current_monitor(), self.window.outer_position()) else { return };
+        let outer = self.window.outer_size();
+        let inner = self.window.inner_size();
+        let top = m.position().y;
+        // 작업 표시줄 자리
+        let limit = top + m.size().height as i32 - (56.0 * m.scale_factor()) as i32;
+        let room = (limit - top).max(0) as u32;
+        let height = outer.height.min(room);
+        if height < outer.height {
+            self.window.set_inner_size(tao::dpi::PhysicalSize::new(inner.width, inner.height - (outer.height - height)));
+        }
+        // 오른쪽으로 넘치면 왼쪽으로 당긴다(지난 크기가 이 모니터보다 넓었을 때)
+        let (left, right) = (m.position().x, m.position().x + m.size().width as i32);
+        let x = if pos.x + outer.width as i32 > right { (right - outer.width as i32).max(left) } else { pos.x };
+        if pos.y + height as i32 > limit || x != pos.x {
+            self.window.set_outer_position(tao::dpi::PhysicalPosition::new(x, (limit - height as i32).max(top).min(pos.y)));
+        }
+    }
+
     pub fn hide(&mut self) {
+        self.measure_place();
         self.window.set_visible(false);
         self.visible = false;
+    }
+
+    //------------------------------------------------------------------
+    // 기억한 크기로 — 지금 모니터보다 넓으면 모니터 너비로 줄인다. 돌려줌: 최대화였나
+    //=> 논리 픽셀로 기억하므로 배율이 다른 모니터(200% ↔ 100%)에서 열어도 보이는 크기가 같다
+    //------------------------------------------------------------------
+    fn restore_size(&self) -> bool {
+        let Some((_, _, w, h, max)) = self.place else { return false };
+        let w = match self.window.current_monitor() {
+            Some(m) => (w as f64).min(m.size().width as f64 / m.scale_factor()),
+            None => w as f64,
+        };
+        self.window.set_inner_size(tao::dpi::LogicalSize::new(w, h as f64));
+        max
+    }
+
+    //------------------------------------------------------------------
+    // 지금 자리 재기 — 최대화 · 최소화 중이면 크기는 지난 보통 자리를 그대로 두고 최대화 여부만 바꾼다
+    //------------------------------------------------------------------
+    fn measure_place(&mut self) {
+        if !self.visible || self.window.is_minimized() {
+            return;
+        }
+        let max = self.window.is_maximized();
+        if max {
+            if let Some(p) = self.place.as_mut() {
+                p.4 = true;
+            } else if let Ok(pos) = self.window.outer_position() {
+                // 처음부터 최대화만 써 왔다 — 되돌릴 크기는 처음 크기로
+                self.place = Some((pos.x, pos.y, 1240, 780, true));
+            }
+            return;
+        }
+        if let Ok(pos) = self.window.outer_position() {
+            // 물리 픽셀 → 논리 픽셀 — 지금 모니터 배율로 나눈다
+            let s = self.window.inner_size().to_logical::<f64>(self.window.scale_factor());
+            self.place = Some((pos.x, pos.y, s.width.round() as u32, s.height.round() as u32, false));
+        }
+    }
+
+    // INI 에 적을 글 "x,y,너비,높이,최대화(0/1),L" — 끝의 L 은 논리 픽셀 표시. 아직 잰 적이 없으면 None
+    pub fn place_text(&self) -> Option<String> {
+        self.place.map(|(x, y, w, h, m)| format!("{},{},{},{},{},L", x, y, w, h, m as u8))
+    }
+
+    // INI 글 → 자리 — 모양이 틀리거나 너무 작으면 None
+    pub fn parse_place(raw: &str) -> Option<(i32, i32, u32, u32, bool)> {
+        let v: Vec<&str> = raw.split(',').map(|t| t.trim()).collect();
+        // L 이 없는 값은 물리 픽셀로 적던 이전 빌드의 것이라 버린다(배율이 다르면 크기가 두 배 · 절반이 된다)
+        if v.len() != 6 || v[5] != "L" {
+            return None;
+        }
+        let (x, y, w, h) = (v[0].parse().ok()?, v[1].parse().ok()?, v[2].parse::<u32>().ok()?, v[3].parse::<u32>().ok()?);
+        if w < 400 || h < 300 {
+            return None;
+        }
+        Some((x, y, w, h, v[4] == "1"))
     }
 
     //------------------------------------------------------------------
@@ -108,6 +205,20 @@ impl Browse {
         if let Some(pv) = &self.preview {
             let _ = pv.set_visible(false);
         }
+    }
+
+    //------------------------------------------------------------------
+    // 모니터 배율이 바뀌었다(배율이 다른 모니터로 창을 옮김) — PDF 미리 보기 자리를 새 배율로 다시 맞춘다
+    //=> 미리 보기 WebView 는 자리를 정할 때의 배율로 물리 픽셀을 박아 두므로(wry set_bounds) 그대로 두면
+    //   200% → 100% 로 옮길 때 두 배 크기로 목록을 덮고, 반대면 절반 크기로 줄어든다
+    //------------------------------------------------------------------
+    pub fn dpi_changed(&mut self) {
+        let (x, y, w, h) = self.pv_rect;
+        if w > 0.0 {
+            self.set_preview_rect(x, y, w, h, self.pv_show);
+        }
+        // 창 크기가 바뀐 뒤 화면이 잰 자리로 한 번 더 — 배율 사건은 크기 바뀜보다 먼저 온다
+        self.js("typeof sendRect === 'function' && setTimeout(sendRect, 150)".into());
     }
 
     //------------------------------------------------------------------

@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>인덱싱 속도 개선 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card h3 { margin-top: 0; }
+.flow ol, .flow ul { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
+.ok { color: var(--good); font-weight: 600; }
+.ng { color: var(--bad); font-weight: 600; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.kpi .v { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); line-height: 1.2; }
+.kpi .v.bad { color: var(--bad); }
+.kpi .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.bars { margin: 10px 0; font-size: 13.5px; }
+.bars .r { display: grid; grid-template-columns: 170px 1fr 60px; gap: 10px; align-items: center; margin: 5px 0; }
+@media (max-width: 560px) { .bars .r { grid-template-columns: 110px 1fr 48px; } }
+.bars .track { height: 12px; background: var(--sunken); border-radius: 6px; overflow: hidden; }
+.bars .track i { display: block; height: 100%; border-radius: 6px; background: var(--accent); }
+.bars .track i.g { background: var(--good); }
+.bars .track i.w { background: var(--warn); }
+.bars .track i.b { background: var(--bad); }
+.bars .n { text-align: right; font-family: var(--mono); color: var(--ink-2); }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+.mock { background: var(--sunken); border-radius: 12px; padding: 18px; margin: 16px 0; }
+.mock .win { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; max-width: 700px; margin: 0 auto; font-size: 14px; }
+.mock .bar { display: flex; gap: 8px; align-items: center; padding: 9px 14px; border-bottom: 1px solid var(--rule); font-weight: 600; }
+.mock .bar span { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 13px; }
+.mock .body { padding: 12px 14px; }
+.mock .q { border: 1px solid var(--rule); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
+.mock .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; align-items: center; }
+.mock .chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--accent); border-radius: 999px; padding: 1px 10px; font-size: 12.5px; background: var(--accent-soft); color: var(--accent); }
+.mock .chip.soft { border-style: dashed; }
+.mock .chip .x { color: var(--muted); }
+.mock .lbl { font-size: 12.5px; color: var(--muted); }
+.mock .row { border: 1px solid var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+.mock .row .t { font-weight: 600; }
+.mock .row .m { font-size: 12.5px; color: var(--muted); }
+.mock .row .m b { color: var(--good); font-weight: 600; }
+.mock .row .s { font-size: 13px; color: var(--ink-2); margin-top: 3px; }
+.mock mark { background: var(--warn-soft); color: inherit; padding: 0 2px; border-radius: 3px; }
+.steps { counter-reset: st; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: st; position: relative; padding-left: 40px; margin: 14px 0; }
+.steps > li::before { content: counter(st); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: var(--surface); font-weight: 700; font-size: 14px; display: grid; place-items: center; }
+footer { margin-top: 56px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (SimpleRAG) · 설계서 · 2026-10-30</div>
+  <h1>인덱싱 속도 개선 설계서 — 전체 인덱싱은 스레드 · 겹치기 · 단계형으로, 증분 인덱싱은 BM25 를 고쳐서</h1>
+  <p class="lede">인덱싱 시간은 <b>상황에 따라 잡아먹는 곳이 다르다</b>. 처음(전체) 인덱싱은 시간의 대부분이 <b>벡터 생성</b>이고,
+  문서 몇 건을 넣거나 고치는 증분 인덱싱(자동 인덱싱)은 시간의 대부분이 <b>BM25 전체 재구축</b>이다.
+  그래서 두 갈래로 나눠 고친다 — ① 전체 인덱싱: <b>다음 문서의 파싱 · 청킹을 임베딩과 겹치고</b>, <b>CPU 임베딩 스레드 수</b>를 장시간 측정으로 정하며,
+  <b>BM25 를 먼저 만들어 바로 검색되게 하고 벡터는 뒤에서 채우는 단계형 인덱싱</b>으로 "검색 가능까지"를 66분 → 약 6분으로 줄인다.
+  가장 효과가 큰 OpenVINO iGPU 임베딩(약 2.1배)은 <b>모델 파일을 하나 더 넣어야 해 배포 용량이 약 335MB 늘어나므로 보류</b>하고 추후 고려 사항(§8)으로 둔다.
+  ② 증분 인덱싱: BM25 를 <b>바뀐 부분만</b> 고치게 하고, 수정된 문서는 <b>바뀐 청크만</b> 다시 임베딩한다.</p>
+  <p class="meta">대상: SimpleRAG Python 판 · Rust 판(워커 <code>simplerag-rs</code>) · RAGSearchBox 자동 인덱싱 ·
+  실측 PC: i5-1340P(4P+8E) · Iris Xe · 16GB · AC 전원 ·
+  실측 도구: <code>rust/simplerag/examples/index_profile.rs</code> · <code>bm25_profile.rs</code> · <code>results/embed_igpu/</code> ·
+  관련: report/임베딩_iGPU_Vulkan_vs_OpenVINO_20261030.html</p>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결론</a></li>
+    <li><a href="#s2">지금 시간은 어디에 드나 (실측)</a></li>
+    <li><a href="#s3">1부 · 전체 인덱싱 — 파싱 겹치기 · CPU 스레드 · 단계형 인덱싱</a></li>
+    <li><a href="#s4">2부 · 증분 인덱싱 — BM25 · 벡터 재사용</a></li>
+    <li><a href="#s5">구현 단계</a></li>
+    <li><a href="#s6">시험 · 측정 계획</a></li>
+    <li><a href="#s7">결정이 필요한 것</a></li>
+    <li><a href="#s8">추후 고려 — OpenVINO iGPU 임베딩 (보류)</a></li>
+  </ol>
+</nav>
+
+<!-- 1 -->
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="kpis">
+    <div class="kpi"><div class="v">66→47분</div><div class="l">전체 인덱싱 · 18.7만 청크 (8스레드 측정 1.30배 + 겹치기, 추정)</div></div>
+    <div class="kpi"><div class="v">66분→6분</div><div class="l">검색할 수 있게 되기까지 · 단계형 인덱싱 (벡터는 뒤에서 채움, 추정)</div></div>
+    <div class="kpi"><div class="v bad">36.7초</div><div class="l">지금 증분 인덱싱 문서 1건 (그중 BM25 36.2초)</div></div>
+    <div class="kpi"><div class="v">≈ 1~2초</div><div class="l">증분 1건 목표 (BM25 세그먼트화 후, 새 청크 임베딩 포함)</div></div>
+  </div>
+  <div class="verdict">
+    <p><strong>1부 전체 인덱싱</strong> — 지금 모델 · 엔진(onnxruntime CPU int8)은 그대로 두고, 배포 변경 없이 넣을 수 있는 두 가지를 한다.
+    ① 다음 문서의 파싱 · 청킹을 임베딩과 <b>겹친다</b>(최대 약 7%). ② <b>CPU 임베딩 스레드를 4 → 8</b>로 올린다 — 이 PC 장시간 측정(2026-10-30)에서 평균 1.30배 · 가장 고르게 빨라 확정, 다른 PC 도 측정 없이 8 을 쓴다.</p>
+    <p><strong>단계형 인덱싱</strong> — 문서를 많이 넣을 때(500청크 넘음)는 파싱 · 청킹 · 메타 · BM25 까지만 먼저 끝내 <b>약 6분 만에 검색되게</b> 하고,
+    벡터는 뒤에서 조금씩 채운다(질문이 오면 비켜 줌). 벡터 없이 BM25+동의어만으로 답한 RAGAS 측정에서 문서 용어 질문은 지금과 같았고(골든 0.767 → 0.782),
+    일상어 질문은 벡터가 채워질수록 지금 품질(일반어 CR 0.62 → 0.76)로 돌아온다. 일의 양은 같고 순서만 바뀐다.</p>
+    <p><strong>보류 — OpenVINO iGPU 임베딩</strong> — 이 PC 에서 벡터 생성이 약 2.1배 빨랐지만, iGPU 는 int8 모델을 가속하지 못해
+    <b>fp16 모델 파일(약 235MB)과 OpenVINO DLL(약 100MB)을 더 넣어야</b> 한다(배포 약 +335MB). 모델이 둘이 되면 벡터 계열도 둘로 나뉜다.
+    그래서 이번에는 넣지 않고 추후 고려 사항(§8)으로 둔다. 측정 · 설계 내용은 §8 에 그대로 남긴다.</p>
+    <p><strong>2부 증분 인덱싱</strong> — BM25 를 3단계로 고친다: A) 토큰화 병렬(바로 효과) → B) 청크별 토큰 저장(토큰화 0) →
+    C) 세그먼트형 BM25(새 청크만 덧붙이고 가중치는 질의 때 계산, 재구축 0). 함께 <b>수정 문서의 벡터 재사용</b>을 넣는다.</p>
+  </div>
+  <div class="note">⚠️ 정정 — 앞선 검토에서 "운영 규모 BM25 재구축 112.7초"로 보고했으나, 그 값은 bge-m3 측정이 동시에 돌던 상태였다.
+  단독으로 다시 재면 <b>36~49초</b>(실제 증분 인덱싱 1건 실행 36.2초 · 단독 측정 49.2초, 발열 상태에 따라 다름)다. 이 설계서는 새 수치를 쓴다.</div>
+</section>
+
+<!-- 2 -->
+<section id="s2">
+  <h2><span class="no">2</span>지금 시간은 어디에 드나 (실측)</h2>
+  <h3>2-1. 단계별 1쪽당 시간 — sample_pdf 30건 925쪽 · 4,616청크</h3>
+  <div class="bars">
+    <div class="r"><span>벡터 생성</span><div class="track"><i class="b" style="width:92.6%"></i></div><span class="n">98.1ms</span></div>
+    <div class="r"><span>문서 파싱</span><div class="track"><i style="width:3.6%"></i></div><span class="n">3.8ms</span></div>
+    <div class="r"><span>청킹</span><div class="track"><i style="width:2.4%"></i></div><span class="n">2.6ms</span></div>
+    <div class="r"><span>메타데이터 추출</span><div class="track"><i style="width:1.2%"></i></div><span class="n">1.2ms</span></div>
+    <div class="r"><span>DB 적재</span><div class="track"><i style="width:0.2%"></i></div><span class="n">0.2ms</span></div>
+  </div>
+  <p>BM25 는 문서마다가 아니라 <b>인덱싱 한 번이 끝날 때 전체를 다시 만든다</b>. 그래서 위 표에 없고, 인덱스가 클수록 커진다.</p>
+
+  <h3>2-2. 두 상황 — 운영 인덱스 1,470문서 · 186,919청크</h3>
+  <div class="tbl"><table>
+    <tr><th>상황</th><th class="num">벡터 생성</th><th class="num">BM25 재구축</th><th class="num">기타</th><th>시간을 잡아먹는 곳</th></tr>
+    <tr><td><b>전체 인덱싱</b> (처음 · <code>--rebuild</code>)</td><td class="num">약 61분</td><td class="num">36~49초</td><td class="num">파싱 등 약 7%</td><td><span class="tag t-bad">벡터 생성 93%</span></td></tr>
+    <tr><td><b>증분 인덱싱</b> (문서 1건, 자동 인덱싱)</td><td class="num">0~1.5초</td><td class="num">36.2초</td><td class="num">0.5초</td><td><span class="tag t-bad">BM25 99%</span></td></tr>
+  </table></div>
+  <ul>
+    <li>전체 인덱싱 61분 = 18.7만 청크 ÷ 장시간 평균 50.8 청크/초(Rust 판 실측, 발열 포함).</li>
+    <li>증분 1건 = 운영 인덱스 사본에 문서 1건(100청크)을 실제로 넣어 잰 값. 이번 문서는 같은 파일이 이미 있어 "복사"로 처리돼 임베딩이 없었다.
+      처음 보는 문서라면 100청크 ÷ 67 청크/초 ≈ 1.5초가 더해진다.</li>
+    <li>BM25 단독 측정: 토큰화 29.6초(약 60%) + 역색인 만들기·저장 19.6초(약 40%). 토큰화를 8스레드로 나누면 11.8초.</li>
+    <li>노트북 발열로 같은 작업도 1.5~2배 흔들린다(CPU 임베딩 84 → 36 청크/초까지 떨어짐). 수치는 식힘 간격을 두고 쟀다.</li>
+  </ul>
+</section>
+
+<!-- 3 -->
+<section id="s3">
+  <h2><span class="no">3</span>1부 · 전체 인덱싱 — 파싱 겹치기 · CPU 스레드 · 단계형 인덱싱</h2>
+  <p>전체 인덱싱 시간의 93% 는 벡터 생성이다. 모델 · 엔진을 바꾸지 않는 범위에서 세 가지를 한다 — 벡터 생성 자체를 빠르게 하는 두 가지(3-1 · 3-2)와,
+  벡터를 뒤로 미뤄 <b>검색할 수 있게 되기까지의 시간</b>을 줄이는 한 가지(3-5). 셋 다 <b>배포 파일이 늘지 않고</b>, 만들어지는 벡터도 지금과 같다(재인덱싱 필요 없음).</p>
+  <div class="tbl"><table>
+    <tr><th>방안</th><th>적용 PC</th><th class="num">줄어드는 정도</th><th>절</th></tr>
+    <tr><td><b>파싱 · 청킹과 임베딩 동시 진행</b></td><td>모든 PC</td><td class="num">최대 약 7%</td><td>3-1</td></tr>
+    <tr><td><b>CPU 임베딩 스레드 4 → 8</b></td><td>모든 PC (측정으로 정함)</td><td class="num">장시간 측정 평균 1.30배 (기본값 8 확정)</td><td>3-2</td></tr>
+    <tr><td><b>단계형 인덱싱</b> — BM25 먼저, 벡터는 나중에</td><td>모든 PC (500청크 넘게 들어올 때)</td><td class="num">검색 가능까지 66분 → 약 6분 (전체 시간은 같음)</td><td>3-5</td></tr>
+    <tr><td style="color:var(--muted)">OpenVINO iGPU 임베딩</td><td style="color:var(--muted)">iGPU 가 확실히 빠른 인텔 PC</td><td class="num" style="color:var(--muted)">벡터 생성 약 2.1배</td><td><span class="tag t-warn">보류 · §8</span></td></tr>
+  </table></div>
+
+  <h3>3-1. 파싱 · 청킹과 임베딩 동시 진행 <span class="tag t-acc">모든 PC</span></h3>
+  <p>지금은 문서 하나를 <b>파싱 → 청킹 → 임베딩 → 메타 → 저장</b> 순서로 끝내고 다음 문서로 간다. 임베딩하는 동안 파싱은 놀고, 파싱하는 동안 임베딩은 논다.
+  임베딩 외 단계(파싱 3.8 · 청킹 2.6 · 메타 1.2 · DB 0.2 = 1쪽당 7.8ms, 전체의 약 7%)를 <b>앞 문서의 임베딩과 겹치면</b> 그만큼 숨는다.</p>
+  <div class="pipe">
+    <span>준비 스레드: 문서 n+1 파싱 · 청킹</span><b>∥</b><span class="hl">본 스레드: 문서 n 임베딩 · 저장</span><b>→</b><span>문서 n+1 임베딩 · 저장</span><b>∥</b><span>문서 n+2 파싱 · 청킹</span>
+  </div>
+  <ul>
+    <li><b>준비 스레드 1개</b>가 다음 문서의 파싱(<code>extract_document</code>) · 청킹(<code>split_blocks</code>) · 내용 해시까지 만든다. <b>한 건만 앞서</b> 간다(메모리 상한 — 가장 큰 문서도 청크 1,400개 남짓).</li>
+    <li>임베딩 · 저장 · 상태 파일 쓰기 · 메타 기록은 <b>본 스레드에서 지금 순서 그대로</b> 한다 — <code>sync_doc</code> 의 안전 순서(id 예약 → 넣기 → 옛 청크 지우기 → 상태 갱신)를 바꾸지 않는다.</li>
+    <li>준비 단계 실패(스캔 PDF · 깨진 파일)는 지금처럼 그 문서만 실패로 기록하고 다음 문서로 간다. 내용이 같거나(<code>same</code>) 옮긴 · 복사한 문서는 파싱 전에 걸러지므로 준비하지 않는다.</li>
+    <li>이 PC 는 코어가 12개(P 4 + E 8)인데 임베딩이 4스레드만 쓰므로, 준비 스레드는 남는 코어에서 돈다 → 효과 <b>최대 약 7%</b>.
+      임베딩을 8스레드로 올리면(§3-2) 남는 코어가 줄어 효과가 조금 줄 수 있다 <span class="tag t-warn">함께 측정</span>.</li>
+    <li>나중에 iGPU 임베딩(§8)을 넣으면 임베딩 동안 CPU 가 거의 놀므로 파싱 · 청킹이 다 숨는다 — 이 구조를 그대로 쓴다.</li>
+    <li>Python 판: 파서 · onnxruntime 이 계산 중에 GIL 을 놓으므로 스레드로 충분할 것으로 본다. 효과가 안 나오면 준비를 프로세스로 옮긴다 <span class="tag t-warn">측정 후 결정</span>.</li>
+    <li>증분 인덱싱(문서 1~몇 건)에는 효과가 거의 없다 — 전체 인덱싱용이다.</li>
+  </ul>
+
+  <h3>3-2. CPU 임베딩 스레드 수 <span class="tag t-good">측정 완료 · 기본값 8</span></h3>
+  <div class="verdict"><p><strong>결정 (2026-10-30 측정)</strong> — 전체 인덱싱의 CPU 임베딩 스레드 기본값을 <b>4 → 8</b> 로 바꾼다.
+  이 PC(LG gram 16 · i5-1340P)에서 4,616청크 × 3바퀴 측정 결과 8스레드가 4스레드 대비 <b>평균 1.30배 · 중앙값 1.54배</b>였고,
+  무엇보다 <b>발열 상태와 상관없이 가장 고르게 빨랐다</b>(3번 모두 60~66 청크/초, 4스레드는 33~72 로 흔들림). 다른 PC 도 측정 없이 8 을 그대로 쓴다(코어 수 상한).</p></div>
+  <p>지금 임베딩 스레드는 4개로 고정이다(<code>EMBED_THREADS = 4</code>, 예전 측정 "8 로 올려도 이득 없음 — P코어 4개가 실질 상한"). 이번 측정에서는 8스레드가 더 빨랐다.</p>
+  <div class="tbl"><table>
+    <tr><th>측정 (400청크 · 식힘 뒤 같은 차례에 연달아)</th><th class="num">4스레드</th><th class="num">8스레드</th><th class="num">배수</th></tr>
+    <tr><td>1회</td><td class="num">57.0</td><td class="num">95.7</td><td class="num">1.68배</td></tr>
+    <tr><td>2회</td><td class="num">86.5</td><td class="num">100.8</td><td class="num">1.17배</td></tr>
+    <tr><td>식힘 없이 1,000청크 연속(발열 중)</td><td class="num">84.0 → 35.8</td><td class="num">72.7 · 47.0</td><td class="num">—</td></tr>
+  </table></div>
+  <p>짧은 측정에서는 1.2~1.7배지만, 발열이 쌓이는 연속 측정에서는 순서가 뒤섞였다. 스레드가 많으면 열도 많이 나서 <b>장시간 이득이 줄거나 없어질 수 있다</b>.
+  그래서 숫자 하나를 바꾸기 전에 <b>이 PC 에서 한 번</b> 제대로 재서 정하고, 그 숫자를 모든 PC 에 그대로 쓴다.</p>
+
+  <div class="flow">
+    <div class="card">
+      <h3>① 이 PC 에서 한 번 측정 — 기본값 정하기</h3>
+      <ul>
+        <li><b>대상 PC</b>: 지금 개발 PC — 아래 "측정 PC 사양" 표.</li>
+        <li><b>데이터</b>: sample_pdf 30건에서 나온 실제 청크 4,616개 전체 — 한 번 도는 데 약 1~1.5분이라 발열이 쌓인 상태까지 들어간다.</li>
+        <li><b>비교</b>: 4 · 6 · 8 · 12스레드 (배치 8 · int8 모델 · 지금 엔진 그대로).</li>
+        <li><b>방법</b>: 측정마다 60초 식힘 → 한 바퀴(4 · 6 · 8 · 12)를 <b>순서를 바꿔 3바퀴</b> 반복해 순서 · 발열 영향을 고르게 한다. 값은 청크/초의 평균과 최저.</li>
+        <li><b>판정</b>: 4스레드 평균보다 <b>1.2배 이상</b> 빠른 것 가운데 가장 빠른 스레드 수를 기본값으로. 1.2배를 넘는 것이 없으면 4 를 유지.
+          6 과 8 의 차이가 5% 안이면 적은 쪽(열 · 다른 프로그램 체감이 덜함).</li>
+        <li><b>확인</b>: 고른 값으로 운영 규모 전체 인덱싱을 한 번 돌려 4스레드 대비 시간 단축을 기록한다(설계서 §3-4 의 추정을 실측으로 바꿈).</li>
+        <li><b>도구</b>: <code>results/embed_igpu/bench_embed.py</code>(변형 <code>cpu_t4_b8</code> · <code>cpu_t8_b8</code> 등, 식힘 인자)에 6 · 12스레드 변형을 더해 쓴다. 결과는 <code>results/embed_threads/</code> 에 남긴다.</li>
+        <li><b>결과 기록</b>: 아래 표 — 2026-10-30 측정 완료. 원자료 <code>results/embed_threads/res_threads.jsonl</code> · 집계 <code>summarize.py</code> → <code>summary.json</code>.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>② 다른 PC — 측정 없이 그대로 적용</h3>
+      <ul>
+        <li>다른 PC 에서는 <b>다시 재지 않고, ① 에서 정한 스레드 수를 그대로 쓴다</b>. 인덱싱할 때 측정 시간이 더해지지 않는다.</li>
+        <li>단, 그 PC 의 <b>물리 코어 수보다 크면 코어 수까지만</b> 쓴다(예: 8 로 정했는데 4코어 PC → 4).</li>
+        <li>그 PC 에 맞지 않아 오히려 느리면 사용자가 설정(<code>embed.threads</code>)으로 직접 바꾼다.</li>
+        <li>CPU 가 크게 다른 PC(예: AMD · 데스크톱)가 생기면 그 PC 에서 ① 을 한 번 돌려 보고, 결과가 크게 다를 때만 기본값을 다시 정한다.</li>
+      </ul>
+    </div>
+  </div>
+  <h3>측정 PC 사양 (2026-10-30)</h3>
+  <div class="tbl"><table>
+    <tr><th>항목</th><th>값</th></tr>
+    <tr><td>기기</td><td>LG Electronics gram 16 (16Z90RS-GAFWK) · 노트북</td></tr>
+    <tr><td>CPU</td><td>13세대 Intel Core i5-1340P — 12코어(P코어 4 + E코어 8) · 16스레드 · 기본 1.9GHz</td></tr>
+    <tr><td>메모리</td><td>16GB LPDDR5-6400 (2GB × 8, 다중 채널)</td></tr>
+    <tr><td>그래픽</td><td>Intel Iris Xe (이번 측정에는 쓰지 않음)</td></tr>
+    <tr><td>OS · 전원</td><td>Windows 11 Home 10.0.26200 · AC 전원(배터리 100%) · 전원 구성표 "균형 조정"</td></tr>
+    <tr><td>엔진 · 모델</td><td>onnxruntime 1.26.0(Python) CPU · e5-small-ko int8 <code>model.onnx</code>(118MB, 배포본과 같은 파일) · 배치 8</td></tr>
+    <tr><td>데이터</td><td>sample_pdf 30건의 실제 청크 4,616개(중앙 120토큰) — 한 번에 1~2분</td></tr>
+  </table></div>
+  <h3>측정 결과 — 청크/초 (높을수록 빠름)</h3>
+  <div class="tbl"><table>
+    <tr><th>바퀴 (그 바퀴의 순서)</th><th class="num">4스레드</th><th class="num">6스레드</th><th class="num">8스레드</th><th class="num">12스레드</th></tr>
+    <tr><td>1바퀴 (4 → 6 → 8 → 12)</td><td class="num">71.9</td><td class="num">67.3</td><td class="num">60.3</td><td class="num">46.4</td></tr>
+    <tr><td>2바퀴 (12 → 8 → 6 → 4)</td><td class="num">33.4</td><td class="num">56.0</td><td class="num">66.3</td><td class="num">56.4</td></tr>
+    <tr><td>3바퀴 (6 → 12 → 4 → 8)</td><td class="num">43.1</td><td class="num">38.4</td><td class="num">66.4</td><td class="num">70.5</td></tr>
+    <tr><td><b>평균</b></td><td class="num">49.5</td><td class="num">53.9</td><td class="num"><b>64.3</b></td><td class="num">57.8</td></tr>
+    <tr><td>중앙값</td><td class="num">43.1</td><td class="num">56.0</td><td class="num"><b>66.3</b></td><td class="num">56.4</td></tr>
+    <tr><td>최저 ~ 최고 (흔들림 폭)</td><td class="num">33.4 ~ 71.9 (38.5)</td><td class="num">38.4 ~ 67.3 (28.9)</td><td class="num"><b>60.3 ~ 66.4 (6.1)</b></td><td class="num">46.4 ~ 70.5 (24.1)</td></tr>
+    <tr><td>4스레드 대비 (평균)</td><td class="num">1.00배</td><td class="num">1.09배</td><td class="num"><b>1.30배</b></td><td class="num">1.17배</td></tr>
+    <tr><td><b>정한 기본값</b></td><td colspan="4"><b>8스레드</b> — 규칙(4스레드 평균 대비 1.2배 이상 중 가장 빠른 것)을 만족하는 것은 8 하나뿐(12 는 1.17배)</td></tr>
+  </table></div>
+  <p><b>결과 읽기</b></p>
+  <ul>
+    <li><b>60초 식힘으로는 발열이 다 빠지지 않는다</b>. 각 바퀴에서 늦게 돈 쪽이 크게 느려졌다(1바퀴 12스레드 46.4 · 2바퀴 4스레드 33.4). 이 노트북은 1분 넘게 돌리면 전력 · 열 한도에 걸린다.</li>
+    <li>그 속에서 <b>8스레드만 순서와 상관없이 60~66 청크/초</b>로 고르게 나왔다(마지막에 돈 3바퀴에서도 66.4). 4스레드는 처음에 돌면 가장 빨랐지만(71.9) 늦게 돌면 절반 이하로 떨어졌다.</li>
+    <li>실제 전체 인덱싱은 수십 분 동안 계속 도는 "발열이 쌓인 상태"이므로, 최고값보다 <b>흔들림이 작은 쪽</b>이 실제 시간을 더 잘 나타낸다 — 8 을 고른 근거다.</li>
+    <li>Python 판 onnxruntime(1.26)으로 쟀다. Rust 판(<code>onnxruntime.dll</code>)도 같은 엔진이라 경향은 같을 것으로 보지만, 구현 때 Rust 판으로 한 번 확인한다.</li>
+    <li><b>아직 하지 않은 것</b>: ① 의 "확인"(운영 규모 전체 인덱싱을 8스레드로 한 번 돌려 실제 단축 기록 — 약 1시간)은 구현 뒤 한다. 아래 §3-4 의 8스레드 줄은 그때까지 이 측정의 평균 배수(1.30배)로 계산한 추정이다.</li>
+  </ul>
+  <ul>
+    <li><b>실행 중 자동 측정은 하지 않는다</b>. 이유:
+      <ul>
+        <li>문서가 적은 인덱싱(예: 청크 1,000개 → 4스레드로 약 15초)은 1분짜리 측정이 이득(8스레드여도 몇 초)보다 훨씬 크다.</li>
+        <li>몇 초짜리 짧은 측정은 발열 상태에 따라 판정이 뒤집힌다(같은 설정이 57~92 청크/초로 흔들림) — 짧게 재서 고르는 방식은 믿을 수 없다.</li>
+        <li>스레드 수는 벡터를 바꾸지 않으므로 잘못 골라도 손해는 "조금 느림"뿐이다. PC 마다 재서 고를 만큼의 이득이 없다.</li>
+      </ul></li>
+    <li><b>설정으로 뺀다</b>: <code>embed.threads: auto | 4 | 8 …</code>. <code>auto</code> = ① 에서 정한 기본값 <b>8</b>(물리 코어 수를 넘지 않게).
+      특정 PC 에서 느리면 사용자가 직접 숫자를 넣어 바꾼다.</li>
+    <li><b>전체 인덱싱에만 적용</b>한다. 자동(증분) 인덱싱은 사용자가 다른 일을 하는 중에 돌므로 지금처럼 4스레드로 두어 PC 가 무거워지지 않게 한다.</li>
+    <li><b>질문 임베딩 · 리랭커는 그대로 4스레드</b>. 지금 리랭커 스레드가 임베딩 상수를 따라가므로(<code>RERANK_THREADS = EMBED_THREADS</code>) 둘을 떼어 놓는다 — 질문 응답 속도는 따로 측정된 값이 있어 건드리지 않는다.</li>
+    <li>벡터는 스레드 수와 상관없이 같다(실측 코사인 1.0) — 재인덱싱 필요 없음.</li>
+  </ul>
+
+  <h3>3-3. 설정</h3>
+<pre>embed:
+  threads: auto        # CPU 임베딩 스레드(전체 인덱싱만). auto = 8(2026-10-30 측정, 코어 수 상한), 자동 인덱싱은 4
+                       # 환경변수 SIMPLERAG_EMBED_THREADS 가 앞선다
+  prefetch: true       # 다음 문서 파싱·청킹을 임베딩과 겹친다(전체 인덱싱)</pre>
+  <ul>
+    <li>둘 다 벡터를 바꾸지 않으므로 바꿔도 재인덱싱이 필요 없다. Python 판 · Rust 판 같은 키.</li>
+  </ul>
+
+  <h3>3-4. 기대 효과 — 운영 규모 18.7만 청크 전체 인덱싱</h3>
+  <div class="tbl"><table>
+    <tr><th>PC · 적용</th><th class="num">1쪽당 (임베딩 + 나머지)</th><th class="num">전체 인덱싱</th><th>근거</th></tr>
+    <tr><td>지금</td><td class="num">98 + 7.8ms</td><td class="num">약 66분</td><td>실측(장시간 평균 50.8 청크/초)</td></tr>
+    <tr><td>파싱 겹치기만</td><td class="num">98ms</td><td class="num">약 61분 (−7%)</td><td>추정</td></tr>
+    <tr><td><b>8스레드 + 겹치기</b></td><td class="num"><b>약 75ms</b></td><td class="num"><b>약 47분 (−29%)</b></td><td>8스레드 1.30배(§3-2 측정 평균) 적용 추정 · 운영 규모 실측 전</td></tr>
+    <tr style="color:var(--muted)"><td>(참고 · 보류) OpenVINO iGPU + 겹치기 — 이 PC</td><td class="num">약 39ms</td><td class="num">약 24분 (−64%)</td><td>§8</td></tr>
+  </table></div>
+  <p style="font-size:14px">8스레드의 장시간 이득이 1.2배에 못 미치면 겹치기만 남는다(−7%). 전체 인덱싱을 크게 줄이려면 결국 벡터 생성 엔진을 바꿔야 하며, 그 후보가 §8 이다.
+  다만 "검색할 수 있게 되기까지의 시간"은 엔진을 바꾸지 않고도 §3-5 단계형 인덱싱으로 크게 줄일 수 있다.</p>
+
+  <h3>3-5. 단계형 인덱싱 — BM25 먼저, 벡터는 나중에 <span class="tag t-good">검색 가능까지 66분 → 약 6분</span></h3>
+  <p>문서를 넣으면 <b>파싱 · 청킹 · 메타데이터 · BM25 까지만 먼저</b> 끝내 바로 검색되게 하고, 시간이 대부분 드는 <b>벡터는 뒤에서 나중에 채운다</b>.
+  벡터가 아직 없는 청크는 BM25(동의어 넓힘 포함) 후보로만 검색에 들어가고, 벡터가 채워지면 지금과 같은 하이브리드 검색이 된다.</p>
+  <div class="pipe">
+    <span>문서 넣기</span><b>→</b><span class="hl">1단계: 파싱 · 청킹 · 메타 · 저장(벡터 빈칸) · BM25<br><small>운영 규모 약 6분</small></span><b>→</b>
+    <span>검색 가능 (BM25 + 리랭커)</span><b>→</b><span class="hl">2단계: 빈 벡터를 조금씩 채움<br><small>약 47~61분, 질문이 오면 양보</small></span><b>→</b><span>지금과 같은 하이브리드</span>
+  </div>
+
+  <h3>3-5-1. 근거 — 벡터 없이 BM25 + 동의어만으로 답한 RAGAS (2026-10-30)</h3>
+  <p>report/BM25동의어_vs_하이브리드_RAGAS_20261030.html — 같은 인덱스 · 리랭커 · 근거 3건 · Qwen3-1.7B 에서 벡터 검색만 끄고 142문항을 Claude 눈가림 판정.</p>
+  <div class="tbl"><table>
+    <tr><th>세트</th><th class="num">하이브리드 (지금)</th><th class="num">BM25 + 동의어 (1단계 직후 상태)</th><th>판단</th></tr>
+    <tr><td>골든 100 — 문서 용어로 물음 · 4지표 평균</td><td class="num">0.767</td><td class="num">0.782</td><td><span class="tag t-good">차이 없음</span> (4지표 모두 95% 구간이 0 포함)</td></tr>
+    <tr><td>일반어 42 — 일상어로 물음 · 4지표 평균</td><td class="num">0.618</td><td class="num">0.577</td><td><span class="tag t-bad">떨어짐</span></td></tr>
+    <tr><td>일반어 42 — 근거 재현율(CR)</td><td class="num">0.760</td><td class="num">0.617</td><td><span class="tag t-bad">유의하게 떨어짐</span> (구간 −0.28 ~ −0.01)</td></tr>
+  </table></div>
+  <p>그래서 1단계 직후에는 <b>문서 용어 질문은 지금 품질 그대로</b>, <b>일상어 질문은 벡터가 채워질수록 지금 품질로 돌아온다</b>.
+  벡터를 아예 빼는 것과 달리 마지막에는 손실이 없다.</p>
+
+  <h3>3-5-2. 시간 — 운영 규모 18.7만 청크 (추정)</h3>
+  <div class="tbl"><table>
+    <tr><th>구간</th><th class="num">지금 (한 번에)</th><th class="num">단계형</th><th>근거</th></tr>
+    <tr><td>파싱 · 청킹 · 메타 · 저장</td><td class="num" rowspan="2">약 66분<br><small>(이 모두를 문서마다 차례로)</small></td><td class="num">약 4.9분</td><td>sample_pdf 30건 실측 7.3초(4,616청크) × 40.5배</td></tr>
+    <tr><td>BM25 구축</td><td class="num">약 0.5~0.8분</td><td>운영 사본 실측 36~49초 · §4 단계 A 후 약 31초</td></tr>
+    <tr><td><b>검색 가능까지</b></td><td class="num"><b>약 66분</b></td><td class="num"><b>약 6분</b></td><td></td></tr>
+    <tr><td>2단계 — 벡터 채우기</td><td class="num">—</td><td class="num">약 47분 (8스레드) · 약 61분 (4스레드)</td><td>§3-2 측정 · 질문이 오면 양보하므로 실제로는 조금 더</td></tr>
+    <tr><td>모두 끝나기까지</td><td class="num">약 66분</td><td class="num">약 53~67분</td><td>일의 양은 같다 — 순서만 바꾼다</td></tr>
+  </table></div>
+
+  <h3>3-5-3. 저장 구조 — "벡터 대기" 청크</h3>
+  <ul>
+    <li><b>Rust 판</b>(<code>points.sqlite</code>): <code>vec</code> 칸에 <b>길이 0 인 값</b>을 넣어 "벡터 대기"로 둔다. 표 정의(<code>vec BLOB NOT NULL</code>)는 빈 값도 받으므로 <b>표를 바꾸지 않는다</b>.
+      옛 인덱스는 대기 청크가 없을 뿐 그대로 읽힌다.</li>
+    <li><b>Python 판</b>(Qdrant local): 점에는 벡터가 반드시 있어야 하므로, 대기 청크는 자리 표시 단위 벡터와 payload <code>vec_pending: true</code> 로 넣고,
+      벡터 검색에서 <code>vec_pending</code> 인 점을 거른다(must_not 필터). 2단계에서 벡터를 넣고 표시를 지운다.</li>
+    <li>대기 청크도 payload(본문 · 문서 · 쪽 · 절 …)는 처음부터 다 있으므로 BM25 · 리랭커 · 근거 표시 · 정밀 모드 이웃 청크 · 탐색기 모드 · 메타데이터 검색은 그대로 동작한다.</li>
+    <li>상태 파일(<code>index_state.json</code>)은 지금처럼 1단계 끝에 문서를 "반영됨"으로 적는다. "벡터가 남았는가"는 저장소의 대기 청크 수가 기준이다 — 따로 적지 않아 둘이 어긋날 일이 없다.</li>
+  </ul>
+
+  <h3>3-5-4. 검색 — 대기 청크는 BM25 로만</h3>
+  <ul>
+    <li>벡터 검색(dense)은 대기 청크를 건너뛴다(Rust <code>VectorStore::search</code> 에서 빈 벡터 제외 · Python 은 위 필터). 벡터가 없는 점을 0점으로 줄 세우지 않게 한다.</li>
+    <li>BM25(동의어 넓힘) 후보에는 대기 청크도 들어가고, RRF · 리랭커 · 근거 3건 고르기는 지금과 같다. 리랭커는 본문만 보므로 대기 청크도 똑같이 점수 낸다.</li>
+    <li>2단계 도중에는 벡터가 있는 청크만 dense 후보가 된다 — 채워질수록 지금 검색으로 다가간다.</li>
+  </ul>
+
+  <h3>3-5-5. 2단계 — 벡터 채우기</h3>
+  <div class="flow">
+    <div class="card">
+      <h3>명령줄 <code>index</code> (워커가 없을 때)</h3>
+      <ol>
+        <li>1단계를 모든 문서에 대해 끝내고 BM25 · 상태 파일을 저장한다 — "검색 가능 · 벡터 채우는 중 0 / 186,919" 를 찍는다.</li>
+        <li>이어서 같은 실행에서 대기 청크를 배치 8 로 채운다(진행률 · 남은 시간 표시).</li>
+        <li>도중에 끊겨도 대기 청크는 저장소에 남으므로 다음 <code>index</code> 나 워커가 이어 채운다.</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>RAGSearchBox 워커 (자동 인덱싱)</h3>
+      <ol>
+        <li>새 명령 <code>/embed-pending {"max": 64}</code> — 대기 청크 최대 64개를 채우고 남은 수를 돌려준다(4스레드로 약 1초).</li>
+        <li>메인 스레드(<code>jobs.rs</code> tick)가 <b>질문을 처리하지 않을 때만</b> 이 명령을 보낸다 — 질문이 오면 1초 안에 비켜 준다.</li>
+        <li>남은 수가 0 이 되면 멈춘다. 워커를 다시 띄우면 시작할 때 대기 청크 수를 보고 이어 간다.</li>
+      </ol>
+    </div>
+  </div>
+  <ul>
+    <li><b>채우는 순서</b>: 먼저 넣은 문서부터(id 순). 문서 하나를 끝까지 채운 뒤 다음 문서로 가서, 채워진 문서가 하나씩 늘어나게 한다.</li>
+    <li><b>스레드</b>: §3-2 규칙 그대로 — 명령줄 전체 인덱싱은 8, 자동 인덱싱은 4.</li>
+    <li><b>배치 구성</b>: 문서 경계를 넘어 8개씩 묶일 수 있다. int8 벡터가 배치 구성에 따라 미세하게 달라지는 것(코사인 0.99 수준)은 §4-5 벡터 재사용과 같은 수준이라 검색에 영향이 없다고 보고 §6 시험으로 확인한다.</li>
+  </ul>
+
+  <h3>3-5-6. 언제 단계형으로 하나</h3>
+  <ul>
+    <li>한 번의 인덱싱에서 새로 임베딩할 청크가 <code>index.defer_vectors_over</code>(기본 500청크 ≈ 4스레드 7초)를 넘을 때만 단계형으로 한다.</li>
+    <li>그 이하(자동 인덱싱의 문서 몇 건)는 지금처럼 그 자리에서 바로 임베딩한다 — 몇 초짜리 일에 "대기" 상태를 만들지 않는다.</li>
+    <li>대표적으로 쓰이는 때: 처음 인덱싱 · <code>--rebuild</code> · 폴더를 새로 지정해 문서가 한꺼번에 들어올 때.</li>
+  </ul>
+
+  <h3>3-5-7. 사용자에게 보이는 것</h3>
+  <ul>
+    <li><code>status</code> · RAGSearchBox 상태줄 · 트레이: "벡터 채우는 중 12,345 / 186,919 (약 35분 남음) — 지금도 검색할 수 있습니다".</li>
+    <li>답변 화면 안내(선택): 채우는 동안 "일상어로 물은 질문은 아직 정확도가 낮을 수 있습니다" 한 줄 — §7 결정 필요.</li>
+  </ul>
+
+  <h3>3-5-8. 다른 방안과의 관계</h3>
+  <div class="tbl"><table>
+    <tr><th>방안</th><th>단계형과 함께 쓸 때</th></tr>
+    <tr><td>§3-1 파싱 겹치기</td><td>단계형에서는 파싱(1단계)과 임베딩(2단계)이 나뉘므로 필요 없다. 바로 임베딩하는 작은 묶음(500청크 이하)에서만 쓴다.</td></tr>
+    <tr><td>§3-2 CPU 8스레드</td><td>2단계 속도를 정한다(전체 인덱싱 47분 · 자동 인덱싱 61분).</td></tr>
+    <tr><td>§4 BM25 단계 A~C</td><td>1단계 끝의 BM25 구축이 빨라질수록 "검색 가능까지"가 짧아진다. 단계 C(세그먼트)면 1단계에서 덧붙임 세그먼트에 바로 들어간다.</td></tr>
+    <tr><td>§4-5 벡터 재사용</td><td>수정 문서의 재사용 청크는 처음부터 벡터가 있고, 바뀐 청크만 대기가 된다.</td></tr>
+    <tr><td>복사 · 이동 문서</td><td>원본이 대기면 사본도 대기로 베낀다(빈 벡터 그대로 복사). 2단계에서 함께 채워진다.</td></tr>
+    <tr><td>업로드 문서(대화)</td><td>대화 하나에 문서 몇 건이라 지금처럼 바로 임베딩한다 — 단계형을 쓰지 않는다.</td></tr>
+  </table></div>
+</section>
+
+<!-- 4 -->
+<section id="s4">
+  <h2><span class="no">4</span>2부 · 증분 인덱싱 — BM25 · 벡터 재사용</h2>
+
+  <h3>4-1. 지금 무슨 일이 일어나나</h3>
+  <div class="pipe">
+    <span>바뀐 문서 1건</span><b>→</b><span>파싱·청킹·임베딩<br><small>≈ 1~2초</small></span><b>→</b><span>저장</span><b>→</b>
+    <span class="hl">저장소 전체 18.7만 청크 다시 읽기 · 다시 토큰화 · 역색인 다시 만들기 · 104MB 다시 쓰기<br><small>≈ 36초</small></span><b>→</b><span>메타 마무리 ≈ 0.5초</span>
+  </div>
+  <p>BM25 점수에는 전체 통계(문서 수 N · 평균 길이 · 단어가 나온 청크 수 df)가 들어가므로, 지금은 "가중치를 미리 계산해 저장"하는 대신
+  <b>무엇이 바뀌든 전체를 다시 만든다</b>(<code>index_folder</code> 끝의 <code>bm25.build</code>). 인덱스가 커질수록 문서 1건 반영이 느려진다.</p>
+
+  <h3>4-2. 단계 A — 토큰화 병렬 <span class="tag t-good">바로 효과 · 형식 그대로</span></h3>
+  <ul>
+    <li><code>bm25.build</code> 안의 청크별 토큰화(전체의 약 60%)를 스레드 N개로 나눈다(N = 물리 코어 수, 상한 8).</li>
+    <li>실측: 토큰화 29.6초 → 8스레드 11.8초(2.5배). BM25 전체 약 49초 → 약 31초(약 −35%).</li>
+    <li>결과 파일은 바이트까지 같아야 한다 — 단어 번호를 "첫 등장 순서"로 매기므로, 병렬로 토큰화한 뒤 <b>합칠 때는 청크 순서대로</b> 번호를 매긴다.</li>
+  </ul>
+
+  <h3>4-3. 단계 B — 청크별 토큰 결과 저장 <span class="tag t-acc">토큰화 0</span></h3>
+  <ul>
+    <li>청크를 넣을 때(<code>sync_doc</code> 4단계) 그 청크의 <b>단어별 빈도</b>를 함께 저장한다 — <code>points.sqlite</code> 에 표 <code>bm25_tf(id, terms BLOB)</code>.
+      청크 100개 토큰화는 수십 ms 라 문서 처리 시간에 거의 영향이 없다.</li>
+    <li>청크를 지울 때(<code>delete_doc_except</code> · <code>delete_ids</code>) 같이 지운다. 복사 · 이동(<code>copy_doc</code> · <code>move_doc</code>)은 원본 것을 베낀다.</li>
+    <li>BM25 재구축은 이 표만 읽어 역색인을 만든다 — 토큰화(약 60%)가 사라진다. 남는 것은 역색인 정렬 · 가중치 계산 · 저장(단독 측정 약 20초).</li>
+    <li>옛 인덱스(표가 없음): 처음 한 번 빠진 청크만 토큰화해 채운다(이 한 번은 단계 A 의 병렬로).</li>
+    <li>토크나이저가 바뀌면(모델 교체) 표를 비운다 — <code>chunk_params</code> 의 계열 값으로 판단.</li>
+  </ul>
+
+  <h3>4-4. 단계 C — 세그먼트형 BM25 <span class="tag t-acc">재구축 0</span></h3>
+  <p>가중치를 미리 계산해 저장하지 않고, <b>단어 빈도(tf)만 저장</b>해 두었다가 <b>질의 때 지금의 N · 평균 길이 · df 로 가중치를 계산</b>한다.
+  그러면 전체 통계가 바뀌어도 다시 만들 필요가 없다. 점수 공식은 지금과 같다(k1 · b 그대로).</p>
+  <div class="flow">
+    <div class="card">
+      <h3>저장 구조</h3>
+      <ul>
+        <li><b>본 세그먼트</b>: 단어 → (청크, tf) 목록 · 청크 길이 — 전체 인덱싱 때 만든다</li>
+        <li><b>덧붙임 세그먼트</b>: 그 뒤 새로 넣은 청크들(같은 모양, 작음)</li>
+        <li><b>지움 표시</b>: 지운 청크 id 모음</li>
+        <li>전체 통계(N · 길이 합)는 따로 숫자 두 개로 들고 다닌다</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>동작</h3>
+      <ul>
+        <li><b>문서 추가</b>: 새 청크를 덧붙임 세그먼트에 넣고 통계를 더한다 — ms 단위</li>
+        <li><b>문서 삭제 · 수정</b>: 옛 청크를 지움 표시, 새 청크는 덧붙임 — ms 단위</li>
+        <li><b>질의</b>: 질의 단어의 목록만 두 세그먼트에서 읽어, 지운 청크는 빼고 df 를 세어 가중치 계산</li>
+        <li><b>합치기</b>: 덧붙임이 전체의 5% 를 넘거나 지움이 5% 를 넘으면, 한가할 때(자동 인덱싱 쉬는 동안) 본 세그먼트로 합친다. 전체 인덱싱 때도 합친다</li>
+      </ul>
+    </div>
+  </div>
+  <ul>
+    <li>점수는 전체 재구축과 <b>똑같아야</b> 한다 — 지운 청크를 빼고 df 를 세므로 통계가 정확하다(§6 시험).</li>
+    <li>질의 비용: 질의 단어 몇 개의 목록만 훑는다. 흔한 단어는 목록이 길 수 있어 <b>질의 시간 증가를 시제품에서 잰다</b>(목표 +10ms 이내) <span class="tag t-warn">미측정</span>.</li>
+    <li>동의어 넓힘(<code>synonyms</code>)으로 질의 단어가 늘어도 같은 방식으로 계산된다.</li>
+    <li>파일 형식이 바뀌므로 매직 값을 올린다(<code>SRBM25\0\x03</code>). 옛 파일은 처음 한 번 새 형식으로 만든다.</li>
+  </ul>
+
+  <h3>4-5. 수정 문서의 벡터 재사용</h3>
+  <p>문서를 고치면 지금은 그 문서의 청크를 <b>전부</b> 다시 임베딩한다. 절 경계로 자르는 청킹이라, 한 군데를 고쳐도 대부분의 청크 글은 그대로다.</p>
+  <ul>
+    <li><b>청킹은 문서 전체를 다시 한다</b> — 1쪽당 2.6ms 라 비용이 거의 없다. 비싼 것은 임베딩이므로, 다시 자른 청크 가운데 <b>옛 버전과 글이 똑같은 청크의 벡터만 재사용</b>한다.</li>
+    <li><b>청크마다 해시값으로 비교한다.</b>
+      <ul>
+        <li>청크를 저장할 때 청크 글(접두 <code>[문서명 &gt; 절]</code> 포함, 임베딩에 넣는 글 그대로)의 SHA-1 해시를 payload 에 <code>chunk_hash</code> 로 함께 남긴다.</li>
+        <li>문서가 바뀌면 다시 청킹한 새 청크마다 해시를 계산하고, 그 문서의 옛 청크 해시 → 점 id 표와 맞대어 본다.</li>
+        <li>해시가 같은 청크는 그 id 의 벡터를 저장소에서 꺼내 쓰고(<code>points_of</code>), 해시가 없는 청크만 임베딩한다.
+          같은 해시가 여러 번 나오면(같은 글이 반복되는 청크) 개수만큼만 짝짓는다.</li>
+        <li>해시로 비교하므로 옛 청크 글 전체를 다시 읽어 비교할 필요가 없다. SHA-1 이 우연히 겹칠 가능성은 무시할 수준이다(이미 문서 내용 해시에 같은 방식을 쓴다).</li>
+        <li><b>해시 계산 비용은 무시할 수준</b>이다 — 운영 인덱스 18.7만 청크(71MB) 전체 SHA-1 이 0.16초, 청크당 약 0.9μs(Python 실측).
+          청크 100개 문서는 0.1ms, 1,376청크 문서도 1.2ms 다. 임베딩은 청크당 약 15ms 라 해시는 그 1만분의 1도 안 된다.
+          저장 공간은 청크당 40글자(16진수) — 18.7만 청크에 약 7.5MB(지금 저장소 982MB 의 1% 미만).</li>
+        <li><code>chunk_hash</code> 가 없는 옛 인덱스는 payload 에 남아 있는 청크 글(<code>text</code>)로 그 자리에서 해시를 계산해 비교한다 — 재인덱싱이 필요 없다.</li>
+      </ul></li>
+    <li>인덱스의 청킹 설정 · 모델(<code>chunk_params</code>)이 지금과 같을 때만 재사용한다(다르면 어차피 증분 인덱싱이 거부된다).</li>
+    <li>배치 구성이 달라지면 int8 벡터가 미세하게 달라진다(같은 글도 함께 묶인 글에 따라 코사인 0.99 수준). 재사용 벡터는 "같은 글을 다른 배치로 만든 벡터"와 같은 수준의 차이라 검색에 영향이 없다고 본다 — §6 시험으로 확인.</li>
+  </ul>
+  <div class="tbl"><table>
+    <tr><th>청크 해시(SHA-1) 계산 시간 — 실측 (Python <code>hashlib</code>, 운영 인덱스 사본)</th><th class="num">해시 시간</th><th class="num">같은 청크의 임베딩 시간 (참고)</th></tr>
+    <tr><td>청크 1개</td><td class="num">약 0.9μs</td><td class="num">약 15ms</td></tr>
+    <tr><td>100청크 문서</td><td class="num">0.1ms</td><td class="num">약 1.5초</td></tr>
+    <tr><td>1,376청크 문서 (가장 큰 시험 문서)</td><td class="num">1.2ms</td><td class="num">약 20초</td></tr>
+    <tr><td>운영 인덱스 전체 18.7만 청크 (71MB)</td><td class="num">0.16초</td><td class="num">약 61분</td></tr>
+    <tr><td>저장 공간 (청크당 16진수 40글자)</td><td class="num" colspan="2">18.7만 청크에 약 7.5MB — 지금 저장소 982MB 의 1% 미만</td></tr>
+  </table></div>
+  <p style="font-size:14px">해시는 임베딩의 약 1만 7천분의 1이라 인덱싱 시간에 보태지는 것이 사실상 없다. Rust 판(<code>sha1</code> 크레이트)도 같은 수준이거나 더 빠를 것으로 보며, 구현 때 같은 방식으로 다시 잰다.</p>
+
+  <h3>4-5-1. 글이 늘면 뒤 청크 경계가 밀리지 않나 — 모의 실험</h3>
+  <p>몇 글자 · 한 줄이 늘면 청크 경계가 밀려 <b>뒤 청크들이 줄줄이 바뀔 수 있다</b>. 그래서 실제 추출기 · 청커(<code>split_blocks</code>)로
+  sample_pdf 30건(4,616청크)의 <b>문서 한가운데 문단</b>을 고쳐 다시 청킹하고, 글이 그대로라 재사용할 수 있는 청크를 셌다.</p>
+  <div class="tbl"><table>
+    <tr><th>수정 종류</th><th class="num">재사용</th><th class="num">다시 임베딩 (30건 합계)</th></tr>
+    <tr><td>오타 — 같은 길이(1글자 바꿈)</td><td class="num"><b>99.4%</b></td><td class="num">28청크 (문서당 약 1)</td></tr>
+    <tr><td>몇 글자 추가 (약 15자)</td><td class="num"><b>98.1%</b></td><td class="num">88청크</td></tr>
+    <tr><td>한 줄 추가 (약 60자)</td><td class="num"><b>97.6%</b></td><td class="num">110청크</td></tr>
+  </table></div>
+  <div class="tbl"><table>
+    <tr><th>한 줄 추가 — 문서별 예</th><th class="num">전체 청크</th><th class="num">다시 임베딩</th><th>비고</th></tr>
+    <tr><td>디지털콘텐츠 통합보고서</td><td class="num">1,376</td><td class="num">5</td><td>약 20초 → 약 0.1초</td></tr>
+    <tr><td>김영란법 상담사례집</td><td class="num">475</td><td class="num">19</td><td></td></tr>
+    <tr><td>OWASP Top 10</td><td class="num">256</td><td class="num">23</td><td>긴 절 안에서 경계가 밀림</td></tr>
+    <tr><td>주택자금대출제도</td><td class="num">10</td><td class="num">6</td><td>작은 문서는 비율이 높지만 원래 1초 안팎</td></tr>
+    <tr><td>학자금 지원 제도</td><td class="num">5</td><td class="num">4</td><td></td></tr>
+  </table></div>
+  <p><b>연쇄가 문서 전체로 번지지 않는 이유</b> — 청커 구조 때문이다.</p>
+  <ul>
+    <li><b>긴 절</b>(128토큰 넘음)은 그 절 안에서 문단 단위로 채워 자른다. 글이 늘면 <b>그 절의 수정 지점 뒤 청크</b>까지만 밀린다. 다음 절은 절 시작에서 경계를 새로 잡으므로 그대로다.</li>
+    <li><b>짧은 절</b>들은 여러 개를 한 청크로 묶는다. 한 절이 길어지면 묶음이 바뀌어 뒤로 번질 수 있지만, <b>다음 긴 절이 나오면 묶음이 다시 시작</b>되어 멈춘다.</li>
+  </ul>
+  <p><b>연쇄가 커지는 경우</b> — 재사용률이 떨어지지만 틀린 결과가 나오지는 않는다(바뀐 청크는 새로 임베딩).</p>
+  <ul>
+    <li><b>제목(번호) 인식이 안 되는 문서</b>: 문서 전체가 절 하나로 잡히면 수정 지점부터 문서 끝까지 밀린다.</li>
+    <li><b>긴 절의 앞부분 수정</b>: 그 절의 거의 모든 청크가 바뀐다(이번 실험은 문서 한가운데만 고쳤다).</li>
+    <li><b>절 제목 수정</b>: 모든 청크 앞에 <code>[문서명 &gt; 절]</code> 접두가 붙으므로 그 절 아래 청크가 모두 바뀐다 — 내용이 실제로 바뀐 것이라 다시 임베딩이 맞다.</li>
+  </ul>
+  <div class="note">확인 필요 — 청탁금지법 해설집(1,127청크)은 고친 문단이 어느 청크에도 들어가지 않아 "다시 임베딩 0" 이 나왔다.
+  머리글처럼 청크에서 빠지는 블록을 고른 것으로 보이며, 원인은 아직 확인하지 않았다. 실험 도구 · 결과: <code>results/vec_reuse/reuse_sim.py</code> · <code>result.txt</code>.</div>
+
+  <h3>4-5-2. 보완안 — 내용 기준 경계 <span class="tag t-warn">보류</span></h3>
+  <p>경계를 "앞에서부터 128토큰씩 채운 위치"가 아니라 <b>문단 내용으로 정하면</b>(content-defined chunking — 문단 글의 해시 등으로 끊을 자리를 고름),
+  수정 지점 뒤에서 경계가 곧 원래 자리로 돌아와 연쇄가 더 짧아진다.</p>
+  <ul>
+    <li><b>보류 이유</b>: 청킹 결과 자체가 바뀌어 <b>전체 재인덱싱 · 검색 품질 재측정(골든셋)</b>이 필요하다. 지금도 97% 이상 재사용되어 더 얻을 것이 몇 % 뿐이다.</li>
+    <li><b>다시 볼 때</b>: 제목 인식이 안 되는 큰 문서(절 하나짜리)를 자주 고치는 사용 패턴이 확인되면, 그런 문서에만 적용하는 방안을 검토한다.</li>
+  </ul>
+
+  <h3>4-6. 작은 것들</h3>
+  <ul>
+    <li>상태 파일(<code>index_state.json</code>, 운영 660KB)을 문서마다 3번 쓴다. 문서 1건이면 수십 ms 라 그대로 둔다.
+      한꺼번에 수백 건을 처리할 때만 묶어 쓰기를 검토한다 <span class="tag t-warn">측정 후 결정</span>.</li>
+    <li>메타데이터 마무리(<code>meta::hook::finish</code>)는 실측 약 0.5초 — 그대로.</li>
+  </ul>
+
+  <h3>4-7. 기대 효과 — 운영 인덱스에 문서 1건(100청크) 추가</h3>
+  <div class="bars">
+    <div class="r"><span>지금</span><div class="track"><i class="b" style="width:100%"></i></div><span class="n">≈ 38초</span></div>
+    <div class="r"><span>A 토큰화 병렬</span><div class="track"><i class="w" style="width:66%"></i></div><span class="n">≈ 25초</span></div>
+    <div class="r"><span>A+B 토큰 저장</span><div class="track"><i class="w" style="width:42%"></i></div><span class="n">≈ 16초</span></div>
+    <div class="r"><span>A+B+C 세그먼트</span><div class="track"><i class="g" style="width:5%"></i></div><span class="n">≈ 2초</span></div>
+  </div>
+  <p style="font-size:14px">지금 = BM25 36.2초(실측) + 새 문서 임베딩 약 1.5초. A · B 는 BM25 단독 측정의 비율(토큰화 60% · 나머지 40%)을 실측 36.2초에 적용한 추정이다.
+  C 이후 남는 것은 새 청크 임베딩과 저장뿐이다.</p>
+</section>
+
+<!-- 5 -->
+<section id="s5">
+  <h2><span class="no">5</span>구현 단계</h2>
+  <p>증분 쪽이 매일 체감되므로 먼저 한다. 전체 쪽은 배포 변경이 없는 CPU 스레드 · 파싱 겹치기만 한다(OpenVINO 는 보류 — §8).
+  각 단계는 따로 넣고 따로 되돌릴 수 있게 나눈다. 모든 단계는 Python 판 · Rust 판을 함께 바꾼다.</p>
+  <ol class="steps">
+    <li><b>증분 A — BM25 토큰화 병렬</b> · 결과 파일이 지금과 바이트까지 같은지 확인 · 운영 사본에서 시간 재기</li>
+    <li><b>증분 B — 청크별 토큰 저장</b> · <code>bm25_tf</code> 표 · 넣기 · 지우기 · 복사 · 이동 경로 모두 · 옛 인덱스 채우기</li>
+    <li><b>증분 — 수정 문서 벡터 재사용</b> · <code>sync_doc</code> 2단계</li>
+    <li><b>증분 C — 세그먼트형 BM25</b> · 새 파일 형식 · 질의 때 가중치 · 합치기 · 점수 동일성 시험</li>
+    <li><b>전체 1 — CPU 임베딩 스레드</b> · 이 PC 측정 완료(§3-2 — 기본값 8) → 코드 기본값 4 → 8 · 다른 PC 는 그 값을 그대로(코어 수 상한) · <code>embed.threads</code> 설정 ·
+      전체 인덱싱에만 적용(자동 인덱싱은 4) · 리랭커 스레드를 임베딩 상수에서 떼기</li>
+    <li><b>전체 2 — 파싱 · 청킹과 임베딩 동시 진행</b> · 준비 스레드 1개 · 한 건만 앞서기 · 실패 처리 · <code>embed.prefetch</code> 설정 · 결과(청크 · 벡터)가 지금과 같은지 확인</li>
+    <li><b>전체 3 — 단계형 인덱싱</b> · 대기 청크(Rust 빈 벡터 · Python <code>vec_pending</code> 표시) · dense 검색에서 대기 제외 · 1단계 뒤 BM25 · 상태 저장 ·
+      명령줄 <code>index</code> 2단계 이어 채우기 · 워커 <code>/embed-pending</code> 와 RAGSearchBox tick(질문 없을 때만) · <code>index.defer_vectors_over</code> · 진행 표시</li>
+  </ol>
+</section>
+
+<!-- 6 -->
+<section id="s6">
+  <h2><span class="no">6</span>시험 · 측정 계획</h2>
+  <div class="tbl"><table>
+    <tr><th>무엇</th><th>어떻게</th><th>통과 기준</th></tr>
+    <tr><td>BM25 A · B 결과 동일</td><td>운영 사본으로 지금 방식 · 새 방식 각각 만들어 파일 비교</td><td>바이트 동일</td></tr>
+    <tr><td>BM25 C 점수 동일</td><td>골든 100문항 + 무작위 질의 500개 · 문서 추가 · 삭제 · 수정을 섞은 뒤 전체 재구축과 비교</td><td>상위 50 순서 동일 · 점수 차 1e-5 이하</td></tr>
+    <tr><td>BM25 C 질의 시간</td><td>위 질의들의 BM25 단계 시간</td><td>지금 대비 +10ms 이내</td></tr>
+    <tr><td>벡터 재사용</td><td>문서 10건을 한 곳씩 고쳐 재사용 · 전부 다시 임베딩 두 방식의 검색 결과 비교</td><td>골든셋 근거 적중 차이 0</td></tr>
+    <tr><td>증분 1건 시간</td><td>운영 사본에 새 문서 1건 · 수정 1건 · 삭제 1건 (<code>index</code> 출력 시간)</td><td>각 3초 이내 (C 이후)</td></tr>
+    <tr><td>단계형 — 1단계 시간</td><td>운영 사본(18.7만 청크) <code>--rebuild</code> 로 "검색 가능"까지 시간</td><td>약 6분 안팎 (지금 약 66분)</td></tr>
+    <tr><td>단계형 — 대기 중 검색</td><td>1단계 직후 골든 100 · 일반어 42 를 돌려 근거 적중 · 문서 적중</td><td>BM25+동의어 측정값과 같음(골든 근거 64 · 일반어 21 안팎) · 대기 청크가 dense 후보에 없음</td></tr>
+    <tr><td>단계형 — 다 채운 뒤</td><td>2단계가 끝난 인덱스와 한 번에 만든 인덱스의 골든 100 · 일반어 42 근거 적중 비교</td><td>차이 없음 (배치 구성 차이로 벡터가 미세하게 달라도)</td></tr>
+    <tr><td>단계형 — 중단 · 이어 하기</td><td>2단계 도중 강제 종료 → 다시 <code>index</code> · 워커 기동</td><td>남은 대기 청크부터 이어 채움 · 중복 · 빠짐 없음</td></tr>
+    <tr><td>단계형 — 질문 양보</td><td>2단계 도중 질문 20개 TTFT</td><td>평소 대비 +0.3초 이내</td></tr>
+    <tr><td>CPU 스레드 장시간 (이 PC, 한 번) <span class="tag t-good">완료 · 8</span></td><td>§3-2 ① 방법 — 4,616청크 전체를 4 · 6 · 8 · 12스레드로 · 식힘 60초 · 순서 바꿔 3번씩 · 운영 규모 전체 인덱싱 1번</td><td>4스레드 대비 평균 1.2배 이상일 때만 기본값 변경</td></tr>
+    <tr><td>8스레드 부작용</td><td>전체 인덱싱 중 질문 20개 TTFT · 인덱싱 중 다른 프로그램 체감(CPU 점유율)</td><td>TTFT 평소 대비 +0.3초 이내</td></tr>
+    <tr><td>파싱 겹치기 결과 동일</td><td>sample_pdf 30건을 겹치기 켬 · 끔으로 각각 인덱싱해 청크 글 · 벡터 · 상태 파일 비교</td><td>청크 · 벡터 동일 · 실패 문서 처리 같음</td></tr>
+    <tr><td>파싱 겹치기 효과</td><td>같은 30건 · CPU 4스레드 · 8스레드 각각 켬 · 끔 시간</td><td>−4% 이상</td></tr>
+  </table></div>
+  <div class="note">이 노트북은 발열로 같은 측정이 1.5~2배 흔들린다. 시간 비교는 <b>측정 사이 60초 식힘</b> · 같은 순서 반복 · AC 전원으로 한다(<code>results/embed_igpu/</code> 스크립트와 같은 방식).</div>
+</section>
+
+<!-- 7 -->
+<section id="s7">
+  <h2><span class="no">7</span>결정이 필요한 것</h2>
+  <div class="tbl"><table>
+    <tr><th>항목</th><th>안</th><th>제안</th></tr>
+    <tr><td>BM25 를 어디까지</td><td>A 까지 · A+B · A+B+C</td><td><b>A+B+C</b> — C 가 있어야 인덱스 크기와 상관없이 1~2초</td></tr>
+    <tr><td>CPU 임베딩 8스레드</td><td>4 유지 · 8 로 · PC 마다 측정해 고르기</td><td><b>8 로 결정</b>(2026-10-30 이 PC 측정 — 평균 1.30배 · 흔들림 가장 작음). 전체 인덱싱에만, 자동 인덱싱은 4. 다른 PC 는 측정 없이 8(코어 수 상한)</td></tr>
+    <tr><td>파싱 겹치기 기본값</td><td>켬 · 끔</td><td><b>켬</b> — 결과가 같다는 시험을 통과하면. 효과는 작지만(최대 7%) 배포 변경이 없다</td></tr>
+    <tr><td>단계형 인덱싱 기준</td><td>항상 · 500청크 넘을 때 · 끔</td><td><b>500청크 넘을 때</b>(<code>index.defer_vectors_over</code>) — 문서 몇 건은 지금처럼 바로 임베딩해 대기 상태를 만들지 않는다</td></tr>
+    <tr><td>벡터 채우는 동안 답변 안내</td><td>안내 없음 · 상태줄만 · 답변 아래 한 줄</td><td><b>상태줄만</b> — 문서 용어 질문은 품질 차이가 없어, 모든 답에 경고를 붙이면 오히려 혼란스럽다</td></tr>
+    <tr><td>OpenVINO iGPU 임베딩</td><td>지금 넣기 · 보류</td><td><b>보류</b>(결정됨, 2026-10-30) — 모델 추가로 배포 용량 약 +335MB. 재검토 조건은 §8-1</td></tr>
+  </table></div>
+</section>
+
+<!-- 8 -->
+<section id="s8">
+  <h2><span class="no">8</span>추후 고려 — OpenVINO iGPU 임베딩 (보류)</h2>
+  <div class="note"><b>보류 (2026-10-30)</b> — 측정상 전체 인덱싱을 가장 크게 줄이는 방안(벡터 생성 약 2.1배, 운영 규모 약 66분 → 약 24분)이지만
+  <b>모델 파일을 하나 더 넣어야 해 배포 용량이 커져</b> 이번에는 넣지 않는다. 아래 측정 · 설계는 재검토할 때 그대로 쓰도록 남긴다.</div>
+
+  <h3>8-1. 보류 사유와 재검토 조건</h3>
+  <div class="tbl"><table>
+    <tr><th>사유</th><th>내용</th></tr>
+    <tr><td><b>모델이 2개 필요</b></td><td>지금 모델은 int8 ONNX(118MB)다. iGPU 는 int8 을 가속하지 못해(1.6 청크/초) <b>fp16 모델(약 235MB, 추정)</b>을 따로 넣어야 한다.
+      반대로 fp16 하나로 통일하면 iGPU 가 없는 PC 의 CPU 임베딩이 3~4배 느려진다(fp32 CPU 실측 약 20 청크/초). 그래서 하나로 합칠 수 없다.</td></tr>
+    <tr><td><b>배포 용량</b></td><td>fp16 모델 약 235MB + OpenVINO DLL 약 100MB = <b>약 +335MB</b>. 지금 배포의 임베딩 관련 파일(모델 118MB + onnxruntime 18MB)보다 크다.</td></tr>
+    <tr><td><b>벡터 계열이 둘로</b></td><td>int8 과 fp16 벡터는 일치도 0.95 로 섞을 수 없다. 인덱스마다 계열을 적고, 질문도 같은 계열로 임베딩하고, 계열을 바꿀 때는 전체 재인덱싱이 필요하다.</td></tr>
+    <tr><td><b>효과가 PC 에 따라 다름</b></td><td>인텔 GPU 전용이고(AMD iGPU 는 GPU 장치 없음), 인텔 안에서도 UHD 계열은 CPU 보다 느릴 수 있어 측정 · 판정 · 폴백 장치가 함께 필요하다.</td></tr>
+  </table></div>
+  <p><b>다시 볼 때</b> — 다음 중 하나가 생기면 재검토한다.</p>
+  <ul>
+    <li>전체 인덱싱 시간이 운영상 문제가 될 때(예: 문서가 크게 늘어 1~2시간을 넘김), §3 두 방안으로 부족할 때.</li>
+    <li>배포 용량 여유가 생길 때 — 예: "iGPU 가속 팩"을 선택 설치로 따로 내려받게 하는 배포 경로가 생길 때.</li>
+    <li>임베딩 모델을 바꿀 때(어차피 전체 재인덱싱 · 새 모델 배포) — 그때 fp16 하나로 iGPU · CPU 를 함께 쓰는 구성을 다시 잰다.</li>
+    <li>모델 크기를 줄일 방법이 확인될 때 — 크기의 대부분은 단어 표(약 25만 × 384)라, 단어 표만 int8 로 두고 나머지를 fp16 으로 하는 혼합 구성 등.</li>
+  </ul>
+  <h3>8-2. 근거 — 같은 모델(e5-small-ko)로 엔진만 바꿔 잼</h3>
+  <div class="tbl"><table>
+    <tr><th>엔진</th><th>정밀도</th><th class="num">청크/초</th><th class="num">현재 대비</th><th class="num">hit@5 (100문항)</th><th>판단</th></tr>
+    <tr><td>onnxruntime CPU 4스레드 (지금)</td><td>int8</td><td class="num">67.0</td><td class="num">1.00배</td><td class="num">80</td><td>기준</td></tr>
+    <tr><td><b>OpenVINO iGPU</b></td><td>fp16</td><td class="num"><b>139.3</b></td><td class="num"><b>2.08배</b></td><td class="num">82</td><td><span class="tag t-good">가장 빠름</span></td></tr>
+    <tr><td>llama.cpp Vulkan</td><td>Q8_0 · F16</td><td class="num">40~60</td><td class="num">0.6~0.9배</td><td class="num">82</td><td><span class="tag t-bad">CPU 보다 느림</span></td></tr>
+    <tr><td>DirectML</td><td>fp32 · int8</td><td class="num">14~27</td><td class="num">0.2~0.4배</td><td class="num">—</td><td><span class="tag t-bad">벡터 틀림</span></td></tr>
+    <tr><td>OpenVINO iGPU</td><td>int8</td><td class="num">1.6</td><td class="num">0.02배</td><td class="num">—</td><td><span class="tag t-bad">사용 불가</span></td></tr>
+  </table></div>
+  <p>전체 4,616청크(긴 측정)에서도 OpenVINO fp16 은 128.8 청크/초를 유지했다. 자세한 근거는 report/임베딩_iGPU_Vulkan_vs_OpenVINO_20261030.html.</p>
+
+  <h3>8-3. 원칙 — "확실히 빨라질 때만" (답변 생성 Vulkan 선택과 같은 구조)</h3>
+  <p>OpenVINO 의 GPU 가속은 <b>인텔 GPU 전용</b>이고, 인텔 안에서도 iGPU 성능 차이가 크다
+  (Iris Xe 실행 유닛 80~96개 · 흔한 UHD 620/730/770 은 24~32개 · Iris Xe 도 메모리 한 채널이면 UHD 모드).
+  그래서 지금 <code>generate/backend.rs</code> 가 하듯이 <b>PC 마다 처음 한 번 재고, 결과를 저장해 두고, 다시 쓴다</b>.</p>
+  <div class="pipe">
+    <span>인덱싱 시작(전체)</span><b>→</b><span>저장된 측정 있나<br><small>embed_backend.json</small></span><b>→ 없으면</b>
+    <span class="hl">자식 프로세스에서 측정<br><small>_probe-embed</small></span><b>→</b><span>판정</span><b>→</b><span>저장 · 사용</span>
+  </div>
+  <div class="flow">
+    <div class="card">
+      <h3>측정 (자식 프로세스 <code>simplerag-rs _probe-embed</code>)</h3>
+      <ol>
+        <li>OpenVINO DLL · 모델(IR fp16)이 있는지, GPU 장치가 잡히는지 먼저 본다. 없으면 측정 없이 CPU.</li>
+        <li>고정 시험 글 256개(동봉, 실제 청크 길이 분포와 비슷하게)를 CPU int8 · iGPU fp16 으로 각각 임베딩해 청크/초를 잰다. 예열 1회 뒤.</li>
+        <li>같은 글 64개를 <b>CPU fp32 기준</b>과 비교해 iGPU 벡터의 코사인을 잰다(DirectML 처럼 "빠르지만 틀린" 경우를 거른다).</li>
+        <li>자식 프로세스에서 재는 이유: 그래픽 드라이버 문제로 죽어도 본 프로세스는 살아야 한다(지금 <code>_probe-backend</code> 와 같은 이유).</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3>판정</h3>
+      <ul>
+        <li>iGPU 측정 실패 → <b>CPU</b> (사유 기록)</li>
+        <li>iGPU 코사인 &lt; 0.999 → <b>CPU</b> ("벡터가 맞지 않음")</li>
+        <li>iGPU ÷ CPU &lt; <code>EMBED_GPU_MIN_SPEEDUP</code>(1.5) → <b>CPU</b></li>
+        <li>그 밖 → <b>iGPU(OpenVINO)</b></li>
+      </ul>
+      <p style="font-size:14px">문턱을 답변 생성(1.3배)보다 높게 1.5배로 두는 이유: 엔진을 바꾸면 <b>전체 재인덱싱</b>이 필요하고,
+      CPU 측정값이 발열로 57~92 청크/초까지 흔들려 1.3배 근처는 판정이 뒤집힐 수 있다.</p>
+    </div>
+  </div>
+  <p>저장 키(이 값이 같아야 저장된 측정을 다시 쓴다): 컴퓨터 이름 · GPU 이름 · 그래픽 드라이버 버전 · OpenVINO 버전 · 모델 파일 크기·날짜 · 문턱값.
+  드라이버나 모델이 바뀌면 다시 잰다. <code>backend --embed --reprobe</code> 로 강제 재측정.</p>
+
+  <h3>8-4. 엔진은 인덱스마다 고정 — 벡터 계열</h3>
+  <p>CPU int8 과 iGPU fp16 의 벡터는 서로 다르다(평균 코사인 0.951). 섞이면 검색이 망가진다. 반면 fp16(iGPU) · fp32(CPU) 는 0.99997 로 같은 계열이다.</p>
+  <div class="tbl"><table>
+    <tr><th>벡터 계열</th><th>만드는 엔진</th><th>질문 임베딩</th><th>증분 인덱싱(그 PC 에 iGPU 가 없으면)</th></tr>
+    <tr><td><code>e5ko-int8</code> (지금)</td><td>onnxruntime CPU int8</td><td>CPU int8 (지금 그대로)</td><td>CPU int8</td></tr>
+    <tr><td><code>e5ko-fp</code> (새)</td><td>OpenVINO iGPU fp16</td><td>OpenVINO iGPU 또는 OpenVINO CPU (같은 IR)</td><td>OpenVINO CPU — 느려도 문서 몇 건이라 괜찮다 <span class="tag t-warn">속도 미측정</span></td></tr>
+  </table></div>
+  <ul>
+    <li>인덱스 상태 파일의 <code>chunk_params</code> 에 <code>"embed": "e5ko-int8" | "e5ko-fp"</code> 를 더한다. 지금의 청킹 설정 검사(<code>check_chunk_params</code>)가
+      그대로 섞임을 막는다 — 다르면 증분 인덱싱을 거부하고 <code>--rebuild</code> 를 안내.</li>
+    <li>엔진 선택은 <b>전체 인덱싱(처음 · --rebuild) 때만</b> 한다. 증분 인덱싱 · 질문은 인덱스에 적힌 계열을 따른다.</li>
+    <li>기록이 없는 옛 인덱스는 <code>e5ko-int8</code> 로 본다(지금 동작과 같음).</li>
+    <li>질문 1개 임베딩은 짧아서 OpenVINO CPU 로 해도 수십 ms 로 예상된다 <span class="tag t-warn">시제품에서 측정</span>.</li>
+  </ul>
+
+  <h3>8-5. 고정 모양(정적 shape)으로 컴파일</h3>
+  <p>시험 중 길이가 제각각인 배치를 넣자 iGPU 커널 캐시가 <b>159개 · 1.1GB</b>까지 불었다(모양마다 새로 컴파일). 실제 청크는 토큰 수가 좁게 모여 있다.</p>
+  <div class="tbl"><table>
+    <tr><th>청크 토큰 수 (<code>passage: </code> 포함)</th><th class="num">중앙</th><th class="num">90%</th><th class="num">99%</th><th class="num">최대</th></tr>
+    <tr><td>4,616청크 실측</td><td class="num">120</td><td class="num">130</td><td class="num">131</td><td class="num">132</td></tr>
+  </table></div>
+  <ul>
+    <li>입력 모양을 <b>배치 8 × 폭 (chunk.tokens + 16)</b> = 8 × 144 로 고정해 <b>한 번만</b> 컴파일한다. 마지막 배치는 빈 줄로 채운다.</li>
+    <li>폭보다 긴 청크(설정 바꿈 등)는 한 단계 큰 폭(+64씩)으로 따로 처리한다 — 모양은 많아야 몇 개.</li>
+    <li>컴파일 캐시는 데이터 폴더 <code>ov_cache\</code> 에 둔다(첫 컴파일 약 6.5초 · 캐시 후 0.6초 실측). 크기 상한 200MB, 넘으면 비운다.</li>
+    <li>질문(짧음)은 폭 64 모양을 따로 하나 둔다.</li>
+  </ul>
+
+  <h3>8-6. 배포 구성 — "iGPU 가속 팩"</h3>
+  <div class="tbl"><table>
+    <tr><th>파일</th><th class="num">크기</th><th>용도</th></tr>
+    <tr><td><code>openvino.dll</code> · <code>openvino_c.dll</code> · <code>tbb12.dll</code> 등</td><td class="num">약 17MB</td><td>런타임 · C API</td></tr>
+    <tr><td><code>openvino_intel_gpu_plugin.dll</code></td><td class="num">34.7MB</td><td>iGPU</td></tr>
+    <tr><td><code>openvino_intel_cpu_plugin.dll</code></td><td class="num">46.3MB</td><td>iGPU 없는 PC 에서 <code>e5ko-fp</code> 인덱스를 쓸 때</td></tr>
+    <tr><td><code>openvino_ir_frontend.dll</code></td><td class="num">0.5MB</td><td>IR 모델 읽기 (ONNX 프런트엔드 5.4MB 는 빼도 됨)</td></tr>
+    <tr><td><code>models\e5-small-ko\model_fp16.xml/.bin</code></td><td class="num">약 235MB <span class="tag t-warn">추정</span></td><td>fp16 IR (fp32 470MB 의 절반)</td></tr>
+    <tr><td><b>합계</b></td><td class="num"><b>약 335MB</b></td><td>NPU 관련 DLL(약 110MB)은 넣지 않는다</td></tr>
+  </table></div>
+  <ul>
+    <li>팩이 없으면 지금과 똑같이 CPU int8 로만 동작한다(판정 1단계에서 걸러짐). 그래서 <b>선택 설치</b>로 둘 수 있다 .</li>
+    <li>인텔 그래픽 드라이버가 따로 깔려 있어야 한다(OpenVINO 패키지에 드라이버는 없음).</li>
+  </ul>
+
+  <h3>8-7. 연결 방식</h3>
+  <ul>
+    <li><b>Rust 판</b>: OpenVINO <b>C API(<code>openvino_c.dll</code>)를 실행 시점에 적재</b>해 쓴다 — 지금 <code>pdfium.dll</code> · <code>onnxruntime.dll</code> 을 다루는 방식과 같다.
+      onnxruntime 의 OpenVINO EP 는 쓰지 않는다: 버전이 서로 맞아야 하고(시험 중 1.24 ↔ 2026.4 에서 Error 127), 묶음이 커진다.</li>
+    <li><b>Python 판</b>: <code>openvino</code> 패키지의 <code>Core().compile_model(..., "GPU")</code>. 측정 · 판정 · 저장 파일 모양은 Rust 판과 같게.</li>
+    <li>새 모듈: <code>embed/openvino.rs</code>(<code>embed/openvino_embedder.py</code>) — 지금 <code>Embedder</code> 와 같은 함수(<code>embed_passages</code> · <code>embed_query</code> · <code>tokenizer</code>)를 낸다.
+      토크나이저는 지금 것을 그대로 쓴다(tokenizer.json 같음).</li>
+  </ul>
+
+  <h3>8-8. 답변 생성(sLLM)과 iGPU 경합</h3>
+  <p>sLLM 도 iGPU(Vulkan)를 쓴다. 인덱싱 중에 질문하면 둘이 iGPU 를 나눠 쓰게 된다 <span class="tag t-warn">미측정</span>.</p>
+  <ul>
+    <li>원칙: <b>질문이 먼저</b>. 워커가 답변을 만드는 동안에는 인덱싱이 배치 사이에서 기다린다(배치 8개 ≈ 60ms 단위로 끊을 수 있음).</li>
+    <li>시제품에서 "인덱싱 중 TTFT" 를 재서, 늘어남이 0.3초를 넘으면 위 양보를 넣는다.</li>
+  </ul>
+
+
+  <h3>8-9. 재개 시 시험 항목</h3>
+  <div class="tbl"><table>
+    <tr><th>무엇</th><th>어떻게</th><th>통과 기준</th></tr>
+    <tr><td>정확도</td><td>CPU fp32 대비 코사인 · 골든셋 hit@5</td><td>0.999 이상 · hit@5 지금 이상</td></tr>
+    <tr><td>속도</td><td>4,616청크 · 운영 18.7만 청크 전체 인덱싱</td><td>CPU 대비 1.5배 이상 (이 PC)</td></tr>
+    <tr><td>자동 선택 폴백</td><td>팩 없음 · GPU 장치 없음 · 드라이버 없음 · 강제로 느린 iGPU</td><td>모두 CPU int8 로 정상 인덱싱 · 사유 표시</td></tr>
+    <tr><td>계열 섞임 방지</td><td><code>e5ko-int8</code> 인덱스에 iGPU 판정 PC 로 증분 · 반대 경우</td><td>섞지 않고 안내 · 질문은 인덱스 계열로 임베딩</td></tr>
+    <tr><td>sLLM 경합</td><td>전체 인덱싱 중 질문 20개 TTFT</td><td>평소 대비 +0.3초 이내 (넘으면 양보 넣기)</td></tr>
+    <tr><td>fp16 모델 크기</td><td>fp16 IR 을 실제로 만들어 크기 · 결과 확인</td><td>235MB 안팎 · fp32 와 코사인 0.999 이상</td></tr>
+  </table></div>
+  <p>재개 시 결정할 것: iGPU 판정 문턱(제안 1.5배 — 전체 재인덱싱 비용과 측정 흔들림 때문) · 가속 팩 배포 방식(제안 선택 설치) · 엔진 전환 시 재인덱싱(제안 권하기만).</p>
+</section>
+
+<footer>
+  MoAI-S (SimpleRAG) · 인덱싱 속도 개선 설계서 · 2026-10-30 · 실측 근거: report/임베딩_iGPU_Vulkan_vs_OpenVINO_20261030.html · results/embed_igpu/ ·
+  rust/simplerag/examples/index_profile.rs · bm25_profile.rs
+</footer>
+</div>
+</body>
+</html>

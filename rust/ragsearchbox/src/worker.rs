@@ -295,9 +295,14 @@ struct Inner {
     parser: ChatParser,
     // 기다리는 질문 (질문, 범위 폴더, 같은 대화의 바로 앞 질문, 대화 id, 올린 문서가 있는 대화인가)
     pending: Option<(String, Option<String>, Option<String>, Option<String>, bool)>,
+    // 기다리는 AI 정리 요청(워커에 보낼 줄) · 지금 쓰는 것이 AI 정리인가
+    brief: Option<String>,
+    brief_on: bool,
     current: Option<String>,
     t_state: Instant,
     t_last_ask: Instant,
+    // 마지막으로 명령을 보낸 때 — 벡터 채우기처럼 질문 없이 도는 일이 유휴 내리기에 걸리지 않게
+    t_last_work: Instant,
     restarts: Vec<Instant>,
     blocked: Option<String>,
     stderr_tail: Vec<String>,
@@ -349,8 +354,8 @@ impl Worker {
             inner: Mutex::new(Inner {
                 state: STOPPED.into(), detail: "시작 전".into(), backend: String::new(), model: String::new(), rerank_note: None,
                 embed_model: String::new(), rerank_model: String::new(), ready_line: String::new(), features: HashSet::new(),
-                child: None, stdin: None, parser: ChatParser::new(), pending: None, current: None,
-                t_state: Instant::now(), t_last_ask: Instant::now(), restarts: vec![], blocked: None, stderr_tail: vec![], probe: (None, None), load_pct: 0,
+                child: None, stdin: None, parser: ChatParser::new(), pending: None, brief: None, brief_on: false, current: None,
+                t_state: Instant::now(), t_last_ask: Instant::now(), t_last_work: Instant::now(), restarts: vec![], blocked: None, stderr_tail: vec![], probe: (None, None), load_pct: 0,
                 want_running: false, cmds: VecDeque::new(), cmd: None, cmd_buf: String::new(), hold: None, gen: 0,
             }),
             job: crate::win::create_kill_job().map(|h| h.0 as isize),
@@ -410,6 +415,50 @@ impl Worker {
         }
     }
 
+    //------------------------------------------------------------------
+    // AI 정리 맡기기 — 기다리는 요청은 하나뿐(새 요청이 오면 갈아 끼운다)
+    //
+    // -in: req = /brief 뒤에 붙일 요청 값
+    //
+    // -out: 없음
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn brief(&self, req: &Value) {
+        let state = {
+            let mut g = self.inner.lock().unwrap();
+            g.want_running = true;
+            g.blocked = None;
+            g.brief = Some(format!("/brief {}", ascii_json(req)));
+            g.t_last_ask = Instant::now();
+            g.state.clone()
+        };
+        crate::info!("worker", "AI 정리 접수");
+        if state == STOPPED {
+            (self.emit)(WEvent::State(STARTING.into(), "모델 준비 중 (첫 정리)".into()));
+        }
+    }
+
+    //------------------------------------------------------------------
+    // AI 정리 멈추기 — 기다리는 요청은 버리고, 쓰는 중이면 워커에 /cancel 을 보낸다
+    //=> 입력 스레드가 받아 바로 멈추므로 다음 찾기가 기다리지 않는다.
+    //
+    // -in: 없음
+    //
+    // -out: true = 쓰던 정리를 멈추게 했다 — 곧 끝남 사건이 온다
+    // -out: error = 없음 — 쓰기 실패는 경고만 남긴다
+    //------------------------------------------------------------------
+    pub fn cancel_brief(&self) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        g.brief = None;
+        if !g.brief_on {
+            return false;
+        }
+        if let Err(e) = self.write_line(&mut g, "/cancel") {
+            crate::warn!("worker", "취소 전송 실패: {}", e);
+        }
+        true
+    }
+
     // 사용자가 찾기를 눌렀다 — 질문과 같이 센다. 벡터 채우기 · 키워드 색인 같은 뒷일이 비켜 주고, 유휴로 내려가지 않게
     pub fn note_use(&self) {
         self.inner.lock().unwrap().t_last_ask = Instant::now();
@@ -447,6 +496,11 @@ impl Worker {
         }
     }
 
+    // 앱이 끝날 때 함께 끝낼 작업 개체 — index 명령도 여기에 묶는다
+    pub fn job_handle(&self) -> Option<isize> {
+        self.job
+    }
+
     pub fn hold(&self, reason: Option<String>) {
         crate::info!("worker", "워커 띄우기 {}", match &reason { Some(r) => format!("막음: {}", r), None => "막음 풀림".into() });
         self.inner.lock().unwrap().hold = reason;
@@ -458,7 +512,7 @@ impl Worker {
     //------------------------------------------------------------------
     pub fn is_idle(&self) -> bool {
         let g = self.inner.lock().unwrap();
-        g.child.is_some() && g.state == READY && g.pending.is_none()
+        g.child.is_some() && g.state == READY && g.pending.is_none() && g.brief.is_none()
     }
 
     pub fn seconds_since_ask(&self) -> f64 {
@@ -473,6 +527,7 @@ impl Worker {
             let mut g = self.inner.lock().unwrap();
             g.want_running = false;
             g.pending = None;
+            g.brief = None;
         }
         crate::info!("worker", "모델 내리기: {}", reason);
         self.terminate(true, reason);
@@ -559,6 +614,19 @@ impl Worker {
     // 워커 띄우기 — 콘솔 없이, 작업 개체에 묶어서
     //------------------------------------------------------------------
     fn launch(self: &Arc<Self>) -> bool {
+        // 띄우기 전에 hold 를 다시 보고 같은 잠금 안에서 "시작 중" 으로 표시한다. 프로세스를 띄운 뒤 표시하면
+        // 그 약 1초 동안 자동 인덱싱이 워커가 꺼졌다고 보고 index 명령을 돌려 인덱스 잠금이 부딪힌다
+        {
+            let mut g = self.inner.lock().unwrap();
+            if g.hold.is_some() {
+                return false;
+            }
+            g.state = STARTING.into();
+            g.detail = "모델 적재 중".into();
+            g.t_state = Instant::now();
+        }
+        crate::info!("worker", "상태: {} (모델 적재 중)", STARTING);
+        (self.emit)(WEvent::State(STARTING.into(), "모델 적재 중".into()));
         let mut args: Vec<String> = self.cmd[1..].to_vec();
         args.push("chat".into());
         if self.no_stream {
@@ -608,7 +676,6 @@ impl Worker {
             g.gen += 1;
             gen = g.gen;
         }
-        self.set_state(STARTING, "모델 적재 중");
         if let Some(o) = out {
             let me = self.clone();
             std::thread::spawn(move || me.read_stdout(o, gen));
@@ -726,13 +793,26 @@ impl Worker {
                 self.set_state(READY, if backend.is_empty() { "준비됨" } else { &backend });
             }
             "done" => {
-                self.inner.lock().unwrap().current = None;
+                {
+                    let mut g = self.inner.lock().unwrap();
+                    g.current = None;
+                    g.brief_on = false;
+                }
                 (self.emit)(WEvent::Done(v));
                 let b = self.inner.lock().unwrap().backend.clone();
                 self.set_state(READY, if b.is_empty() { "준비됨" } else { &b });
             }
             "evidence" => (self.emit)(WEvent::Evidence(v["items"].as_array().cloned().unwrap_or_default(), v["ms"].as_i64().unwrap_or(0))),
-            "token" => (self.emit)(WEvent::Token(v.as_str().unwrap_or("").to_string())),
+            "token" => {
+                // AI 정리는 문서마다 생성해 길어질 수 있다 — 글이 나오는 동안은 답변 시간 한도를 다시 센다
+                {
+                    let mut g = self.inner.lock().unwrap();
+                    if g.brief_on {
+                        g.t_state = Instant::now();
+                    }
+                }
+                (self.emit)(WEvent::Token(v.as_str().unwrap_or("").to_string()))
+            }
             "raw" => (self.emit)(WEvent::Raw(v.as_str().unwrap_or("").to_string())),
             _ => {}
         }
@@ -801,6 +881,30 @@ impl Worker {
         stdin.flush()
     }
 
+    // 기다리던 AI 정리 보내기 — 질문과 같은 해석기로 근거 · 답변 · 소요를 읽는다
+    fn send_brief(&self) -> bool {
+        {
+            let mut g = self.inner.lock().unwrap();
+            let line = match g.brief.take() {
+                Some(l) => l,
+                None => return false,
+            };
+            if g.child.is_none() {
+                return false;
+            }
+            g.current = Some("AI 정리".into());
+            g.brief_on = true;
+            g.parser.begin_question();
+            if let Err(e) = self.write_line(&mut g, &line) {
+                g.brief_on = false;
+                crate::warn!("worker", "AI 정리 전송 실패: {}", e);
+                return false;
+            }
+        }
+        self.set_state(BUSY, "정리 중");
+        true
+    }
+
     // 기다리던 질문 보내기
     fn send_pending(&self) -> bool {
         let line;
@@ -856,6 +960,7 @@ impl Worker {
             match r {
                 Ok(_) => {
                     g.cmd = Some((line, cb));
+                    g.t_last_work = Instant::now();
                     fail = None;
                 }
                 Err(e) => {
@@ -869,7 +974,7 @@ impl Worker {
             return false;
         }
         // 탐색기 모드 찾기는 인덱싱이 아니라 검색이다(툴팁·설정 창에 "인덱싱 중" 이 뜨지 않게)
-        if label == "/find" {
+        if label.starts_with("/find") {
             self.set_state(BUSY, "찾는 중");
         } else {
             self.set_state(INDEXING, &label);
@@ -935,6 +1040,7 @@ impl Worker {
         let (child, mut stdin) = {
             let mut g = self.inner.lock().unwrap();
             g.current = None;
+            g.brief_on = false;
             g.gen += 1;
             (g.child.take(), g.stdin.take())
         };
@@ -971,9 +1077,11 @@ impl Worker {
             let cur = g.current.take();
             g.child = None;
             g.stdin = None;
+            g.brief_on = false;
             g.gen += 1;
             if cur.is_some() {
                 g.pending = None;
+                g.brief = None;
             }
             (cur, g.stderr_tail.clone(), g.blocked.clone())
         };
@@ -1009,10 +1117,10 @@ impl Worker {
             self.handle_exit(code);
             return;
         }
-        let (has_child, state, want, pending, blocked, t_state, t_last, hold, has_cmd) = {
+        let (has_child, state, want, pending, blocked, t_state, t_last, t_work, hold, has_cmd) = {
             let g = self.inner.lock().unwrap();
-            (g.child.is_some(), g.state.clone(), g.want_running, g.pending.is_some(), g.blocked.clone(),
-             g.t_state, g.t_last_ask, g.hold.clone(), !g.cmds.is_empty() && g.cmd.is_none())
+            (g.child.is_some(), g.state.clone(), g.want_running, g.pending.is_some() || g.brief.is_some(), g.blocked.clone(),
+             g.t_state, g.t_last_ask, g.t_last_work, g.hold.clone(), !g.cmds.is_empty() && g.cmd.is_none())
         };
         if !has_child && want && state == STOPPED {
             if blocked.is_some() {
@@ -1058,14 +1166,17 @@ impl Worker {
             return;
         }
         if state == READY && pending {
-            self.send_pending();
+            // 질문이 먼저 — 채팅 질문이 없을 때만 AI 정리를 보낸다
+            if !self.send_pending() {
+                self.send_brief();
+            }
             return;
         }
         if state == READY && has_cmd {
             self.send_cmd();
             return;
         }
-        if state == READY && !self.idle_unload.is_zero() && t_last.elapsed() > self.idle_unload {
+        if state == READY && !self.idle_unload.is_zero() && t_last.elapsed() > self.idle_unload && t_work.elapsed() > self.idle_unload {
             self.unload(&format!("{}분 유휴", self.idle_unload.as_secs() / 60));
         }
     }

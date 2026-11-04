@@ -25,7 +25,7 @@ use windows::Win32::UI::Shell::{
 
 const FOLDER_ICO: &[u8] = include_bytes!("../moai-folder.ico");
 const DRIVE_ICO: &[u8] = include_bytes!("../moai-drive.ico");
-const INFOTIP: &str = "MoAI-S 인덱싱 폴더 — 자연어로 문서와 쪽을 찾을 수 있습니다";
+const INFOTIP: &str = "MoAI-S 검색 폴더 — 자연어로 문서와 쪽을 찾을 수 있습니다";
 const SECTION: &str = "MoAI-S";
 const SHELL: &str = ".ShellClassInfo";
 const DRIVES_KEY: &str = r"Software\Classes\Applications\Explorer.exe\Drives";

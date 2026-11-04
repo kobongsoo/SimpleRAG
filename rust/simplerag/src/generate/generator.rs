@@ -175,7 +175,32 @@ impl Generator {
         let n_out = max_tokens.unwrap_or(cfg().gen_max_tokens as usize);
         let sys = system.map(|s| s.to_string()).unwrap_or_else(active_system_prompt);
         let prompt = self.fit_prompt(m, &sys, query, chunks, n_out);
-        let ptoks = m.prompt_tokens(&prompt);
+        self.run_prompt(m, &prompt, n_out, None, on_piece)
+    }
+
+    //------------------------------------------------------------------
+    // 사용자 메시지를 직접 받는 스트리밍 생성 (AI 정리)
+    //=> stream 의 "[근거]/[질문]" 틀을 쓰지 않는다. stop 을 주면 그 글자에서 멈춘다(한 줄 요약).
+    //
+    // -in: system · user = 지시문 · 사용자 메시지 / max_tokens = 토큰 상한
+    // -in: stop = 더 쓸 중단 문자열 / on_piece = 조각 받는 함수
+    //
+    // -out: Ok(GenOut)
+    // -out: error = 적재 · 디코드 실패 · 취소면 Err
+    //------------------------------------------------------------------
+    pub fn stream_chat(&self, system: &str, user: &str, max_tokens: usize, stop: Option<&str>,
+                       on_piece: &mut dyn FnMut(&str)) -> Result<GenOut, String> {
+        self.ensure_loaded()?;
+        let mut g = self.model.lock().unwrap();
+        let m = g.as_mut().unwrap();
+        let prompt = build_chat_prompt(system, user, &self.alias);
+        self.run_prompt(m, &prompt, max_tokens, stop, on_piece)
+    }
+
+    // 프롬프트 하나 생성 — stream · stream_chat 공통
+    fn run_prompt(&self, m: &mut Model, prompt: &str, n_out: usize, stop: Option<&str>,
+                  on_piece: &mut dyn FnMut(&str)) -> Result<GenOut, String> {
+        let ptoks = m.prompt_tokens(prompt);
         if ptoks.len() as u32 >= m.n_ctx {
             return Err(format!("ValueError: Requested tokens ({}) exceed context window of {}", ptoks.len(), m.n_ctx));
         }
@@ -183,12 +208,14 @@ impl Generator {
         if max_new == 0 || max_new + ptoks.len() > m.n_ctx as usize {
             max_new = m.n_ctx as usize - ptoks.len();
         }
-        let mut guard = OutGuard::new(stop_strings(&self.alias));
+        let mut stops = stop_strings(&self.alias);
+        stops.extend(stop);
+        let mut guard = OutGuard::new(stops);
         let mut n_gen = 0usize;
         let mut logits = m.eval_prompt(&ptoks)?;
         let mut halt: Option<Halt> = None;
         loop {
-            // Ctrl+C — 이 답변만 취소한다
+            // Ctrl+C · /cancel — 이 답변만 취소한다
             if crate::cli::INTERRUPT.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("KeyboardInterrupt".into());
             }

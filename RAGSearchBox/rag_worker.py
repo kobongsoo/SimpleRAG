@@ -268,6 +268,7 @@ class RagWorker:
         self._want_running = False
 
         # 자동 인덱싱 명령 (설계서 §8) — 질문이 언제나 먼저다
+        self._t_last_work = time.monotonic()   # 마지막으로 명령을 보낸 때(유휴 내리기 판단)
         self._cmds = collections.deque()   # 보낼 명령들 [(줄, 콜백)]
         self._cmd = None                   # 보내 놓고 결과를 기다리는 명령 (줄, 콜백)
         self._cmd_buf = ""                 # 그 명령의 출력(프롬프트가 올 때까지 모은다)
@@ -870,6 +871,7 @@ class RagWorker:
             # 출력을 읽는 스레드가 곧바로 알아보도록, 쓰기 전에 표시해 둔다
             self._cmd = (line, cb)
             self._cmd_buf = ""
+            self._t_last_work = time.monotonic()
         try:
             proc.stdin.write((line + "\n").encode(STDIN_ENCODING, errors="replace"))
             proc.stdin.flush()
@@ -1090,7 +1092,8 @@ class RagWorker:
             pending = self._pending
             blocked = self._blocked
             t_state = self._t_state
-            t_last = self._t_last_ask
+            # 벡터 채우기처럼 질문 없이 도는 일도 쓰는 중으로 친다
+            t_last = max(self._t_last_ask, self._t_last_work)
             hold = self._hold
             has_cmd = bool(self._cmds) and self._cmd is None
 

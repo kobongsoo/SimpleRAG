@@ -147,7 +147,7 @@ class IndexCommands:
             elif cmd == "/index-outside":
                 res = self.outside(parse_value(arg, "roots") or [])
             elif cmd == "/bm25":
-                res = self.rebuild_bm25()
+                res = self.rebuild_bm25(parse_value(arg, "merge") is not False)
             elif cmd == "/index-plan":
                 res = self.plan(parse_path(arg), allow_delete=parse_flag(arg, "allow_delete"))
             elif cmd == "/embed-pending":
@@ -231,8 +231,11 @@ class IndexCommands:
         if self._ext is None:
             self._ext = indexer.build_extractor()
         self.app.embedder.ensure_loaded()
-        # 큰 문서는 벡터를 미룬다 — 한 건 임베딩이 명령 시간 한도(5분)를 넘어 워커가 죽지 않게. /embed-pending 이 채운다
-        over = config.DEFER_VECTORS_OVER if config.DEFER_VECTORS_OVER > 0 else None
+        # 벡터는 뒤로 미룬다 — 문서 처리가 빨리 끝나 질문이 기다리지 않게. /embed-pending 이 채운다
+        if config.VECTORS_BACKGROUND:
+            over = 0
+        else:
+            over = config.DEFER_VECTORS_OVER if config.DEFER_VECTORS_OVER > 0 else None
         r = indexer.sync_doc(path, fp, state, self.app.embedder, self.app.store, self._ext, defer_over=over)
         if r["ok"] and r["op"] == "moved":
             # 옮긴 문서 — 같은 벡터를 새 경로 이름으로 다시 단다(옛 경로 행은 뺀다)
@@ -287,16 +290,22 @@ class IndexCommands:
     #=> 바뀐 청크만 덧붙이고 지운 청크는 표시만 한다(덧붙임 · 지움이 5% 를 넘으면 이때 합친다).
     #   Bm25Index 는 같은 객체의 내용을 바꾼다. 검색기(HybridRetriever)가 그 객체를
     #   들고 있으므로 다음 질문부터 곧바로 새 BM25 로 찾는다(따로 바꿔 끼울 것이 없다).
+    #   merge=False 는 라운드 도중 반영이다 — 합치기 · 고아 청소 · 메타 마무리는 라운드 끝으로 미룬다.
     #
-    # -in: 없음
+    # -in: merge = True 면 평소처럼 마무리까지, False 면 덧붙임 · 지움만 (기본 True)
     #
     # -out: {ok, chunks, orphans, mode("full"|"update"|"same"), pending(벡터 대기 수), build_s}
     # -out: error = 저장소 읽기 실패는 예외(run 이 받는다)
     #--------------------------------------------------------------
-    def rebuild_bm25(self):
-        state = self._state()
+    def rebuild_bm25(self, merge=True):
         logs = []
         self.app.embedder.ensure_loaded()
+        if not merge:
+            rep = indexer.refresh_bm25(self.app.store, self.app.bm25, None, self.app.embedder.tokenizer,
+                                       log=logs.append, merge=False)
+            return {"ok": True, "chunks": rep["chunks"], "orphans": 0, "mode": rep["mode"],
+                    "pending": self.app.store.pending_count(), "build_s": round(rep["sec"], 2)}
+        state = self._state()
         # 바뀐 청크만 덧붙이고 지운 청크는 표시만 한다(인덱싱 속도 개선 설계서 §4). 5% 를 넘으면 합친다
         rep = indexer.refresh_bm25(self.app.store, self.app.bm25, state, self.app.embedder.tokenizer,
                                    log=logs.append)

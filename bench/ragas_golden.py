@@ -163,7 +163,9 @@ def stage_collect(args):
                 "response": done["answer"],
                 "retrieved_contexts": [c["text"] for c in chunks],
                 "retrieved_docs": names, "doc_hit": hit, "cited": done.get("cited", []),
-                "doc_id": g["doc_id"], "question_type": g["question_type"], "difficulty": g["difficulty"],
+                # 일반어 세트(paraphrase_pdf30)는 doc_id 대신 doc_ids, difficulty 없음 — 있는 쪽을 쓴다
+                "doc_id": g.get("doc_id") or (g.get("doc_ids") or [None])[0],
+                "question_type": g["question_type"], "difficulty": g.get("difficulty"),
                 # 골든셋 v2(포맷별 비교용)에만 있는 필드 — 없으면 None
                 "format": g.get("format"), "evidence_kind": g.get("evidence_kind"),
                 "must": g.get("must", []), "source_files": g["source_files"],

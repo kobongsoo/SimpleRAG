@@ -8,7 +8,7 @@
 > **갱신**: iGPU 자동 선택 + 리랭킹 운영 반영 (2026-09-14, [REPORT §32](results/REPORT.md))
 > **갱신**: 자동 인덱싱 · 폴더 한정 검색 · 관련 근거 판정 · 탐색기 패널 앱 [RAGSearchBox](RAGSearchBox/README.md) (2026-10)
 > **갱신**: 구조화 추출(blocks 엔진) 운영 전환 · 생성 모델 선택(기본 1.7B) · 시스템 지시문을 config.yaml 에서 (2026-10-22)
-> **갱신**: Rust 판 `simplerag-rs.exe` · `RAGSearchBox-rs.exe` 추가 — [rust/README.md](rust/README.md) (2026-10-23)
+> **갱신**: Rust 판 `simplerag-rs.exe` · `MoAISearch.exe` 추가 — [rust/README.md](rust/README.md) (2026-10-23)
 > **원칙**: 모든 설계 결정은 이 PC에서의 실측에 근거한다. 추측으로 정한 값은 없다.
 >
 > `results/REPORT.md`(측정 기록)는 로컬 전용이라 저장소에는 올라가 있지 않다.
@@ -105,7 +105,7 @@ iGPU 가 없거나 느린 PC 는 자동으로 오른쪽 열(CPU 전용, 리랭�
 | [plan/답변품질_개선_계획.html](plan/답변품질_개선_계획.html) | 생성 쪽 실험(지시문 · 표 평문화 · Parent-Child · 모델 비교) |
 | [plan/자동인덱싱_설계서.html](plan/자동인덱싱_설계서.html) · [plan/폴더한정검색_설계서.html](plan/폴더한정검색_설계서.html) | 자동 인덱싱 · 폴더 한정 검색 |
 | [RAGSearchBox/README.md](RAGSearchBox/README.md) | 탐색기 옆 대화 패널 앱 (설계: [plan/RAGSearchBox_설계서.html](plan/RAGSearchBox_설계서.html)) |
-| [rust/README.md](rust/README.md) | Rust 판 (`simplerag-rs.exe` · `RAGSearchBox-rs.exe`) |
+| [rust/README.md](rust/README.md) | Rust 판 (`simplerag-rs.exe` · `MoAISearch.exe`) |
 | [results/REPORT.md](results/REPORT.md) | 전체 측정 기록 (47절, 로컬 전용) |
 
 ---
@@ -200,7 +200,7 @@ SimpleRAG/
 │  ├─ warmup.py           병렬 예열 (App 조립)
 │  └─ cli.py console.py   CLI 진입점 · 콘솔 출력
 ├─ RAGSearchBox/          탐색기 옆 대화 패널 앱 (트레이 상주, 자동 인덱싱)
-├─ rust/                  Rust 판 — simplerag-rs · RAGSearchBox-rs (빌드: rust/build_dist.ps1 → dist-rust/)
+├─ rust/                  Rust 판 — simplerag-rs · MoAISearch (빌드: rust/build_dist.ps1 → dist-rust/)
 ├─ bench/                 실측 하네스 (회귀 측정용으로 유지)
 ├─ doc/04_구현_명세.md     구현 명세 (as-built)
 ├─ doc/02_테스트_가이드.md  내 문서로 테스트하는 법
@@ -228,7 +228,7 @@ SimpleRAG/
 ## Rust 판
 
 `src/simplerag` 와 `RAGSearchBox` 를 Rust 로 옮긴 판이 `rust/` 에 있다 — `simplerag-rs.exe`(CLI · 워커)와
-`RAGSearchBox-rs.exe`(WebView2 패널). 워커 프로토콜 · config.yaml · index_state.json 이 Python 판과 같고,
+`MoAISearch.exe`(WebView2 패널). 워커 프로토콜 · config.yaml · index_state.json 이 Python 판과 같고,
 추출 결과 · 청크 · 검색 · 답변을 Python 판과 대조해 같음을 확인했다. Python 판 인덱스는 `import` 로 가져온다.
 
 ```

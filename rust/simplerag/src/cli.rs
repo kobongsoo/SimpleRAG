@@ -398,7 +398,7 @@ fn no_space(s: &str) -> String {
 }
 
 // 소요 블록의 "답변모델 … · parent …" 한 줄
-fn answer_setup_line(app: &App) -> String {
+pub fn answer_setup_line(app: &App) -> String {
     let alias = app.generator.alias.clone();
     let parent = if cfg().parent_mode == "section" { format!("section(상한 {}토큰)", cfg().parent_max_tokens) } else { cfg().parent_mode.clone() };
     // 기본 모델(1.7B)은 모드 이름을 달지 않는다 — 정밀 모드(4B)·빠름·한국어처럼 바꾼 때만 보인다
@@ -663,13 +663,24 @@ pub fn cmd_chat(a: &Args) -> i32 {
     }
     outln(&format!("모델: 임베딩 {} / 리랭커 {}", pyutil::basename(pyutil::rstrip_chars(&cfg().model_dir, "\\/")),
         pyutil::basename(pyutil::rstrip_chars(&cfg().rerank_dir, "\\/"))));
-    outln("기능: ask-folder index-commands ask-prev upload find");
+    outln("기능: ask-folder index-commands ask-prev upload find brief cancel find-all");
     outln("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n");
+    // 입력은 따로 읽는다 — 답을 쓰는 동안에도 /cancel 을 받아야 다음 찾기가 기다리지 않는다
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        while let Some(l) = read_line() {
+            if pyutil::strip(&l) == "/cancel" {
+                INTERRUPT.store(true, Ordering::SeqCst);
+            } else if tx.send(l).is_err() {
+                break;
+            }
+        }
+    });
     loop {
         out("질문> ");
-        let line = match read_line() {
-            Some(l) => l,
-            None => {
+        let line = match rx.recv() {
+            Ok(l) => l,
+            Err(_) => {
                 outln("");
                 break;
             }
@@ -720,6 +731,11 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 outln("  /index-plan <폴더>   폴더와 인덱스 비교(바꾸지 않음)");
                 outln("  /suggest-synonyms    놓친 질문으로 동의어 사전 후보 뽑기");
                 outln("  /find {\"q\": 검색어, \"folder\": 폴더}  탐색기 모드 찾기 — 문서 ▸ 쪽 (@find 줄)");
+                outln("  /brief {\"q\": 검색어, \"items\": [문서들]}  탐색기 모드 AI 정리 — 상위 문서별 한 줄");
+                outln("  /cancel     지금 쓰는 답 멈추기");
+                outln("  /find {..., \"all\": true}  모두 찾기 — 글자 일치 문서를 묶음별로(문서마다 앞 5쪽)");
+                outln("  /find-doc {\"kws\": [낱말], \"paths\": [문서]}  모두 찾기 — 문서들의 나머지 쪽 줄");
+                outln("  /find-page {\"ids\": [청크 id]}  모두 찾기 — 쪽 본문(글 미리 보기)");
                 outln("  exit        종료\n");
             } else if cmd == "/topk" && parts.len() > 1 && parts[1].chars().all(|c| c.is_ascii_digit()) && !parts[1].is_empty() {
                 top_k = parts[1].parse().ok();
@@ -747,7 +763,14 @@ pub fn cmd_chat(a: &Args) -> i32 {
                         } else {
                             // 조건 칩에서 끈 조건 · 넓힌 기간({"off": [...], "widen": N})
                             let opts = crate::meta::query::PlanOpts::from_json(&Value::Object(req.clone()));
-                            match crate::find::find_with(&app.retriever, &q, folder.as_deref(), limit, &opts) {
+                            // 모두 찾기(모두 찾기 설계서) — 화면이 기본으로 켜서 보낸다
+                            let all = req.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let r = if all {
+                                crate::find::find_all_docs(&app.retriever, &q, folder.as_deref(), &opts)
+                            } else {
+                                crate::find::find_with(&app.retriever, &q, folder.as_deref(), limit, &opts)
+                            };
+                            match r {
                                 Ok((lines, done)) => crate::find::print_lines(&lines, &done, &mut |s| outln(s)),
                                 Err(e) => outln(&crate::find::error_line(&e)),
                             }
@@ -755,6 +778,23 @@ pub fn cmd_chat(a: &Args) -> i32 {
                     }
                     _ => outln(&crate::find::error_line("/find 형식이 잘못됐습니다: /find {\"q\": \"검색어\"}")),
                 }
+            } else if cmd == "/find-doc" || cmd == "/find-page" {
+                // 모두 찾기 — 나머지 쪽 줄 · 쪽 본문(@find 줄 + @find_done)
+                let req: Value = serde_json::from_str(if rest.is_empty() { "{}" } else { &rest }).unwrap_or(Value::Null);
+                let strs = |k: &str| -> Vec<String> { req[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default() };
+                let r = if cmd == "/find-doc" {
+                    crate::find::find_doc_pages(&app.retriever, &strs("kws"), &strs("paths"))
+                } else {
+                    let ids: Vec<i64> = req["ids"].as_array().map(|a| a.iter().filter_map(|x| x.as_i64()).collect()).unwrap_or_default();
+                    crate::find::page_text(&app.retriever, &ids)
+                };
+                match r {
+                    Ok((lines, done)) => crate::find::print_lines(&lines, &done, &mut |s| outln(s)),
+                    Err(e) => outln(&crate::find::error_line(&e)),
+                }
+            } else if cmd == "/brief" {
+                // 탐색기 모드 AI 정리(설계서 §4) — 화면 목록의 문서를 다시 검색하지 않고 요약한다
+                crate::brief::run(&app, &rest);
             } else if cmd == "/suggest-synonyms" {
                 // 동의어 후보 만들기(동의어 설계서 4단계) — 인덱스를 쥔 이 워커가 올려 둔 모델로 직접 한다.
                 //   명령 시간 제한(RAGSearchBox 300초) 안에 끝나게 최근 질문 WORKER_RECENT 개만 본다

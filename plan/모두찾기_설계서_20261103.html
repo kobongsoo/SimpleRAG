@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모두 찾기 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card { margin: 0; }
+.flow .card h3 { margin-top: 0; }
+.flow ol, .flow ul { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; white-space: pre-wrap; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.kpi .v { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); line-height: 1.2; }
+.kpi .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+ul.tight { margin: 6px 0; padding-left: 20px; }
+ul.tight li { margin: 4px 0; }
+/* 화면 시안 */
+.mock { background: var(--sunken); border-radius: 12px; padding: 16px; margin: 16px 0; overflow-x: auto; }
+.mwin { min-width: 640px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; font-size: 13px; line-height: 1.5; overflow: hidden; }
+.mbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+.msel { border: 1px solid var(--rule); border-radius: 6px; padding: 2px 8px; }
+.mbtn { border-radius: 6px; padding: 2px 9px; white-space: nowrap; }
+.mbtn.on { background: var(--accent); color: var(--surface); font-weight: 600; }
+.mchk { border: 2px solid var(--accent); border-radius: 6px; padding: 1px 9px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+.mchk.on { background: var(--accent-soft); }
+.mhead { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; color: var(--muted); border-bottom: 1px solid var(--rule); }
+.mhead a { color: var(--accent); }
+.mgroup { display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mrow { display: flex; justify-content: space-between; gap: 12px; padding: 5px 12px; border-bottom: 1px solid var(--rule); }
+.mrow i { font-style: normal; color: var(--bad); white-space: nowrap; }
+.mpage { display: flex; justify-content: space-between; gap: 12px; padding: 4px 12px 4px 28px; color: var(--ink-2); border-bottom: 1px solid var(--rule); }
+.mpage i { font-style: normal; color: var(--bad); white-space: nowrap; }
+.mmore { padding: 3px 12px 3px 28px; color: var(--accent); border-bottom: 1px solid var(--rule); font-size: 12px; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · RAGSearchBox (MoAI Search) · 2026-11-03</div>
+  <h1>탐색기 모드 "모두 찾기" 설계서</h1>
+  <p class="lede">탐색기 모드에서 상위 20개로 자르지 않고 <b>검색어가 들어 있는 문서를 모두</b> 보여 주는 옵션을 넣는다.
+  검색 상한만 푸는 것이 아니라, "모두"의 기준을 글자 일치로 새로 정하고 일치 정도별로 묶어 보여 준다.</p>
+  <p class="meta">상태: 구현 완료(2026-11-03, 커밋 전) · 결과는 <a href="#s10">§10</a></p>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">결론</a></li>
+    <li><a href="#s2">지금 동작과 한계</a></li>
+    <li><a href="#s3">"모두"의 기준</a></li>
+    <li><a href="#s4">화면 설계</a></li>
+    <li><a href="#s5">동작 규칙</a></li>
+    <li><a href="#s6">속도 실측</a></li>
+    <li><a href="#s7">구현 설계</a></li>
+    <li><a href="#s8">검증 계획 · 남은 결정</a></li>
+    <li><a href="#s9">메모리 구조와 규모 한계</a></li>
+    <li><a href="#s10">구현 결과</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>결론</h2>
+  <div class="verdict"><strong>채택</strong> — 명령줄 정렬 오른쪽에 <b>☑ 모두 찾기</b> 체크박스를 넣고 <b>기본으로 켜 둔다</b>. 목록은 ① 검색어 모두 포함 ② 검색어 일부 포함(접힘) ③ 비슷한 내용으로 묶고, <b>문서 ▸ 쪽 ▸ 발췌 표시는 그대로 유지</b>한다.</div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">1,382개</div><div class="l">BM25 상한만 풀 때 "프로젝트 교통비" 결과 (전체 1,401개)</div></div>
+    <div class="kpi"><div class="v">32 + 337</div><div class="l">글자 일치 기준 — 모두 포함 + 일부 포함</div></div>
+    <div class="kpi"><div class="v">약 0.1초</div><div class="l">전체 본문 글자 찾기 (Python 측정)</div></div>
+    <div class="kpi"><div class="v">약 0.1초</div><div class="l">문서 369~613개 목록 그리기</div></div>
+  </div>
+  <div class="tbl"><table>
+    <tr><th>항목</th><th>결정</th><th>이유</th></tr>
+    <tr><td>명칭</td><td><b>모두 찾기</b></td><td>앱의 [찾기]와 말이 맞는다. "전체 검색"은 "검색 폴더 전체"(범위)와 헷갈린다.</td></tr>
+    <tr><td>형태</td><td>체크박스</td><td>미리 보기 · AI 단추는 창을 켜고 끈다. 이것은 검색 조건이라 모양을 구분한다.</td></tr>
+    <tr><td>위치</td><td>명령줄 정렬 오른쪽</td><td>선택 · 정렬과 같은 결과 조건 묶음이다.</td></tr>
+    <tr><td>기본값</td><td><b>켜짐</b>, 끄면 이 PC 에 기억</td><td>탐색기에서는 찾은 문서를 모두 보여 주는 것이 맞다(사용자 결정).</td></tr>
+    <tr><td>꺼져 있을 때</td><td>목록 머리에 "문서 N개 모두 보기" 링크</td><td>잘린 사실을 알리고 한 번에 켠다.</td></tr>
+  </table></div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>지금 동작과 한계</h2>
+  <div class="pipe">
+    <span>BM25 상위 60청크</span><b>+</b><span>코사인 상위 60청크</span><b>→</b><span>RRF · 사본 제거 → 60청크</span><b>→</b><span>앞 12개 리랭킹</span><b>→</b><span class="hl">문서 최대 20개 + 이름 일치 5개</span>
+  </div>
+  <p>관련도 임계값(<code>RelevanceMin</code>)은 탐색기에서 문서를 빼지 않고 흐리게만 표시한다. 그래서 결과를 줄이는 것은 임계값이 아니라 <b>청크 60개 · 문서 20개 상한</b>이다.</p>
+  <h3>상한만 풀면 안 되는 이유</h3>
+  <ul class="tight">
+    <li><b>BM25</b> — 검색어를 작은 토큰으로 쪼개고 그중 하나만 있어도 일치로 친다. "프로젝트 교통비"는 <code>교통</code> · <code>비</code> 토큰으로 나뉘어 거의 모든 문서가 걸린다.</li>
+    <li><b>코사인</b> — 모든 청크에 유사도 값이 있어 "검색됨"의 경계가 없다. 임계값 없이 "모두"를 보여 주면 항상 전체 문서다.</li>
+  </ul>
+  <h3>실측 — 정의에 따른 문서 수 (1,401개 문서 · 20.6만 청크)</h3>
+  <div class="tbl"><table>
+    <tr><th>검색어</th><th class="num">BM25 토큰 일치 전부</th><th class="num">글자 일치 · 일부 포함</th><th class="num">글자 일치 · 모두 포함</th></tr>
+    <tr><td>프로젝트 교통비</td><td class="num">1,382</td><td class="num">369</td><td class="num">32</td></tr>
+    <tr><td>동호회 규정</td><td class="num">958</td><td class="num">350</td><td class="num">20</td></tr>
+    <tr><td>유급휴가 규정</td><td class="num">1,108</td><td class="num">355</td><td class="num">22</td></tr>
+    <tr><td>리플레쉬 휴가</td><td class="num">672</td><td class="num">83</td><td class="num">0</td></tr>
+    <tr><td>AI 제안서</td><td class="num">1,106</td><td class="num">429</td><td class="num">32</td></tr>
+    <tr><td>보안</td><td class="num">593</td><td class="num">613</td><td class="num">613</td></tr>
+  </table></div>
+  <p style="font-size:14px;color:var(--muted)">글자 일치는 공백으로 나눈 낱말의 본문 일치로 잰 값이다. 구현에서는 조사를 뗀 낱말을 쓰므로 수가 달라질 수 있다.</p>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>"모두"의 기준</h2>
+  <p>검색어 낱말이 문서 안에 글자 그대로 있는지로 정한다. 낱말이 같은 청크에 있을 필요는 없다. 세 묶음을 모두 쓰되 일부 포함은 접어 둔다.</p>
+  <div class="tbl"><table>
+    <tr><th>묶음</th><th>기준</th><th>기본 표시</th><th>이유</th></tr>
+    <tr><td><b>① 검색어 모두 포함</b></td><td>모든 낱말이 문서 안에 있음</td><td>펼침</td><td>찾으려는 문서일 가능성이 가장 높다.</td></tr>
+    <tr><td><b>② 검색어 일부 포함</b></td><td>낱말 일부만 있음</td><td>접힘 · 건수 표시. ①이 0개면 자동으로 펼침</td><td>빠짐없이 찾되 "프로젝트"만 든 문서가 화면을 채우지 않게 한다.</td></tr>
+    <tr><td><b>③ 비슷한 내용</b></td><td>①②에 없고 지금 검색(하이브리드) 후보에 든 문서</td><td>펼침 · 최대 20개</td><td>글자가 달라도 의미가 가까운 문서를 놓치지 않는다.</td></tr>
+  </table></div>
+  <div class="note"><b>1+3 안을 쓰지 않는 이유</b> — "리플레쉬 휴가"는 ①이 0개라 글자가 든 문서 83개가 모두 빠지고 코사인 후보만 남는다. "모두 찾기"라는 이름과 맞지 않아 ②를 접힌 채로 둔다.</div>
+  <p>파일 이름 일치 묶음은 지금처럼 맨 위에 둔다. 조건만 있는 찾기(낱말이 없는 메타데이터 검색)는 묶음을 쓰지 않고 조건에 맞는 문서를 상한 없이 보여 준다. 폴더 범위 · 조건 칩은 세 묶음 모두에 적용한다.</p>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>화면 설계</h2>
+  <h3>기본 화면 — 켠 상태, 일치 정도별 묶음 + 쪽 줄</h3>
+  <div class="mock"><div class="mwin" role="img" aria-label="모두 찾기를 켠 목록이 검색어 모두 포함, 일부 포함, 비슷한 내용으로 묶인 화면 시안">
+    <div class="mbar"><span class="msel">문서별</span><span class="msel">관련도</span><span class="mchk on">☑ 모두 찾기</span><span class="mbtn on">◫ 미리 보기 창</span><span class="mbtn on">✦ AI 답변창</span></div>
+    <div class="mhead"><span>모두 찾기 — 문서 369개</span></div>
+    <div class="mgroup"><span>▾ 검색어 모두 포함</span><span>문서 32개</span></div>
+    <div class="mrow"><span>67_27.프로젝트 교통비 지원_22.01.25_gpt.txt</span><i>●●●●●</i></div>
+    <div class="mpage"><span>p.2 · 프로젝트 교통비 지원 규정 목적: 본 규정은 출장여비규정에…</span><i>●●●●●</i></div>
+    <div class="mpage"><span>p.3 · 대중교통을 이용하는 경우 티머니 충전을 통해 교통비를…</span><i>●●●●</i></div>
+    <div class="mmore">＋ 2곳 더 보기</div>
+    <div class="mrow"><span>프로젝트 교통비 지원.docx</span><i>●●●●●</i></div>
+    <div class="mrow"><span>MPowerAI_RAG_QA.xlsx</span><i>●●●●●</i></div>
+    <div class="mgroup"><span>▸ 검색어 일부 포함 (눌러서 펼치기)</span><span>문서 337개</span></div>
+    <div class="mgroup"><span>▾ 비슷한 내용</span><span>상위 후보</span></div>
+    <div class="mrow"><span>55_11.외근업무 지원비 규정_16.04.01.txt</span><i>●</i></div>
+  </div></div>
+  <h3>체크를 껐을 때 — 지금 화면 + 안내 링크</h3>
+  <div class="mock"><div class="mwin" role="img" aria-label="모두 찾기 체크박스가 꺼져 있고 목록 머리에 모두 보기 링크가 있는 화면 시안">
+    <div class="mbar"><span class="msel">문서별</span><span class="msel">관련도</span><span class="mchk">☐ 모두 찾기</span><span class="mbtn on">◫ 미리 보기 창</span><span class="mbtn on">✦ AI 답변창</span></div>
+    <div class="mhead"><span>내용 일치 — 문서 17개 표시</span><a>검색어가 든 문서 369개 모두 보기</a></div>
+    <div class="mrow"><span>67_27.프로젝트 교통비 지원_22.01.25_gpt.txt</span><i>●●●●●</i></div>
+    <div class="mrow"><span>프로젝트 교통비 지원.docx</span><i>●●●●●</i></div>
+    <div class="mrow"><span>66_25.출장여비규정_16.04.01.txt</span><i>●</i></div>
+  </div></div>
+  <p style="font-size:14px;color:var(--muted)">시안의 숫자는 §2 실측값이고, 문서 줄은 예시다. 점수가 없는 문서의 관련도 칸은 비운다.</p>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>동작 규칙</h2>
+  <div class="tbl"><table>
+    <tr><th>상황</th><th>동작</th></tr>
+    <tr><td>체크박스를 바꿈</td><td>지금 검색어로 바로 다시 찾는다. 앞선 AI 정리는 취소한다.</td></tr>
+    <tr><td>꺼진 상태에서 "모두 보기" 링크</td><td>체크박스를 켜고 다시 찾는다.</td></tr>
+    <tr><td>②를 펼침</td><td>이미 받은 문서 줄을 그린다. 다시 찾지 않는다.</td></tr>
+    <tr><td>문서를 펼침</td><td>함께 받은 앞 5쪽을 바로 보여 준다(화면에는 지금처럼 3곳).</td></tr>
+    <tr><td>＋ N곳 더 보기</td><td>그 문서의 나머지 쪽 줄을 가져와 잇는다.</td></tr>
+    <tr><td>쪽을 고름</td><td>PDF 는 그 쪽을 띄우고, 글 미리 보기는 그 쪽의 본문을 그때 가져온다.</td></tr>
+    <tr><td>보기를 "쪽 목록"으로 바꿈</td><td>모든 묶음의 쪽을 문서 구분 없이 관련도 순으로 보여 준다. 받지 않은 쪽은 이때 가져온다.</td></tr>
+    <tr><td>정렬을 이름 · 날짜로 바꿈</td><td>묶음 안에서 정렬한다. 묶음 순서는 유지한다.</td></tr>
+    <tr><td>AI 답변창</td><td>그대로 상위 최대 3건을 정리한다. 리랭킹 점수가 있는 문서만 후보로 쓴다.</td></tr>
+    <tr><td>앱을 다시 시작</td><td>체크 상태를 유지한다.</td></tr>
+    <tr><td>탐색기 옆 패널</td><td>이번 범위에서 제외한다. 폭이 좁아 묶음 목록에 맞지 않는다.</td></tr>
+  </table></div>
+  <h3>쪽(페이지) 검색 유지</h3>
+  <p>"어느 문서의 몇 쪽 어디"를 보여 주는 지금 장점은 그대로 둔다. 모두 찾기를 켜도 <b>문서 ▸ 쪽 ▸ 발췌 · 강조 · 쪽 클릭 미리 보기 · 그 쪽 열기 · 쪽 목록 보기</b>가 모두 동작한다. 응답이 커지지 않게 문서마다 앞 5쪽의 줄만 먼저 보내고, 쪽 본문은 고를 때 가져온다.</p>
+  <div class="tbl"><table>
+    <tr><th>검색어</th><th class="num">① 문서 · 쪽</th><th class="num">② 문서 · 쪽</th><th class="num">모든 쪽 줄</th><th class="num">문서당 5쪽 줄</th></tr>
+    <tr><td>프로젝트 교통비</td><td class="num">32 · 158</td><td class="num">337 · 3,733</td><td class="num">약 1.2MB</td><td class="num">1,031줄 · 약 0.3MB</td></tr>
+    <tr><td>리플레쉬 휴가</td><td class="num">0 · 0</td><td class="num">83 · 684</td><td class="num">약 0.2MB</td><td class="num">254줄 · 약 0.1MB</td></tr>
+    <tr><td>유급휴가 규정</td><td class="num">22 · 516</td><td class="num">333 · 5,184</td><td class="num">약 1.7MB</td><td class="num">1,238줄 · 약 0.4MB</td></tr>
+    <tr><td>AI 제안서</td><td class="num">32 · 7,214</td><td class="num">397 · 6,663</td><td class="num">약 4.2MB</td><td class="num">1,554줄 · 약 0.5MB</td></tr>
+    <tr><td>보안</td><td class="num">613 · 18,314</td><td class="num">0 · 0</td><td class="num">약 5.5MB</td><td class="num">2,006줄 · 약 0.6MB</td></tr>
+  </table></div>
+  <p style="font-size:14px;color:var(--muted)">크기는 본문을 뺀 쪽 줄 한 줄을 300바이트로 어림한 값이다. 쪽 번호가 있는 청크는 58.0% 다. txt · md 처럼 쪽이 없는 문서는 지금처럼 쪽 번호 없이 위치 줄로 나온다.</p>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>속도 실측</h2>
+  <div class="flow">
+    <div class="card"><h3>찾기 — 전체 본문 글자 찾기</h3>
+      <div class="tbl"><table style="min-width:0">
+        <tr><th>검색어</th><th class="num">시간</th><th class="num">문서</th><th class="num">응답</th></tr>
+        <tr><td>프로젝트 교통비</td><td class="num">94ms</td><td class="num">369</td><td class="num">약 106KB</td></tr>
+        <tr><td>리플레쉬 휴가</td><td class="num">112ms</td><td class="num">83</td><td class="num">약 24KB</td></tr>
+        <tr><td>AI 제안서</td><td class="num">115ms</td><td class="num">429</td><td class="num">약 123KB</td></tr>
+        <tr><td>보안</td><td class="num">74ms</td><td class="num">613</td><td class="num">약 175KB</td></tr>
+      </table></div></div>
+    <div class="card"><h3>표시 — 목록 그리기 (3회)</h3>
+      <div class="tbl"><table style="min-width:0">
+        <tr><th>문서 수</th><th class="num">시간</th></tr>
+        <tr><td>100개</td><td class="num">24~37ms</td></tr>
+        <tr><td>369개</td><td class="num">62~80ms</td></tr>
+        <tr><td>613개</td><td class="num">93~128ms</td></tr>
+        <tr><td>1,382개</td><td class="num">230~401ms</td></tr>
+      </table></div></div>
+  </div>
+  <p>지금 찾기는 0.8~1.1초 걸리고 대부분 임베딩 · 리랭킹이다. 모두 찾기는 글자 찾기와 표시가 더 붙어 <b>약 1초대</b>로 어림한다. 워커가 본문을 이미 메모리에 두고 있어 추가 메모리는 거의 없다.</p>
+  <div class="note"><b>측정 한계</b> — 찾기는 Python, 표시는 브라우저의 가짜 데이터로 쟀다. Rust 워커와 실제 앱 창의 값이 아니며 구현 뒤 다시 잰다. 문서별 발췌 생성 시간은 재지 않았다. 쪽 줄 약 2,000개의 발췌 생성 시간은 재지 않았고, 표시 측정도 문서 줄 기준이다. 쪽 줄이 많으면 표시가 더 걸릴 수 있어 §8 에서 다시 잰다. 기본이 켜짐이므로 이 시간은 모든 찾기에 더해진다.</div>
+  <h3>느려지는 경우와 대책</h3>
+  <div class="tbl"><table>
+    <tr><th>경우</th><th>영향</th><th>대책</th></tr>
+    <tr><td>쪽 본문까지 한 번에 보냄</td><td>BM25 범위 그대로면 15~185MB 어림</td><td>쪽 줄은 본문 없이, 본문은 고를 때</td></tr>
+    <tr><td>모든 쪽 줄을 한 번에 보냄</td><td>최대 약 5.5MB (보안)</td><td>문서당 앞 5쪽만 먼저 보낸다</td></tr>
+    <tr><td>본문을 매번 디스크에서 읽음</td><td>약 6초</td><td>워커 메모리의 본문을 훑는다</td></tr>
+    <tr><td>문서 1,000개 초과 표시</td><td>수백 ms 이상</td><td>1,000개가 넘으면 500개씩 나눠 그린다</td></tr>
+    <tr><td>문서 전체 리랭킹</td><td>문서 수에 비례해 수십 초</td><td>지금처럼 앞 12개만 채점한다</td></tr>
+  </table></div>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>구현 설계</h2>
+  <div class="pipe">
+    <span>지금 찾기(하이브리드)</span><b>+</b><span class="hl">본문 글자 훑기</span><b>→</b><span class="hl">① ② ③ 묶기</span><b>→</b><span>문서 줄 응답</span><b>→</b><span>펼칠 때 쪽 조회</span>
+  </div>
+  <h3>워커 — <code>/find</code> 확장</h3>
+  <pre>/find {"q":"프로젝트 교통비","folder":null,"all":true}
+@find {"doc":1,"doc_path":"…","doc_name":"…","tier":1,"matched":2,"score":6.78,"hits":3,"mtime":…}
+@find {"doc":1,"page":5,"section":"…","score":6.05,"snippet":"…","marks":[…],"chunk_idx":12,"pages_left":2}
+@find_done {"docs":369,"tiers":[32,337,12],"ms":…}
+
+/find-doc {"q":"프로젝트 교통비","path":"…"}          ← 더 보기 · 쪽 목록: 그 문서의 나머지 쪽 줄
+/find-page {"path":"…","chunks":[12,13]}            ← 쪽을 고를 때: 글 미리 보기 본문</pre>
+  <ul class="tight">
+    <li><code>all</code> 이 없으면(체크 끔) 지금과 글자까지 같은 출력을 낸다. 화면은 기본으로 <code>all: true</code> 를 보낸다.</li>
+    <li>쪽 줄은 본문 <code>text</code> 를 빼고 쪽 · 위치 · 발췌 · 강조 위치만 싣는다. 문서마다 점수와 맞은 낱말 수가 높은 앞 5쪽을 보낸다.</li>
+    <li>낱말은 기존 <code>keywords()</code> 로 조사를 뗀다. 메타데이터 계획이 있으면 조건을 뺀 <code>p.query</code> 를 쓴다.</li>
+    <li>폴더 범위와 메타 문서 범위는 기존 <code>allow</code> · <code>docs</code> 를 그대로 쓴다.</li>
+    <li><code>tier</code> 안의 순서는 리랭킹 점수가 있는 문서 → 맞은 낱말 수 → 맞은 청크 수 순이다.</li>
+    <li>워커 기능 목록에 <code>find-all</code> 을 추가해, 옛 워커에서는 체크박스를 숨기고 지금처럼 찾는다.</li>
+  </ul>
+  <h3>변경 파일</h3>
+  <div class="tbl"><table>
+    <tr><th>단계</th><th>작업</th><th>파일</th></tr>
+    <tr><td><b>1</b></td><td>메모리 본문 훑기 — 복제 없이 낱말별 문서 집계</td><td><code>simplerag/store.rs</code></td></tr>
+    <tr><td><b>2</b></td><td>모두 찾기 · 묶음 · 쪽 줄 생성 · 나머지 쪽과 쪽 본문 조회</td><td><code>simplerag/find.rs</code> · <code>cli.rs</code></td></tr>
+    <tr><td><b>3</b></td><td>요청 전달 · 체크 상태 저장</td><td><code>ragsearchbox/main.rs</code> · <code>settings.rs</code></td></tr>
+    <tr><td><b>4</b></td><td>체크박스(기본 켬) · 안내 링크 · 묶음 · 접기 · 더 보기 · 쪽 목록 · 쪽 본문 조회</td><td><code>ui/browse.html</code></td></tr>
+    <tr><td><b>5</b></td><td>사용 설명 · 동작 문서</td><td><code>doc/</code> 설명서 · <code>rust/README.md</code></td></tr>
+  </table></div>
+  <p>체크 상태는 <code>RAGSearchBox.ini</code> 에 둔다. 이 화면은 HTML 글로 띄워 <code>localStorage</code> 가 막힐 수 있기 때문이다. <code>/find</code> 는 Rust 판 전용이므로 Python 판은 바꾸지 않는다.</p>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>검증 계획 · 남은 결정</h2>
+  <div class="tbl"><table>
+    <tr><th>대상</th><th>방법</th><th>기준</th></tr>
+    <tr><td>체크 끔 회귀</td><td>기존 메타 골든셋 · 찾기 출력 비교</td><td>결과 동일</td></tr>
+    <tr><td>쪽 검색 유지</td><td>쪽 클릭 미리 보기 · 강조 · 그 쪽 열기 · 더 보기 · 쪽 목록</td><td>체크 끔과 같은 쪽 · 위치가 나옴</td></tr>
+    <tr><td>완전성</td><td>§2 검색어로 글자 일치 문서와 대조</td><td>빠지는 문서 0</td></tr>
+    <tr><td>속도</td><td>실제 워커 · 앱 창에서 측정</td><td>기본(켬) 찾기 2초 이내 · 쪽 줄 포함 목록 표시 0.5초 이내</td></tr>
+    <tr><td>범위 · 조건</td><td>폴더 범위 · 조건 칩 조합</td><td>세 묶음 모두 범위 안 문서만</td></tr>
+    <tr><td>충돌</td><td>AI 정리 중 체크 변경 · 인덱싱 중 찾기</td><td>워커 재시작 없음</td></tr>
+  </table></div>
+  <h3>이 설계에서 정한 값 — 구현 전 확인 필요</h3>
+  <div class="tbl"><table>
+    <tr><th>결정 사항</th><th>설계값</th><th>다른 선택지</th></tr>
+    <tr><td>②의 기본 상태</td><td>접힘, ①이 0개면 펼침</td><td>항상 펼침</td></tr>
+    <tr><td>낱말 일치 범위</td><td>한 문서 안</td><td>한 청크 안(더 정확하지만 더 적게 나옴)</td></tr>
+    <tr><td>③ 비슷한 내용 상한</td><td>문서 20개</td><td>10개 · 빼기</td></tr>
+    <tr><td>문서당 먼저 보낼 쪽 수</td><td>5쪽</td><td>3쪽(화면과 같음) · 10쪽</td></tr>
+    <tr><td>파일 이름만 맞은 문서</td><td>지금처럼 위쪽 묶음, 상한 해제</td><td>지금처럼 5개</td></tr>
+  </table></div>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>메모리 구조와 규모 한계</h2>
+  <div class="verdict"><strong>판단</strong> — 지금 규모(20.6만 청크)에서는 메모리 전체 적재를 유지한다. 모두 찾기는 이미 메모리에 있는 본문을 훑으므로 메모리를 크게 늘리지 않는다. <b>청크가 100만 개에 이르면 메모리 검색 방식을 다시 검토한다.</b></div>
+  <h3>지금 구조</h3>
+  <div class="pipe">
+    <span>points.sqlite (영구 저장)</span><b>→</b><span class="hl">워커 시작 때 벡터 · payload 전부 적재</span><b>→</b><span>검색은 메모리에서</span>
+  </div>
+  <ul class="tight">
+    <li>워커가 뜰 때 <code>SELECT id, vec, payload FROM points</code> 로 모든 행을 읽어 메모리 표에 넣는다(<code>store.rs</code> <code>ensure_loaded</code>). 필요할 때마다 읽는 방식이 아니다.</li>
+    <li>새 문서는 SQLite 와 메모리에 함께 반영한다. 60분 유휴나 트레이에서 내리면 메모리를 돌려주고, 다음 사용 때 다시 전부 적재한다.</li>
+    <li>20.6만 청크에서 워커 준비는 약 4.8초(모델 등과 병렬 적재), 시작 시간과 메모리는 청크 수에 비례한다.</li>
+  </ul>
+  <h3>규모별 어림 (저장 크기 기준)</h3>
+  <div class="tbl"><table>
+    <tr><th>청크 수</th><th class="num">본문</th><th class="num">본문 + 벡터 + BM25 + 그 밖의 payload</th><th>판단</th></tr>
+    <tr><td>20만 (지금)</td><td class="num">약 80MB</td><td class="num">약 0.6GB</td><td><span class="tag t-good">유지</span></td></tr>
+    <tr><td>50만</td><td class="num">약 200MB</td><td class="num">약 1.5GB</td><td><span class="tag t-acc">시작 시간 · 메모리 측정</span></td></tr>
+    <tr><td>100만</td><td class="num">약 400MB</td><td class="num">약 3GB</td><td><span class="tag t-warn">방식 검토 필요</span></td></tr>
+  </table></div>
+  <p style="font-size:14px;color:var(--muted)">메모리에서는 관리 비용 때문에 저장 크기보다 커진다. 지금 워커 전체는 약 4.3GB(최대 약 5.1GB)이고 이 안에 생성 모델 약 1.1GB 가 포함된다. 항목별 실제 메모리는 재지 않았다.</p>
+  <h3>100만 청크에서 검토할 방안</h3>
+  <div class="tbl"><table>
+    <tr><th>방안</th><th>내용</th><th>장점</th><th>대가</th></tr>
+    <tr><td><b>본문 분리</b></td><td>payload 의 본문 · 해시를 메모리에서 빼고 필요할 때 SQLite 에서 읽는다</td><td>구조 변경이 작다</td><td>모두 찾기의 글자 훑기를 다른 방식으로 바꿔야 한다</td></tr>
+    <tr><td><b>디스크 전문 색인</b></td><td>SQLite FTS 등으로 글자 일치를 색인에서 찾는다</td><td>본문을 메모리에 두지 않아도 빠르다</td><td>색인 파일 증가 · 두 글자 낱말 처리 검토 · 검색 경로 변경</td></tr>
+    <tr><td><b>벡터 절감</b></td><td>벡터 양자화 · 디스크 근사 검색(ANN)을 쓴다</td><td>가장 큰 항목을 줄인다</td><td>재인덱싱 · 품질 재측정 필요</td></tr>
+    <tr><td><b>지연 적재</b></td><td>시작 때 전부 읽지 않고 필요한 부분만 올린다</td><td>시작이 빠르다</td><td>첫 검색이 느려질 수 있고 코사인 전수 비교와 맞지 않는다</td></tr>
+  </table></div>
+  <div class="note"><b>확인할 조건</b> — 오래 쉬어 Windows 가 워커 메모리를 디스크로 내보낸 뒤에는 본문 전체를 훑는 첫 찾기가 느려질 수 있다. 실제 측정 때 워커 점유 메모리가 414MB 로 줄어 있었다. 구현 뒤 §8 측정에 쉬고 난 뒤 첫 찾기를 포함한다.</div>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>구현 결과</h2>
+  <p>설치판 인덱스 사본(1,401개 문서 · 20.6만 청크)에서 새 워커를 실제로 띄워 확인했다. 앱이 같은 PC 에서 인덱싱하던 중이라 시간은 흔들릴 수 있다.</p>
+  <div class="tbl"><table>
+    <tr><th>검색어</th><th class="num">모두 찾기 시간</th><th class="num">본문 훑기</th><th class="num">문서 (① · ② · ③)</th><th class="num">보낸 쪽 줄 · 남은 쪽</th><th class="num">응답</th></tr>
+    <tr><td>프로젝트 교통비</td><td class="num">0.80초</td><td class="num">239ms</td><td class="num">371 (32 · 337 · 2)</td><td class="num">735 · 431</td><td class="num">649KB</td></tr>
+    <tr><td>리플레쉬 휴가</td><td class="num">0.45초</td><td class="num">187ms</td><td class="num">89 (0 · 82 · 7)</td><td class="num">91 · 0</td><td class="num">98KB</td></tr>
+    <tr><td>유급휴가 규정</td><td class="num">0.87초</td><td class="num">256ms</td><td class="num">355 (22 · 333 · 0)</td><td class="num">492 · 329</td><td class="num">491KB</td></tr>
+    <tr><td>동호회 규정</td><td class="num">0.70초</td><td class="num">240ms</td><td class="num">350 (20 · 330 · 0)</td><td class="num">488 · 329</td><td class="num">485KB</td></tr>
+    <tr><td>AI 제안서</td><td class="num">1.03초</td><td class="num">435ms</td><td class="num">310 (26 · 284 · 0)</td><td class="num">845 · 1,524</td><td class="num">648KB</td></tr>
+    <tr><td>보안</td><td class="num">1.13초</td><td class="num">210ms</td><td class="num">613 (612 · 0 · 0)</td><td class="num">1,318 · 3,342</td><td class="num">1,107KB</td></tr>
+  </table></div>
+  <div class="tbl"><table>
+    <tr><th>확인 항목</th><th>결과</th></tr>
+    <tr><td>체크 끔 회귀</td><td>6개 검색어 모두 이전 빌드와 출력이 같음</td></tr>
+    <tr><td>나머지 쪽(<code>/find-doc</code>)</td><td>3개 문서 131쪽 0.37초 — 보낸 쪽 + 남은 쪽 수와 일치 · 60개 문서 731쪽 0.62초</td></tr>
+    <tr><td>쪽 본문(<code>/find-page</code>)</td><td>0.01초 이내 · 검색어 포함 확인</td></tr>
+    <tr><td>폴더 범위</td><td>범위 밖 문서 0</td></tr>
+    <tr><td>조건 질의("작년 내가 작성한 AI 제안서")</td><td>0.91초 · 조건 문서 98개 안에서 49개</td></tr>
+    <tr><td>화면(가짜 워커 사건)</td><td>묶음 · 접기 · 더 보기 병합 · 늦은 쪽 본문 응답 · 체크 끔 링크 · AI 후보(점수 순) · 콘솔 오류 없음</td></tr>
+  </table></div>
+  <div class="note"><b>구현에서 정한 것</b> — ① 본문 훑기는 청크 앞의 "[문서 &gt; 절]" 접두 줄을 빼고 본다(문서 이름만 맞는 청크가 모두 걸리지 않게). ② 영문 · 숫자 낱말은 단어 경계로 맞춘다 — "ai" 가 "maintain" 안에서 걸려 "AI 제안서"가 632개 문서로 부풀던 것을 310개로 바로잡았다. 한글 낱말은 글자 그대로 맞춘다. ③ 쪽 번호를 모르는 문서는 쪽 줄 하나로 모인다(지금 찾기와 같다).</div>
+  <p><b>아직 확인하지 못한 것</b> — 실제 앱 창에서의 조작, 쉬고 난 뒤 첫 찾기, 쪽 줄 1,000개 이상의 실제 표시 시간.</p>
+</section>
+
+<footer>
+  실측: 2026-11-03 설치판 인덱스 읽기 전용 · 찾기 · 쪽 수 Python · 표시 브라우저 가짜 데이터<br>
+  관련 문서: plan/탐색기_AI정리_벡터백그라운드_설계서_20261103.html · plan/메타데이터검색_설계서_20261029.html
+</footer>
+</div>
+</body>
+</html>

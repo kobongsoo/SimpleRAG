@@ -1278,11 +1278,12 @@ def _tfs_for(tfs, ids, texts, tok, all_rows=False):
 # -in: tok   = e5 토크나이저
 # -in: full  = True 면 전체 다시 만들기(--rebuild)
 # -in: log   = 안내 출력 함수
+# -in: merge = False 면 문턱을 넘어도 합치지 않는다(라운드 도중 반영, 기본 True)
 #
 # -out: dict {mode("full"|"update"|"same"), chunks, sec, orphans, added, removed, tokenized}
 # -out: error = 저장소 · 파일 예외 전파
 #------------------------------------------------------------------
-def refresh_bm25(store, bm25, state, tok, full=False, log=None):
+def refresh_bm25(store, bm25, state, tok, full=False, log=None, merge=True):
     t0 = time.perf_counter()
     texts, ids, n_orphans = collect_for_bm25(store, state, log)
     by_id = dict(zip(ids, texts))
@@ -1295,7 +1296,8 @@ def refresh_bm25(store, bm25, state, tok, full=False, log=None):
             if not add and not rem:
                 rep.update(mode="same", sec=time.perf_counter() - t0)
                 return rep
-            if not bm25.should_merge(len(add), len(rem)):
+            # merge=False 는 라운드 도중 반영이다 — 문턱을 넘어도 합치지 않는다
+            if not merge or not bm25.should_merge(len(add), len(rem)):
                 made, n_tok = _tfs_for(tfs, add, by_id, tok)
                 bm25.update(list(zip(add, made)), rem)
                 rep.update(mode="update", added=len(add), removed=len(rem), tokenized=n_tok,

@@ -102,6 +102,26 @@ def _kanana(system, user):
     )
 
 
+#------------------------------------------------------------------
+# EXAONE 4.0 채팅 형식
+#=> 공식 템플릿(LGAI-EXAONE/EXAONE-4.0-1.2B-GGUF chat_template.jinja)을 그대로 옮겼다.
+#   턴은 [|역할|]\n … [|endofturn|]\n 로 감싸고, Qwen3 처럼 빈 <think> 를 미리 닫아
+#   사고 토큰 생성을 끈다(템플릿의 enable_thinking 끔과 같은 모양).
+#
+# -in: system = 시스템 지시문
+# -in: user   = 사용자 메시지
+#
+# -out: prompt = 완성 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def _exaone4(system, user):
+    return (
+        "[|system|]\n" + system + "[|endofturn|]\n"
+        "[|user|]\n" + user + "[|endofturn|]\n"
+        "[|assistant|]\n<think>\n\n</think>\n\n"
+    )
+
+
 # 형식 이름 → (조립 함수, 생성 중단 문자열)
 #   중단 문자열을 형식마다 따로 두는 이유: Qwen3 는 <|im_end|>, Llama-3 계열은
 #   <|eot_id|> 로 턴을 끝낸다. 남의 것을 섞어 두면 답이 안 끊기거나 일찍 끊긴다.
@@ -109,6 +129,8 @@ FORMATS = {
     "qwen3": (_qwen3, ["<|im_end|>", "<|endoftext|>"]),
     "midm": (_midm, ["<|eot_id|>", "<|end_of_text|>"]),
     "kanana": (_kanana, ["<|eot_id|>", "<|end_of_text|>"]),
+    # EXAONE 4.0 은 [|endofturn|] 로 턴을 끝낸다
+    "exaone4": (_exaone4, ["[|endofturn|]", "[|endoftext|]"]),
 }
 
 

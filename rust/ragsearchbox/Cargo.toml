@@ -6,7 +6,7 @@ description = "RAGSearchBox 의 Rust 판 — 트레이 상주, 탐색기 옆 Web
 build = "build.rs"
 
 [[bin]]
-name = "RAGSearchBox-rs"
+name = "MoAISearch"
 path = "src/main.rs"
 
 [dependencies]

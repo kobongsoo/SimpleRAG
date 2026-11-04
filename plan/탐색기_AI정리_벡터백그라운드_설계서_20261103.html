@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>탐색기 AI 정리 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); margin: 0; max-width: 780px; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+nav.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; margin-bottom: 32px; font-size: 14.5px; }
+nav.toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { nav.toc ol { columns: 1; } }
+section { margin-top: 44px; }
+h2 { font-size: 22px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); margin-bottom: 16px; }
+h2 .no { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+h3 { font-size: 17px; margin: 24px 0 8px; }
+p { margin: 10px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+.verdict { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: 6px; padding: 14px 18px; margin: 16px 0; }
+.verdict strong { color: var(--accent); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); border-radius: 6px; padding: 12px 16px; margin: 14px 0; font-size: 14.5px; }
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.t-good { background: var(--good-soft); color: var(--good); }
+.t-warn { background: var(--warn-soft); color: var(--warn); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.t-acc { background: var(--accent-soft); color: var(--accent); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+@media (max-width: 720px) { .flow { grid-template-columns: 1fr; } }
+.flow .card { margin: 0; }
+.flow .card h3 { margin-top: 0; }
+.flow ol, .flow ul { margin: 6px 0 0; padding-left: 20px; font-size: 14.5px; }
+.flow li { margin: 3px 0; }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; white-space: pre-wrap; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+@media (max-width: 760px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.kpi { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 14px; }
+.kpi .v { font-size: 24px; font-weight: 700; font-family: var(--mono); color: var(--accent); line-height: 1.2; }
+.kpi .l { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.pipe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0; font-size: 14px; }
+.pipe span { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 5px 10px; }
+.pipe span.hl { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pipe b { color: var(--muted); font-weight: 400; }
+ul.tight { margin: 6px 0; padding-left: 20px; }
+ul.tight li { margin: 4px 0; }
+/* 화면 시안 */
+.mock { background: var(--sunken); border-radius: 12px; padding: 16px; margin: 16px 0; overflow-x: auto; }
+.mwin { min-width: 720px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; font-size: 13px; line-height: 1.5; overflow: hidden; }
+.mbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+.mbar .sp { flex: 1; }
+.mbtn { border: 1px solid var(--rule); border-radius: 6px; padding: 2px 9px; white-space: nowrap; }
+.mbtn.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.mbody { display: grid; grid-template-columns: 110px minmax(0, 1fr) 210px; min-height: 340px; }
+.mside { border-right: 1px solid var(--rule); padding: 8px 10px; color: var(--muted); }
+.mmid { display: flex; flex-direction: column; min-width: 0; }
+.mlist { padding: 6px 10px; flex: 1; }
+.mrow { padding: 3px 0; border-bottom: 1px solid var(--rule); display: flex; justify-content: space-between; gap: 8px; }
+.mrow i { color: var(--muted); font-style: normal; white-space: nowrap; }
+.mai { border-top: 3px solid var(--accent); background: var(--ground); padding: 8px 12px; }
+.mai .h { display: flex; gap: 8px; font-weight: 700; margin-bottom: 4px; }
+.mai .h .sp { flex: 1; }
+.mai .h small { color: var(--muted); font-weight: 400; }
+.mai .ln { margin: 3px 0; }
+.mai .ln b { color: var(--accent); }
+.mai .ft { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.mpv { border-left: 1px solid var(--rule); background: var(--sunken); padding: 8px 10px; color: var(--muted); }
+.mpv .p { background: var(--surface); border-radius: 4px; height: 280px; margin-top: 6px; padding: 10px; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · RAGSearchBox (MoAI Search) · 2026-11-03</div>
+  <h1>탐색기 모드 AI 정리 · 전체 벡터 백그라운드 설계서</h1>
+  <p class="lede">탐색기 모드의 AI 를 "질문에 답하는 역할"에서 <b>찾은 문서를 요약해 설명하는 역할</b>로 바꾸고, AI 답을 미리 보기 창처럼 <b>켜고 끄는 창</b>으로 분리한다.
+  인덱싱은 <b>모든 문서의 벡터를 뒤로 미뤄</b> 화면에서는 빨리 끝나게 한다. 채팅 모드의 답변 동작은 바꾸지 않는다.</p>
+  <p class="meta">상태: 구현 완료(2026-11-03, 커밋 전) · <code>config.yaml</code> 변경 없음 · 결과는 <a href="#s10">§10</a></p>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">검토 결론</a></li>
+    <li><a href="#s2">지금 구조와 문제</a></li>
+    <li><a href="#s3">AI 역할 전환 — 실측</a></li>
+    <li><a href="#s4">AI 역할 전환 — 설계</a></li>
+    <li><a href="#s5">AI 답변창 — 화면 설계</a></li>
+    <li><a href="#s6">전체 벡터 백그라운드 — 검토</a></li>
+    <li><a href="#s7">전체 벡터 백그라운드 — 설계</a></li>
+    <li><a href="#s8">변경 파일 · 구현 순서</a></li>
+    <li><a href="#s9">검증 계획 · 남은 결정</a></li>
+    <li><a href="#s10">구현 결과</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>검토 결론</h2>
+  <div class="tbl"><table>
+    <tr><th>검토 항목</th><th>판단</th><th>핵심 근거</th><th>꼭 함께 고칠 것</th></tr>
+    <tr><td><b>① AI = 찾은 문서 정리 보조</b></td><td><span class="tag t-good">채택</span></td>
+      <td>지금 AI 답은 목록과 따로 다시 검색해 화면과 어긋날 수 있다. 목록의 문서를 그대로 쓰면 두 번 검색하지 않고 결과도 일치한다.</td>
+      <td>프롬프트 한 번에 묶지 말고 <b>문서별로 나눠 요약</b>한다. 작은 모델은 한 번에 묶으면 형식이 무너진다.</td></tr>
+    <tr><td><b>② AI 답변창 켜고 끄기</b></td><td><span class="tag t-good">채택</span></td>
+      <td>목록 안 카드를 별도 창으로 빼면 정렬 · 다시 그리기와 분리된다.</td>
+      <td>워커가 한 번에 한 일만 하므로 <b>생성 취소</b>가 필요하다. 없으면 AI 가 쓰는 동안 다음 찾기가 멈춘다.</td></tr>
+    <tr><td><b>③ 모든 벡터 백그라운드</b></td><td><span class="tag t-good">채택</span></td>
+      <td>기반은 이미 있고, 앱은 문서를 한 건씩 보내 500청크 넘는 문서만 미뤄진다. 화면상 처리 시간은 계산상 약 13.6배 짧아진다.</td>
+      <td>지금은 BM25 가 라운드 끝에야 반영된다. 벡터까지 미루면 <b>처리 중인 새 문서가 검색되지 않는 구간</b>이 생기므로 중간 반영이 필요하다.</td></tr>
+  </table></div>
+  <div class="verdict"><strong>권장 순서</strong> — ③ 벡터(작고 독립적) → ②·① 탐색기 AI(취소 기능을 공유). ③은 채팅 · 탐색기 모드 모두에 바로 체감된다.</div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">7.9초</div><div class="l">문서별 방식 첫 줄 중앙값 (한 번에 묶기 15.7초, CPU 시험값)</div></div>
+    <div class="kpi"><div class="v">6/6</div><div class="l">문서별 방식의 형식 유지 (한 번에 묶기 0/6)</div></div>
+    <div class="kpi"><div class="v">0건</div><div class="l">근거에 없는 숫자 — 다만 해석 왜곡 1건은 못 잡음</div></div>
+    <div class="kpi"><div class="v">13.6배</div><div class="l">화면상 처리 단축(1쪽 105.9 → 7.8ms, 계산값)</div></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>지금 구조와 문제</h2>
+  <div class="pipe">
+    <span>찾기 <code>/find</code></span><b>→</b><span>목록(문서 최대 20)</span><b>→</b>
+    <span class="hl">[AI에게 묻기]</span><b>→</b><span class="hl"><code>/ask</code> 다시 검색(근거 3건)</span><b>→</b><span>목록 맨 위 카드</span>
+  </div>
+  <div class="tbl"><table>
+    <tr><th>관찰</th><th>위치</th><th>문제</th></tr>
+    <tr><td>찾기와 AI 답이 서로 다른 검색</td><td><code>browse.html:997</code> · <code>main.rs:669</code></td><td>목록은 관련도 문턱 없이 보여 주지만 AI 답은 문턱으로 막는다. 목록에 문서가 있어도 "답변할 수 없습니다"가 나올 수 있다.</td></tr>
+    <tr><td>조건 칩이 AI 답에 안 넘어감</td><td><code>ask_ai</code> 는 <code>q</code> · <code>folder</code> 만 전송</td><td>사용자가 끈 조건 · 넓힌 기간이 찾기에만 적용되어 결과가 달라질 수 있다.</td></tr>
+    <tr><td>검색이 두 번 돈다</td><td><code>app.rs:224</code></td><td>이미 찾은 내용을 임베딩 · 리랭킹까지 다시 한다.</td></tr>
+    <tr><td>카드가 목록 HTML 안에 있음</td><td><code>browse.html:718 · 738 · 1202</code></td><td>정렬 · 묶기 때마다 함께 다시 그려진다.</td></tr>
+    <tr><td>조건만 있는 찾기는 본문 줄이 없음</td><td><code>find.rs:311</code></td><td>쪽 줄이 없어 정리 입력을 따로 가져와야 한다.</td></tr>
+    <tr><td>워커는 한 번에 한 일, 앱에서 취소 불가</td><td><code>worker.rs:1077</code> · <code>cli.rs</code> 입력 루프</td><td>생성 중 <code>/find</code> 는 대기. 취소는 콘솔 Ctrl+C 처리뿐이다.</td></tr>
+  </table></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>AI 역할 전환 — 실측</h2>
+  <p>큰 위험은 Qwen3-1.7B 처럼 작은 모델이 여러 문서를 제대로 요약하느냐였다. 실제 인덱스 사본(217개 문서)에서 키워드 6개의 찾기 결과를 뽑아 시험했다.
+  1차에서 정리 지시문의 문제를 찾고, 2차에서 고친 두 방식을 같은 조건으로 비교했다.</p>
+  <div class="note"><b>시험 조건과 한계</b> — 앱 실행을 유지한 채 CPU 4스레드로 돌렸다. 시간은 두 방식의 <b>상대 비교용</b>이며 앱 속도가 아니다. 검색어는 키워드형 6개뿐이고, 문장형 질문은 시험하지 않았다. 품질은 눈으로 읽은 판단이다(RAGAS 미실시).</div>
+  <h3>3-1. 2차 시험 결과 (근거 450자 × 문서 4건 — 채택값 3건은 §4-2)</h3>
+  <div class="tbl"><table>
+    <tr><th>지표 (6개 검색어)</th><th class="num">D · 한 번에 묶기</th><th class="num">E · 문서별 + 공통 요약</th></tr>
+    <tr><td>첫 줄이 보일 때까지(중앙값)</td><td class="num">15.7초</td><td class="num"><b>7.9초</b></td></tr>
+    <tr><td>전체 완료(중앙값)</td><td class="num">33.3초</td><td class="num">34.7초</td></tr>
+    <tr><td>정해진 형식 유지(공통 요약 + 문서별 한 줄)</td><td class="num">0/6</td><td class="num"><b>6/6</b></td></tr>
+    <tr><td>지시문 표식 되뱉기(<code>[찾은 문서]</code>)</td><td class="num">5/6</td><td class="num"><b>0/6</b></td></tr>
+    <tr><td>문서 번호 줄 중복</td><td class="num">4/6</td><td class="num"><b>0/6</b></td></tr>
+    <tr><td>토큰 상한 잘림</td><td class="num">3/6</td><td class="num">1/6 (생성 30회 중 1회)</td></tr>
+    <tr><td>근거에 없는 숫자</td><td class="num">0건</td><td class="num">0건</td></tr>
+    <tr><td>겹치는 문서 제거(0.8 이상)</td><td class="num" colspan="2" style="text-align:center">6개 검색어에서 합계 10건 제거</td></tr>
+  </table></div>
+  <h3>3-2. 문서별 방식의 실제 출력 예</h3>
+  <pre>AI 에이전트 보안은 행위 모니터링, 목표 외 행동 감지, 악성행위 차단, 통신 암호화, 사용자 입력 검증, 권한관리(RBAC), 데이터 암호화, 가드레일 마스킹 등을 포함한 다양한 보안 기술을 적용하여 안전하게 운영하는 것을 의미합니다.
+[1] AI 에이전트 보안: AI 에이전트의 행위 모니터링, 목표 외 행동 감지, 악성행위 차단, 통신 암호화, 사용자 입력 검증 등을 포함한 보안 대책.
+[2] AI 에이전트 보안: 권한관리(RBAC)와 암호화를 통해 데이터를 안전하게 전달하고, 가드레일을 통해 개인정보 및 보안내용을 마스킹하여 보호합니다.
+[3] AI 에이전트와 손쉽게 연동 · 보안 게이트웨이를 통해 문서/데이터 보안을 담당
+[4] AI 에이전트는 주어진 목표를 달성하기 위해 자율적으로 의사를 결정하고 행동을 수행하는 AI입니다.</pre>
+  <h3>3-3. 남은 품질 문제 (문서별 방식 24줄을 읽어 본 결과)</h3>
+  <div class="tbl"><table>
+    <tr><th>문제</th><th>실제 예</th><th>대책</th></tr>
+    <tr><td><span class="tag t-bad">해석 왜곡</span></td><td>"MpowerAI 12" 같은 표기를 "12단계의 발전 과정"으로 지어냄. 숫자 12는 근거에 있어 숫자 검사를 통과한다.</td><td>완전히 막지 못한다. 줄마다 [번호]로 원문을 바로 확인하게 하고 "참고 답변" 문구를 항상 표시한다.</td></tr>
+    <tr><td><span class="tag t-warn">문장 조각</span></td><td>"[1] 문서 분류 체계 카테고리 이름"</td><td>너무 짧은 줄은 찾기 발췌(snippet)로 대체한다.</td></tr>
+    <tr><td><span class="tag t-warn">지시문 되뱉기</span></td><td>"…내용을 설명하는 한 문장입니다."</td><td>되뱉기 패턴에 추가하고 걸리면 발췌로 대체한다.</td></tr>
+    <tr><td><span class="tag t-warn">공통 요약이 약함</span></td><td>개인정보 질의에서 [2] 번 줄을 거의 그대로 반복</td><td>공통 요약은 문서별 줄이 2건 이상이고, 어느 한 줄과 거의 같지 않을 때만 표시한다.</td></tr>
+  </table></div>
+  <div class="verdict"><strong>판단</strong> — 형식과 첫 표시 시간 모두 <b>문서별 방식(E)</b>이 낫고 전체 시간은 비슷하다. 줄을 코드가 조립하므로 [번호]가 다른 문서를 가리킬 수 없고, 문서 사이에서 멈출 수 있다. 다만 "보조 설명" 수준이며 사실 확인을 대신할 품질은 아니다.</div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>AI 역할 전환 — 설계</h2>
+  <div class="flow">
+    <div class="card"><h3>채팅 모드 — 그대로</h3><ul>
+      <li>질문 → 다시 검색 → 근거로 답변(<code>/ask</code>)</li>
+      <li>지시문 · 관련도 문턱 · 멀티턴 · 업로드 변경 없음</li>
+      <li>골든셋 결과에 영향 없음</li>
+    </ul></div>
+    <div class="card"><h3>탐색기 모드 — 새 동작</h3><ul>
+      <li>검색어 + <b>화면 목록의 상위 최대 3건</b> → 문서별 한 줄(<code>/brief</code>)</li>
+      <li>다시 검색하지 않음 · 조건 칩이 자연히 반영됨</li>
+      <li>이름은 "AI 참고 답변"</li>
+    </ul></div>
+  </div>
+  <h3>4-1. 처리 흐름</h3>
+  <div class="pipe">
+    <span>목록 상위 후보 최대 8건</span><b>→</b><span>제외: 관련도 낮음 · 본문 없음</span><b>→</b><span>거의 같은 본문 제거</span><b>→</b>
+    <span class="hl">상위 최대 3건 — 문서마다 한 줄</span><b>→</b><span>창에 조립</span>
+  </div>
+  <ul class="tight">
+    <li><b>입력 글</b> — 문서별 최고 점수 쪽의 <code>text</code> 를 450자까지 쓴다.</li>
+    <li><b>겹침 제거</b> — 글자 2개 조각의 겹침이 0.8 이상이면 뒤 문서를 뺀다(버전만 다른 사본 대응). 제외 수는 창에 표시한다.</li>
+    <li><b>조건만 있는 찾기</b> — 쪽 줄이 없으므로 워커가 해당 문서의 앞쪽 청크를 가져온다(<code>docs_scope</code> + <code>payloads</code>).</li>
+    <li><b>안전 대체</b> — 줄이 너무 짧거나, 되뱉기이거나, 근거에 없는 숫자가 있으면 그 줄은 생성문 대신 찾기 발췌를 "원문 발췌"로 보여 준다.</li>
+    <li><b>모델</b> — 지금 쓰는 답변 모델을 그대로 쓴다. <code>config.yaml</code> 의 모델 · 지시문은 건드리지 않고, 새 지시문은 <code>prompts.rs</code> 상수로 둔다.</li>
+  </ul>
+  <h3>4-2. 정리 문서 수 — 상위 최대 3건</h3>
+  <p>목록의 모든 문서를 요약하지 않고, 걸러 낸 뒤 <b>관련도 순 상위 최대 3건</b>만 정리한다. 나머지는 목록에서 직접 본다.</p>
+  <div class="tbl"><table>
+    <tr><th>근거</th><th>내용</th></tr>
+    <tr><td>네 번째 줄의 가치</td><td>2차 시험 6개 검색어 중 새 내용이 분명한 경우 1건, 일부 겹침 1건이고, 나머지 4건은 앞 줄과 겹치거나 일반 정의 · 지시문 되뱉기였다.</td></tr>
+    <tr><td>시간</td><td>생성이 5회 → 4회로 줄어 전체 시간이 약 20% 짧아진다(4건 실측 34.7초 기준 약 27.8초, 계산값). 첫 줄 시간은 변하지 않는다.</td></tr>
+    <tr><td>읽기 부담</td><td>목록 아래 창의 기본 높이에서 스크롤 없이 읽기 쉽다.</td></tr>
+  </table></div>
+  <ul class="tight">
+    <li><b>순서 기준</b> — 화면 정렬이 이름 · 날짜여도 항상 <b>관련도 순</b>으로 고른다. 그래서 정렬을 바꿔도 정리는 다시 만들지 않는다.</li>
+    <li><b>겹침 제거 뒤 3건</b> — 후보를 최대 8건 보내 사본을 빼도 3건이 채워지게 한다. 원본 상위 3건이 사본이면 다른 문서가 올라온다.</li>
+    <li><b>3건 미만</b> — 있는 만큼만 정리한다. 문서당 생성 1회다.</li>
+    <li><b>건수 고정</b> — 설정 · [더 정리] 버튼은 두지 않는다. 창 머리에 "찾은 문서 14건 중 상위 3건"을 표시해 나머지가 있음을 알린다.</li>
+  </ul>
+  <h3>4-3. 워커 명령 <code>/brief</code></h3>
+  <pre>/brief {"q":"AI 에이전트 보안","items":[{"no":1,"doc":"…pdf","path":"C:\\…","page":12,"text":"…"},…],"skipped":3}</pre>
+  <ul class="tight">
+    <li>출력은 기존 <code>── 근거</code> · <code>@ev</code> · <code>── 답변</code> · <code>── 소요</code> 블록을 재사용해 <b>워커 파서 · 사건을 새로 만들지 않는다</b>. 답변 본문은 <code>[n] …</code> 줄을 흘리고, 공통 요약은 <code>[요약] …</code> 줄로 마지막에 낸다. 화면이 맨 위에 놓는다.</li>
+    <li><code>generator.stream</code> 은 사용자 메시지가 <code>[근거]/[질문]</code> 고정이므로 사용자 메시지를 직접 받는 함수를 나눈다.</li>
+    <li>시작 줄 기능 목록에 <code>brief</code> 를 추가하고, 없으면 화면에 새 빌드 안내를 표시한다. <code>/find</code> 와 같은 Rust 전용 기능이라 Python 워커는 바꾸지 않는다.</li>
+  </ul>
+  <h3>4-4. 취소 — 이 설계의 필수 조건</h3>
+  <p>AI 가 쓰는 동안 워커가 BUSY 라서 다음 찾기가 기다린다. 입력 줄을 별도 스레드에서 읽고, <code>/cancel</code> 이 오면 생성 루프가 이미 보고 있는 <code>INTERRUPT</code> 를 세운다. 문서 사이에서도 확인한다.
+  새 찾기 · 창 닫기 · [중지] 버튼이 취소를 보낸다. 채팅 패널에도 나중에 [중지] 버튼을 붙일 수 있는 기반이 된다.</p>
+  <div class="note"><b>답변 시간 한도 주의</b> — BUSY 가 <code>AnswerTimeoutSec</code>(기본 60초)를 넘으면 워커를 죽이고 다시 올린다. 느린 PC · 정밀 모드에서는 문서별 생성 합계가 이를 넘을 수 있다. 토큰이 나올 때마다 BUSY 시작 시각을 갱신하거나, 문서별 생성에는 별도 한도를 둔다.</div>
+  <h3>4-5. 좋아지는 점과 잃는 점</h3>
+  <div class="flow">
+    <div class="card"><h3>좋아지는 점</h3><ul>
+      <li>목록과 AI 답이 항상 같은 문서를 말한다</li>
+      <li>조건 칩이 그대로 반영된다</li>
+      <li>줄마다 문서가 묶여 어느 문서 이야기인지 분명하다</li>
+      <li>첫 줄이 빨리 나온다</li>
+    </ul></div>
+    <div class="card"><h3>잃는 점 · 주의</h3><ul>
+      <li>"출장비 얼마야?" 같은 질문의 직답은 약해진다 → 창에서 채팅 모드로 이어 묻기 제공</li>
+      <li>문서당 앞쪽 근거 하나만 보므로 문서 전체 요약은 아니다 → "검색된 부분 기준" 표시</li>
+      <li>상위 3건 밖 문서는 정리에 나오지 않는다 → 건수를 창 머리에 표시</li>
+    </ul></div>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>AI 답변창 — 화면 설계</h2>
+  <h3>5-1. 배치 비교</h3>
+  <div class="tbl"><table>
+    <tr><th>안</th><th>장점</th><th>단점</th><th>판단</th></tr>
+    <tr><td><b>A. 목록 아래 (가로 나눔)</b></td><td>목록 · 미리 보기가 모두 유지되고, 미리 보기를 꺼도 쓸 수 있다. PDF 표시 자리가 변하지 않는다.</td><td>목록 세로 공간이 줄어든다(높이 조절로 해결).</td><td><span class="tag t-good">채택</span></td></tr>
+    <tr><td>B. 미리 보기 위 · 아래로 나눔</td><td>"미리 보기 창 옆"이라는 느낌이 있다.</td><td>PDF 세로가 줄고, 미리 보기를 끄면 자리가 사라진다.</td><td><span class="tag t-warn">기각</span></td></tr>
+    <tr><td>C. 네 번째 세로 열</td><td>미리 보기와 같은 모양이다.</td><td>창 너비가 부족하다(탐색 120 + 목록 300 + 미리 보기 220 + AI 260 이상).</td><td><span class="tag t-warn">기각</span></td></tr>
+    <tr><td>D. 떠 있는 팝업</td><td>구현이 쉽다.</td><td>PDF 는 별도 WebView 라 HTML 이 그 위로 올라가지 못한다.</td><td><span class="tag t-bad">불가</span></td></tr>
+  </table></div>
+  <h3>5-2. 탐색기 창 시안 — 창을 켠 상태</h3>
+  <div class="mock"><div class="mwin" role="img" aria-label="검색 목록 아래에 AI 답변창이 있고 오른쪽에 미리 보기 창이 있는 탐색기 화면 시안">
+    <div class="mbar"><span>정렬 · 관련도</span><span class="mbtn on">◫ 미리 보기 창</span><span class="mbtn on">✦ AI 답변창</span><span class="sp"></span><span class="mbtn">💬 채팅 모드</span></div>
+    <div class="mbody">
+      <div class="mside">📁 자료모음<br>　문서분류<br>　보안자료</div>
+      <div class="mmid">
+        <div class="mlist">
+          <div class="mrow"><span>AI보안 가이드북 part01.md</span><i>p.47 · 높음</i></div>
+          <div class="mrow"><span>AI Data Platform IR deck.pptx</span><i>p.11 · 높음</i></div>
+          <div class="mrow"><span>AI_Data_Platform_IR.pptx</span><i>p.8 · 보통</i></div>
+          <div class="mrow"><span>AI보안 가이드북 part02.md</span><i>p.104 · 보통</i></div>
+        </div>
+        <div class="mai">
+          <div class="h"><span>✦ AI 참고 답변</span><small>찾은 문서 14건 중 상위 3건 · 겹침 3건 제외</small><span class="sp"></span><span class="mbtn">■ 중지</span><span class="mbtn">✕</span></div>
+          <div class="ln">AI 에이전트 보안은 행위 감시, 통신 암호화, 권한 관리 등을 적용해 안전하게 운영하는 내용입니다.</div>
+          <div class="ln"><b>[1]</b> 행위 모니터링 · 악성행위 차단 · 입력 검증 등 보안 대책을 다룹니다.</div>
+          <div class="ln"><b>[2]</b> 권한 관리와 암호화, 가드레일 마스킹으로 데이터를 보호합니다.</div>
+          <div class="ln"><b>[3]</b> 쓰는 중…</div>
+          <div class="ft">검색된 부분을 바탕으로 만든 참고 답변입니다. 원문 확인을 권장합니다. · 💬 채팅에서 이어 묻기</div>
+        </div>
+      </div>
+      <div class="mpv">미리 보기 — [2] 를 누르면 그 쪽 표시<div class="p">PDF · 글 미리 보기</div></div>
+    </div>
+  </div></div>
+  <h3>5-3. 동작 규칙</h3>
+  <div class="tbl"><table>
+    <tr><th>사용자 동작</th><th>결과</th></tr>
+    <tr><td>찾기만 함 (답변창 꺼짐)</td><td>AI 는 전혀 돌지 않는다. 기본 상태다.</td></tr>
+    <tr><td><b>[✦ AI 답변창]</b> 클릭 · Alt+A</td><td>창이 열리고, 현재 목록의 정리가 없으면 그때 생성을 시작한다.</td></tr>
+    <tr><td>창이 열린 채 새로 찾기</td><td>진행 중 생성을 취소하고, 결과 도착 1초 뒤 새로 생성한다. 그 사이 다시 찾으면 시작하지 않는다.</td></tr>
+    <tr><td>창 닫기</td><td>생성을 취소한다. 다 쓴 정리는 같은 검색어 · 범위 · 조건이면 다시 열 때 생성 없이 보여 준다.</td></tr>
+    <tr><td>[n] 클릭</td><td>지금의 <code>showEvidence</code> 를 그대로 쓴다. 미리 보기가 꺼져 있으면 켜고, 패널 배치면 문서를 연다.</td></tr>
+    <tr><td>[초기화]</td><td>정리 · 캐시를 비운다. 창의 켜짐 상태는 유지한다.</td></tr>
+    <tr><td>창 높이 조절</td><td>경계 막대를 끌어 조절하고 <code>moai.layout</code> 에 기억한다(기본 34%, 최소 140px).</td></tr>
+    <tr><td>앱을 다시 시작</td><td>창은 꺼진 채 시작한다. 모르는 사이 찾을 때마다 모델이 도는 일을 막기 위해서다.</td></tr>
+  </table></div>
+  <h3>5-4. 비어 있는 경우</h3>
+  <div class="tbl"><table>
+    <tr><th>상황</th><th>창 표시</th></tr>
+    <tr><td>찾기 전 · 결과 없음</td><td>"찾은 문서가 있으면 여기에 정리해 드립니다" (생성 안 함)</td></tr>
+    <tr><td>모든 문서가 관련도 낮음</td><td>"관련도가 낮은 문서만 찾았습니다 — 정리하지 않았습니다"</td></tr>
+    <tr><td>본문 없는 문서만 있음(스캔 등)</td><td>"글을 읽을 수 없는 문서라 정리하지 못했습니다"</td></tr>
+    <tr><td>모델 준비 중</td><td>기존 "AI 모델 준비 중" 띠를 쓰고, 준비되면 이어서 생성</td></tr>
+  </table></div>
+  <h3>5-5. 탐색기 옆 좁은 패널</h3>
+  <p>하단 줄의 "✦ AI에게 묻기"를 같은 켜고 끄는 버튼으로 바꾼다. 켜면 카드 목록 아래에 높이 45% 이내 접이식 영역으로 열린다. 미리 보기가 없으므로 [n] 은 지금처럼 문서를 그 쪽에서 연다.</p>
+  <h3>5-6. 코드 배치</h3>
+  <p><code>.list</code> 와 새 <code>#aip</code> 를 세로 묶음 <code>.mid</code> 로 감싼다. 그리드 열은 그대로라 <code>#pvframe</code> 자리가 변하지 않고, PDF WebView 재배치(<code>sendRect</code>)도 건드릴 필요가 없다.
+  <code>aiCard()</code> 를 <code>render()</code> · <code>renderCards()</code> 에서 빼고, 사건 처리(<code>evidence · token · finish</code>)는 그대로 쓰되 받은 글을 줄별로 나눠 그린다. <code>ask_ai</code> IPC 는 <code>brief</code> · <code>cancel</code> 로 교체한다.</p>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>전체 벡터 백그라운드 — 검토</h2>
+  <div class="verdict"><strong>판단</strong> — 제안대로 진행한다. 단계형 인덱싱의 저장 · 채우기 · 재개 기능이 이미 있어 기준만 넓히면 된다. 다만 "텍스트 추출 · 청킹"만이 아니라 <b>메타데이터 · BM25 까지 앞 단계에 포함</b>해야 벡터 없이 바로 검색된다.</div>
+  <h3>6-1. 왜 지금은 효과가 안 나는가</h3>
+  <p>명령줄 전체 인덱싱은 새 청크를 누적해 500을 넘으면 미룬다. 앱은 <code>/index-doc</code> 를 문서마다 보내고 누적값이 매번 0이다(<code>commands.rs:139</code>). 그래서 <b>문서 하나가 500청크를 넘을 때만</b> 미뤄진다.
+  작은 문서가 많은 폴더는 전부 그 자리에서 임베딩하며, 그동안 워커가 묶여 찾기도 기다린다.</p>
+  <h3>6-2. 기대 효과 (기존 실측값으로 계산, 구현 뒤 재측정)</h3>
+  <div class="tbl"><table>
+    <tr><th>구간 (1쪽 기준)</th><th class="num">지금</th><th class="num">변경 후</th></tr>
+    <tr><td>파싱 · 청킹 · 메타 · 저장</td><td class="num">7.8ms</td><td class="num">7.8ms</td></tr>
+    <tr><td>임베딩 (화면 진행 중)</td><td class="num">98.1ms</td><td class="num">0ms</td></tr>
+    <tr><td><b>문서 처리가 끝나 보이기까지</b></td><td class="num"><b>105.9ms</b></td><td class="num"><b>7.8ms</b></td></tr>
+    <tr><td>예: PDF 30건 925쪽</td><td class="num">약 98초</td><td class="num">약 7초 + 뒤에서 채우기</td></tr>
+  </table></div>
+  <p>전체 일의 양은 줄지 않는다. 뒤에서 도는 시간까지 합하면 쉬는 조건만큼 조금 더 걸린다. 얻는 것은 <b>화면 체감과 인덱싱 중 찾기 응답</b>이다. 문서별 워커 점유가 짧아져 찾기 대기도 줄어든다. 파싱이 오래 걸리는 큰 문서의 대기는 남는다.</p>
+  <h3>6-3. 그대로 두면 생기는 문제</h3>
+  <div class="tbl"><table>
+    <tr><th>위험</th><th>지금 코드</th><th>대책</th></tr>
+    <tr><td><span class="tag t-bad">검색 공백</span> 라운드 도중 새 문서가 안 찾아짐</td><td>지금은 벡터로 바로 찾힌다. BM25 는 문서 대기열이 끝나고 10초 쉰 뒤에야 돈다(<code>jobs.rs:357</code>). 벡터까지 미루면 그동안 어느 쪽으로도 찾을 수 없다.</td><td>라운드 중 20건 또는 30초마다 BM25 덧붙이기(§7-2)</td></tr>
+    <tr><td><span class="tag t-bad">채우기 중단</span> 60분 뒤 워커가 내려감</td><td>유휴 판단은 마지막 질문 기준이고(<code>worker.rs:1085</code>), 채우기 명령은 이 시각을 갱신하지 않는다. 명령 사이에 내려가면 다음 사용 때까지 멈춘다.</td><td>대기 청크가 있으면 내리지 않는다(§7-3)</td></tr>
+    <tr><td><span class="tag t-warn">병합 비용 반복</span></td><td><code>/bm25</code> 는 변경이 5%를 넘으면 전체 재구축을 한다(운영 규모 36~49초). 중간 반영이 잦으면 초기 인덱싱 때 반복된다.</td><td>중간 반영은 병합 금지, 라운드 끝에만 병합</td></tr>
+    <tr><td><span class="tag t-warn">알림 소음</span></td><td>채우기가 끝나면 항상 "벡터 채우기가 끝났습니다" 알림(<code>jobs.rs:587</code>). 저장할 때마다 뜨게 된다.</td><td>대상이 500청크 이상일 때만 알림</td></tr>
+    <tr><td><span class="tag t-warn">일시적 정확도 저하</span></td><td>벡터 없는 청크는 BM25 · 동의어로만 찾는다. 기존 측정: 골든 차이 없음, 일상어 CR 0.76 → 0.62(전부 벡터 없는 경우).</td><td>수용. 소량은 몇 초~수십 초면 채워지고, 대량은 상태 줄에 표시</td></tr>
+    <tr><td><span class="tag t-warn">측정 재현성</span></td><td>명령줄 인덱싱 직후 측정하는 벤치가 있다.</td><td>명령줄 동작은 유지하고 앱 워커에만 적용</td></tr>
+  </table></div>
+  <h3>6-4. 그대로 재사용되는 것</h3>
+  <ul class="tight">
+    <li>길이 0 벡터로 대기 표시, <code>fill_pending</code> · <code>/embed-pending</code> — 64개씩, 질문 뒤 2초 쉬면 진행, 약 1초마다 비켜 줌</li>
+    <li>워커 재시작 뒤 이어 채우기, 수정 문서의 벡터 재사용, 진행 글 "벡터 채우는 중 N / M"</li>
+    <li>채우기는 앱 워커의 4스레드로 돌아 뒤에서 도는 동안 부담이 더 작다</li>
+  </ul>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>전체 벡터 백그라운드 — 설계</h2>
+  <div class="pipe">
+    <span class="hl">문서 추출 · 청킹 · 메타 · 저장</span><b>→</b><span class="hl">BM25 중간 덧붙이기</span><b>→</b><span>검색 가능 · 화면 "완료"</span><b>→</b><span class="hl">쉴 때 벡터 채우기</span><b>→</b><span>하이브리드 검색 완성</span>
+  </div>
+  <h3>7-1. 기준 변경</h3>
+  <p>설정 <code>index.vectors_background</code>(기본 true)를 추가한다. 켜지면 <code>/index-doc</code> 에서 <code>defer_over: Some(0)</code> 으로 다시 쓸 벡터가 없는 새 청크를 모두 미룬다. 작은 문서 예외는 두지 않는다. 경로가 하나여야 단순하고, 1건이면 2초 뒤 어차피 채워진다.
+  Python · Rust 같은 키로 넣는다(<code>config.py</code> 의 <code>DEFER_VECTORS_OVER</code> 와 같은 위치).</p>
+  <div class="tbl"><table>
+    <tr><th>경로</th><th>벡터</th><th>이유</th></tr>
+    <tr><td>앱 자동 · 수동 인덱싱(<code>/index-doc</code>)</td><td>전부 미룸</td><td>이번 변경 대상</td></tr>
+    <tr><td>명령줄 <code>index</code> · <code>--rebuild</code></td><td>지금대로(누적 500 초과 시 미룬 뒤 채움)</td><td>측정 재현성</td></tr>
+    <tr><td>채팅 업로드 문서</td><td>즉시 임베딩</td><td>올린 직후 그 문서로 답해야 한다</td></tr>
+  </table></div>
+  <h3>7-2. BM25 중간 반영</h3>
+  <ul class="tight">
+    <li><code>jobs.rs</code> — 라운드 도중 <b>20건 또는 30초마다</b> 대기열을 잠시 멈추고 <code>/bm25 {"merge":false}</code> 를 보낸다. 덧붙임을 저장할 때 쌓인 전체를 다시 쓰므로, 지난 반영 시간의 20배는 쉬어 부담을 약 5% 안으로 묶는다.</li>
+    <li><code>refresh_bm25</code> — 병합 금지 옵션을 받는다. 메타 마무리(<code>hook::finish</code>)도 라운드 끝에만 한다.</li>
+    <li>마지막 <code>/bm25</code> 는 지금처럼 병합 · 메타 마무리를 한다.</li>
+    <li>중간 반영은 고아 청소를 건너뛴다. 라운드 끝 반영에서 청소한다.</li>
+  </ul>
+  <h3>7-3. 채우기 유지</h3>
+  <ul class="tight">
+    <li>워커에 "최근 작업 시각"을 따로 두고 유휴 내리기 판단에 쓴다. <code>t_last_ask</code> 는 질문 우선 판단용이라 건드리지 않는다.</li>
+    <li>대기 청크를 채우는 동안에는 내리지 않는다. 워커가 죽으면 기존 재시작이 다시 띄우고 대기 청크를 이어 채우므로 따로 넓히지 않았다. 트레이에서 일부러 내린 경우는 다음 시작 때 이어 간다.</li>
+    <li>채우기 실패 시 이번 워커에서는 멈추는 현재 동작을 유지한다.</li>
+  </ul>
+  <h3>7-4. 진행 표시</h3>
+  <div class="tbl"><table>
+    <tr><th>단계</th><th>상태 표시</th><th>사용자 의미</th></tr>
+    <tr><td>1단계</td><td>"문서 처리 중 12 / 340"</td><td>끝난 문서부터 곧 검색됨</td></tr>
+    <tr><td>2단계 · 대기 500청크 이상</td><td>"검색 정확도 높이는 중 1,200 / 8,000 — 지금도 검색할 수 있습니다"</td><td>완료 알림 1회</td></tr>
+    <tr><td>2단계 · 소량</td><td>표시하지 않음</td><td>저장할 때마다 상태 줄이 깜박이지 않게</td></tr>
+  </table></div>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>변경 파일 · 구현 순서</h2>
+  <div class="tbl"><table>
+    <tr><th>단계</th><th>작업</th><th>파일</th></tr>
+    <tr><td><b>1</b></td><td>전체 벡터 미룸 · 설정 키</td><td><code>simplerag/commands.rs</code> · <code>config.rs</code> · <code>src/simplerag/index/commands.py</code> · <code>config.py</code></td></tr>
+    <tr><td><b>2</b></td><td>BM25 중간 반영(병합 금지)</td><td><code>indexer.rs</code> · <code>commands.rs</code> · <code>ragsearchbox/jobs.rs</code> · Python 대응</td></tr>
+    <tr><td><b>3</b></td><td>채우기 유지 · 알림 · 진행 글</td><td><code>worker.rs</code> · <code>jobs.rs</code> · <code>browse.html</code></td></tr>
+    <tr><td><b>4</b></td><td>입력 스레드 · <code>/cancel</code></td><td><code>simplerag/cli.rs</code> · <code>ragsearchbox/worker.rs</code></td></tr>
+    <tr><td><b>5</b></td><td><code>/brief</code> · 문서별 생성 · 안전 대체</td><td>새 <code>simplerag/brief.rs</code> · <code>generator.rs</code> · <code>prompts.rs</code> · <code>cli.rs</code></td></tr>
+    <tr><td><b>6</b></td><td>워커 대기 질문에 정리 요청 추가 · 시간 한도</td><td><code>worker.rs</code> · <code>main.rs</code></td></tr>
+    <tr><td><b>7</b></td><td>AI 답변창 · 토글 · 높이 조절 · 패널 배치</td><td><code>ui/browse.html</code></td></tr>
+    <tr><td><b>8</b></td><td>문구 · 사용 설명 갱신</td><td><code>ui/info.html</code> · <code>README.md</code> · <code>rust/README.md</code></td></tr>
+  </table></div>
+  <p>단계 1~3은 AI 작업과 독립이라 먼저 배포할 수 있다. <code>config.yaml</code> 의 모델 · 지시문은 어느 단계에서도 바꾸지 않는다.</p>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>검증 계획 · 남은 결정</h2>
+  <h3>9-1. 검증</h3>
+  <div class="tbl"><table>
+    <tr><th>대상</th><th>방법</th><th>통과 기준</th></tr>
+    <tr><td>AI 정리 품질</td><td>키워드형 · 문장형 · 조건형 검색어 30개로 규칙 지표 측정 후 일부 눈으로 확인</td><td>근거에 없는 숫자 0 · 형식 유지 100% · 빈 줄 0</td></tr>
+    <tr><td>AI 정리 속도</td><td>앱 실제 구성(iGPU)에서 측정</td><td>첫 줄 4초 이내, 전체 20초 이내를 목표로 재평가</td></tr>
+    <tr><td>취소</td><td>생성 중 찾기를 10회 반복</td><td>1초 안에 찾기 시작 · 워커 재시작 없음</td></tr>
+    <tr><td>채팅 모드</td><td>기존 골든 규칙 지표</td><td>결과 동일 (프롬프트 · 경로 불변 확인)</td></tr>
+    <tr><td>벡터 백그라운드</td><td>문서 340건 폴더로 측정: 화면 완료 · 라운드 중 새 문서 검색 · 채우기 완료 · 중단 후 재개</td><td>화면 완료 5배 이상 단축 · 검색 공백 30초 이내 · 대기 청크 0 도달 · 90분 무질문 유지</td></tr>
+    <tr><td>수치 기준</td><td>RAGAS 는 요청 시에만 실행(판정 서버 공용)</td><td>기본은 규칙 지표</td></tr>
+  </table></div>
+  <h3>9-2. 이 설계에서 정한 값 — 구현 전 확인 필요</h3>
+  <div class="tbl"><table>
+    <tr><th>결정 사항</th><th>설계값</th><th>다른 선택지</th></tr>
+    <tr><td>창이 열린 채 새로 찾으면</td><td>결과 1초 뒤 자동 정리 (미리 보기 창과 같은 방식)</td><td>[정리하기] 버튼을 눌렀을 때만</td></tr>
+    <tr><td>창 위치</td><td>목록 아래</td><td>미리 보기 창 안에 탭으로 넣기</td></tr>
+    <tr><td>앱 재시작 시 창 상태</td><td>꺼짐</td><td>이 PC 에 켜짐 상태 기억</td></tr>
+    <tr><td>창 · 버튼 이름</td><td>✦ AI 답변창 / AI 참고 답변</td><td>AI 정리 / AI 요약</td></tr>
+  </table></div>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>구현 결과</h2>
+  <p>색인 사본(4.4만 청크)에서 새 워커를 실제로 띄워 확인했다. 내장 GPU 없이 CPU 로 돌렸다.</p>
+  <div class="tbl"><table>
+    <tr><th>확인 항목</th><th>결과</th></tr>
+    <tr><td>문서 반영 (80청크, 벡터 전부 미룸)</td><td>0.13초</td></tr>
+    <tr><td>BM25 중간 반영</td><td>0.07~0.2초 · 벡터 없는 새 문서가 찾기에 나옴(반영 전에는 안 나옴)</td></tr>
+    <tr><td>벡터 채우기 64청크</td><td>약 1.1~2.1초 · 대기 0 도달 · 마지막 반영 정상</td></tr>
+    <tr><td>AI 정리 3건 + 공통 요약 (CPU, 공통 요약 제거 전)</td><td>첫 글자 4.2초 · 완료 18.8초</td></tr>
+    <tr><td>생성 중 취소</td><td>1.6초 뒤 복귀 · 이어서 찾기 0.07초 · 워커 재시작 없음</td></tr>
+    <tr><td>쪽 줄 없는 후보(조건만 맞은 문서)</td><td>문서 앞쪽 글로 정리됨</td></tr>
+    <tr><td>화면 흐름(가짜 워커 사건)</td><td>켜기 · 중지 · 재검색 취소 후 재시작 · 끝난 정리 재사용 통과, 콘솔 오류 없음</td></tr>
+    <tr><td>단위 시험</td><td>simplerag 44건 · ragsearchbox 10건 통과</td></tr>
+  </table></div>
+  <div class="note"><b>구현에서 달라진 점</b> — 생성 줄의 숫자 검사를 숫자와 단위를 함께 비교하게 해서, 3-3 의 "12단계" 왜곡은 이제 원문 발췌로 대체된다. 취소는 프롬프트 처리 중에는 끊기지 않아 CPU 에서 1초를 조금 넘었다.</div>
+  <div class="note"><b>공통 요약 제거 (2026-11-03)</b> — 실제 사용에서 공통 요약은 문서별 줄을 이어 붙일 뿐 새 정보가 없었고, 토큰 상한과 겹침 검사에 걸려 쓰이다 사라지는 일도 있었다. 사용자 결정으로 뺐다. 이 문서의 시안과 §3 시험에 나오는 공통 요약은 당시 설계이며, 지금은 문서별 줄만 낸다.</div>
+  <p><b>아직 확인하지 못한 것</b> — 실제 앱 창에서의 조작과 내장 GPU 속도, 문서 340건 규모의 라운드, 90분 채우기 유지, 문장형 · 조건형 검색어 30개 품질 측정.</p>
+</section>
+
+<footer>
+  시험 자료: 임시 폴더의 찾기 결과 6건 · 1차 18회 · 2차 36회 생성 (앱 인덱스 사본, Qwen3-1.7B CPU 4스레드)<br>
+  기존 수치 출처: plan/인덱싱속도_개선_설계서_20261030.html · report/BM25동의어_vs_하이브리드_RAGAS_20261030.html
+</footer>
+</div>
+</body>
+</html>

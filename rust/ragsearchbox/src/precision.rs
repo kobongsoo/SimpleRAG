@@ -142,7 +142,8 @@ pub fn note(present: bool, found: bool, msg: &str) -> String {
     if !found {
         parts.push("config.yaml 을 찾지 못해 바꿀 수 없습니다.".into());
     } else if !present {
-        parts.push(format!("models 폴더에 {} 가 없어 켜도 기존 모델로 답합니다.", MODEL_FILE));
+        // 기본 설치 파일에는 4B 가 없다 — 정밀 모델 추가 설치 파일을 안내한다
+        parts.push(format!("models 폴더에 {} 가 없어 켜도 기존 모델로 답합니다. 정밀 모드 모델 설치 파일(MoAISearch_PrecisionModel_Setup)을 실행하면 추가됩니다.", MODEL_FILE));
     }
     if !msg.is_empty() {
         parts.push(msg.to_string());

@@ -1,6 +1,6 @@
 //------------------------------------------------------------------
 // 트레이 아이콘 (Python tray.py)
-//=> 자기 스레드에서 숨은 창 하나와 메시지 펌프를 돌린다. 왼쪽·오른쪽 클릭이면 메뉴를 띄운다.
+//=> 자기 스레드에서 숨은 창 하나와 메시지 펌프를 돌린다. 오른쪽 · 왼쪽 클릭이면 메뉴, 왼쪽 더블클릭이면 화면을 연다.
 //   메뉴 맨 위 회색 줄은 지금 상태, 체크·회색 표시는 메인 스레드가 넣어 둔 값을 본다.
 //------------------------------------------------------------------
 
@@ -9,16 +9,20 @@ use std::sync::{Arc, Mutex, OnceLock};
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const WM_TRAY: u32 = WM_USER + 20;
 const WM_UPDATE: u32 = WM_USER + 21;
 const WM_NOTIFY_INFO: u32 = WM_USER + 22;
+// 왼쪽 클릭 뒤 더블클릭인지 기다리는 타이머 — 메뉴를 바로 띄우면 메뉴가 입력을 잡아 더블클릭이 오지 않는다
+const TIMER_LEFT: usize = 1;
 
 const MENU: &[(u32, &str, &str)] = &[
     (1006, "open", "화면 열기"),
     (1010, "info", "설정"),
+    (1012, "tour", "사용 안내"),
     (0, "", ""),
     (1007, "index_now", "지금 인덱싱"),
     (1009, "autoindex", "자동 인덱싱"),
@@ -38,6 +42,9 @@ pub struct TrayState {
     pub autoindex_checked: bool,
     pub index_now_enabled: bool,
     pub balloon: Option<(String, String)>,
+    // 다음 풍선을 누르면 할 일(없으면 눌러도 아무 일 없음) · 지금 떠 있는 풍선의 할 일
+    pub balloon_action: Option<String>,
+    pub shown_action: Option<String>,
 }
 
 struct Ctx {
@@ -47,6 +54,8 @@ struct Ctx {
 
 static CTX: OnceLock<Ctx> = OnceLock::new();
 static HWND_TRAY: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+// 더블클릭의 두 번째 손 뗌은 메뉴를 띄우지 않는다
+static SKIP_LEFT_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 //------------------------------------------------------------------
 // 트레이 손잡이 — 다른 스레드가 툴팁 갱신·알림을 부탁할 때 쓴다
@@ -83,7 +92,14 @@ impl Tray {
     }
     // 풍선 알림
     pub fn notify(&self, title: &str, msg: &str) {
-        self.state.lock().unwrap().balloon = Some((title.to_string(), msg.to_string()));
+        self.notify_action(title, msg, None);
+    }
+    // 누르면 할 일이 있는 풍선 알림 — 누르면 on_action(action)
+    pub fn notify_action(&self, title: &str, msg: &str, action: Option<&str>) {
+        let mut g = self.state.lock().unwrap();
+        g.balloon = Some((title.to_string(), msg.to_string()));
+        g.balloon_action = action.map(|a| a.to_string());
+        drop(g);
         post(WM_NOTIFY_INFO);
     }
     pub fn stop(&self) {
@@ -184,9 +200,37 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
     match msg {
         WM_TRAY => {
             let ev = lp.0 as u32;
-            if ev == WM_RBUTTONUP || ev == WM_LBUTTONUP {
+            if ev == WM_RBUTTONUP {
                 show_menu(hwnd);
+            } else if ev == WM_LBUTTONUP {
+                if !SKIP_LEFT_UP.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    SetTimer(hwnd, TIMER_LEFT, GetDoubleClickTime(), None);
+                }
+            } else if ev == NIN_BALLOONUSERCLICK {
+                // 풍선(알림)을 눌렀다 — 그 풍선의 할 일이 있으면 한다
+                if let Some(ctx) = CTX.get() {
+                    let a = ctx.state.lock().unwrap().shown_action.take();
+                    if let Some(a) = a {
+                        (ctx.on_action)(&a);
+                    }
+                }
+            } else if ev == NIN_BALLOONTIMEOUT {
+                if let Some(ctx) = CTX.get() {
+                    ctx.state.lock().unwrap().shown_action = None;
+                }
+            } else if ev == WM_LBUTTONDBLCLK {
+                let _ = KillTimer(hwnd, TIMER_LEFT);
+                SKIP_LEFT_UP.store(true, std::sync::atomic::Ordering::SeqCst);
+                if let Some(ctx) = CTX.get() {
+                    (ctx.on_action)("open");
+                }
             }
+            LRESULT(0)
+        }
+        // 더블클릭이 오지 않았다 — 한 번 클릭이므로 메뉴를 띄운다
+        WM_TIMER if wp.0 == TIMER_LEFT => {
+            let _ = KillTimer(hwnd, TIMER_LEFT);
+            show_menu(hwnd);
             LRESULT(0)
         }
         WM_UPDATE => {
@@ -201,7 +245,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         }
         WM_NOTIFY_INFO => {
             if let Some(ctx) = CTX.get() {
-                let b = ctx.state.lock().unwrap().balloon.take();
+                let b = {
+                    let mut g = ctx.state.lock().unwrap();
+                    // 새 풍선이 앞 풍선을 덮으므로 누름 할 일도 새 것으로
+                    g.shown_action = g.balloon_action.take();
+                    g.balloon.take()
+                };
                 if let Some((title, body)) = b {
                     let mut n = nid(hwnd);
                     n.uFlags = NIF_INFO;

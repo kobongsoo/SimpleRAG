@@ -24,6 +24,13 @@ const NOTIFY_AT_LEAST: usize = 3;
 const PENDING_IDLE_S: f64 = 2.0;
 // 한 번에 채울 벡터 대기 청크 수 — 4스레드로 약 1초라 질문이 오면 1초 안에 비켜 준다
 const PENDING_STEP: usize = 64;
+// 이만큼 넘게 채울 때만 진행 · 완료를 알린다 — 문서 한 건 저장으로 상태 줄이 깜박이지 않게
+const VEC_SHOW_MIN: usize = 500;
+// 라운드 도중 키워드 색인 반영 주기 — 문서 수나 시간 중 먼저 닿는 쪽(벡터 백그라운드 설계서 §7-2)
+const BM25_MID_DOCS: usize = 20;
+const BM25_MID_S: u64 = 30;
+// 중간 반영에 든 시간의 이 배수만큼은 쉰다 — 덧붙임이 커져도 반영이 문서 처리를 잡아먹지 않게
+const BM25_MID_REST: u32 = 20;
 const OUTSIDE_KEY: &str = "(지정 폴더 밖)";
 
 //------------------------------------------------------------------
@@ -42,6 +49,7 @@ enum Handler {
     Plan(String),
     Doc(String, String, Option<String>),
     Bm25,
+    Bm25Mid,
     Pending,
 }
 
@@ -72,6 +80,10 @@ pub struct IndexJobs {
     handlers: HashMap<u64, Handler>,
     next_id: u64,
     bm25_needed: bool,
+    // 마지막 키워드 색인 반영 뒤 처리한 문서 수 · 반영 시각 · 지난 중간 반영에 든 시간
+    bm25_mid_docs: usize,
+    bm25_mid_at: Instant,
+    bm25_mid_cost: Duration,
     retry_at: Option<Instant>,
     last_avail: Option<&'static str>,
     outside_needed: bool,
@@ -116,18 +128,24 @@ impl IndexJobs {
         IndexJobs {
             s: s.clone(), worker, roots: roots.iter().map(|r| abspath(r)).collect(), base_cmd: base_cmd.to_vec(), post, notify,
             enabled: s.autoindex_enabled, disabled_reason: None, dirty: vec![], approved: HashSet::new(), docs: VecDeque::new(),
-            queued: HashSet::new(), inflight: None, handlers: HashMap::new(), next_id: 1, bm25_needed: false, retry_at: None,
+            queued: HashSet::new(), inflight: None, handlers: HashMap::new(), next_id: 1, bm25_needed: false, bm25_mid_docs: 0, bm25_mid_at: Instant::now(), bm25_mid_cost: Duration::ZERO, retry_at: None,
             last_avail: None, outside_needed: true, approve_outside: false, waiting_new: HashMap::new(), waiting_delete: HashMap::new(),
             round: Round { done: 0, total: 0, changed: vec![], failed: vec![] },
             vec_pending: None, vec_total: 0, prog: HashMap::new(), prog_ver: 0, running_approved: HashSet::new(),
         }
     }
 
-    // 벡터 채우기 진행 글 — 대기 청크가 없으면 None
-    pub fn pending_text(&self) -> Option<String> {
+    // 벡터 채우기 진행 (채운 수, 전체) — 대기 청크가 없거나 소량이면 None
+    fn vec_progress(&self) -> Option<(usize, usize)> {
         let left = self.vec_pending.filter(|n| *n > 0)?;
         let total = self.vec_total.max(left);
-        Some(format!("벡터 채우는 중 {} / {} — 지금도 검색할 수 있습니다", comma(total - left), comma(total)))
+        (total >= VEC_SHOW_MIN).then_some((total - left, total))
+    }
+
+    // 벡터 채우기 진행 글 — 보일 것이 없으면 None
+    pub fn pending_text(&self) -> Option<String> {
+        let (done, total) = self.vec_progress()?;
+        Some(format!("검색 정확도 높이는 중 {} / {} — 지금도 검색할 수 있습니다", comma(done), comma(total)))
     }
 
     //------------------------------------------------------------------
@@ -172,6 +190,21 @@ impl IndexJobs {
         let prog = self.prog.iter().find(|(k, _)| k.to_lowercase() == low).map(|(_, v)| *v);
         let wait = self.waiting_new.iter().find(|(k, _)| k.to_lowercase() == low).map(|(_, n)| *n).unwrap_or(0);
         (prog, wait)
+    }
+
+    //------------------------------------------------------------------
+    // 지금 인덱싱이 진행 중인가 — 검색 결과가 비었을 때 "없다" 와 "아직 안 들어왔다" 를 가르려고 쓴다
+    //=> 처리 중이면 Some((끝낸 수, 전체)), 대조를 기다리거나 도는 중이면 Some((0, 0)), 아니면 None
+    //------------------------------------------------------------------
+    pub fn index_stage(&self) -> Option<(usize, usize)> {
+        if !self.enabled {
+            return None;
+        }
+        if !self.prog.is_empty() {
+            return Some(self.prog.values().fold((0, 0), |a, v| (a.0 + v.0, a.1 + v.1)));
+        }
+        let scanning = self.inflight.as_deref().map(|s| s.starts_with("대조")).unwrap_or(false);
+        if scanning || !self.dirty.is_empty() { Some((0, 0)) } else { None }
     }
 
     pub fn rescan_all(&mut self) {
@@ -242,7 +275,7 @@ impl IndexJobs {
         }
         if self.inflight.is_some() || !self.docs.is_empty() {
             if self.round.total > 0 {
-                return format!("인덱스 갱신 중 {}/{}", self.round.done, self.round.total);
+                return format!("문서 처리 중 {}/{}", self.round.done, self.round.total);
             }
             return "인덱스 확인 중".into();
         }
@@ -269,16 +302,16 @@ impl IndexJobs {
         }
         if self.inflight.is_some() || !self.docs.is_empty() {
             if self.round.total > 0 {
-                return format!("인덱싱 중 {}/{}", self.round.done, self.round.total);
+                return format!("문서 처리 중 {}/{}", self.round.done, self.round.total);
             }
             return "인덱스 확인 중".into();
         }
         if !self.waiting_new.is_empty() || !self.waiting_delete.is_empty() {
             return "'지금 인덱싱' 필요".into();
         }
-        match self.vec_pending {
-            Some(n) if n > 0 => format!("벡터 채우는 중 {}/{}", comma(self.vec_total.max(n) - n), comma(self.vec_total.max(n))),
-            _ => String::new(),
+        match self.vec_progress() {
+            Some((done, total)) => format!("검색 정확도 높이는 중 {}/{}", comma(done), comma(total)),
+            None => String::new(),
         }
     }
 
@@ -316,6 +349,11 @@ impl IndexJobs {
             self.outside_needed = false;
             let line = format!("/index-outside {}", crate::worker::ascii_json(&json!({"roots": self.roots})));
             self.send(line, Handler::Outside, "지정 폴더 밖 문서 확인");
+            return;
+        }
+        // 문서가 많을 때 — 끝까지 기다리면 처리한 문서가 어디서도 안 찾히므로 도중에 키워드 색인에 넣는다
+        if self.bm25_mid_due() {
+            self.send("/bm25 {\"merge\": false}".into(), Handler::Bm25Mid, "키워드 색인 중간 반영");
             return;
         }
         if let Some((op, path, root)) = self.docs.pop_front() {
@@ -393,6 +431,7 @@ impl IndexJobs {
                     Handler::Plan(root) => self.on_plan(&root, &res),
                     Handler::Doc(op, path, root) => self.on_doc(&op, &path, root, &res),
                     Handler::Bm25 => self.on_bm25(&res),
+                    Handler::Bm25Mid => self.on_bm25_mid(&res),
                     Handler::Pending => self.on_pending(&res),
                 }
             }
@@ -517,7 +556,7 @@ impl IndexJobs {
             return;
         }
         self.round.done += 1;
-        // 벡터를 미룬 큰 문서 — 차례가 끝나면 /embed-pending 으로 채운다
+        // 벡터를 미룬 문서 — 차례가 끝나면 /embed-pending 으로 채운다
         if res["deferred"].as_u64().unwrap_or(0) > 0 {
             self.vec_pending = None;
         }
@@ -538,6 +577,7 @@ impl IndexJobs {
             (self.notify)("doc", &format!("방금 반영(이동): {}", name));
         } else if Self::b(res, "ok") && ["added", "modified", "copied", "removed"].contains(&result) {
             self.bm25_needed = true;
+            self.bm25_mid_docs += 1;
             self.round.changed.push(name.clone());
             let label = match result { "added" => "추가", "modified" => "수정", "copied" => "복사", _ => "삭제" };
             crate::info!("autoindex", "반영 {}: {} ({}청크, {}ms)", label, path, res.get("chunks").or(res.get("removed")).cloned().unwrap_or(json!("")), res["ms"]);
@@ -569,7 +609,9 @@ impl IndexJobs {
         }
         if left == 0 && was > 0 {
             crate::info!("autoindex", "벡터 채우기 끝 — {}청크", self.vec_total);
-            (self.notify)("info", "벡터 채우기가 끝났습니다 — 이제 일상어 질문도 원래 정확도로 찾습니다");
+            if self.vec_total >= VEC_SHOW_MIN {
+                (self.notify)("info", "벡터 채우기가 끝났습니다 — 이제 일상어 질문도 원래 정확도로 찾습니다");
+            }
             self.vec_total = 0;
         }
         self.vec_pending = Some(left);
@@ -582,6 +624,8 @@ impl IndexJobs {
             return;
         }
         self.bm25_needed = false;
+        self.bm25_mid_docs = 0;
+        self.bm25_mid_at = Instant::now();
         if let Some(n) = res.get("pending").and_then(|v| v.as_u64()) {
             if n > 0 && self.vec_pending.unwrap_or(0) == 0 {
                 self.vec_pending = None;
@@ -591,6 +635,48 @@ impl IndexJobs {
             crate::info!("autoindex", "키워드 색인 다시 만듦: {}청크 {}ms", res["chunks"], res["ms"]);
         } else {
             crate::warn!("autoindex", "키워드 색인 실패: {}", res["why"]);
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 키워드 색인 중간 반영을 할 때인가
+    //=> 반영할 문서가 있고 대기열이 남았으며, 문서 수 · 시간 문턱에 닿았을 때 참.
+    //   지난 반영이 오래 걸렸으면 그 배수만큼 쉬어 처리 시간의 약 5% 안으로 묶는다.
+    //
+    // -in: 없음
+    //
+    // -out: true = 지금 /bm25 {"merge": false} 를 보낸다
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    fn bm25_mid_due(&self) -> bool {
+        if !self.bm25_needed || self.bm25_mid_docs == 0 || self.docs.is_empty() {
+            return false;
+        }
+        let gap = self.bm25_mid_at.elapsed();
+        let due = self.bm25_mid_docs >= BM25_MID_DOCS || gap >= Duration::from_secs(BM25_MID_S);
+        due && gap >= self.bm25_mid_cost * BM25_MID_REST
+    }
+
+    //------------------------------------------------------------------
+    // 키워드 색인 중간 반영 결과
+    //=> 라운드 끝의 합치기 · 메타 마무리는 남아 있으므로 bm25_needed 는 그대로 둔다.
+    //
+    // -in: res = 워커 결과 {ok, chunks, mode, pending, ms}
+    //
+    // -out: 없음
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    fn on_bm25_mid(&mut self, res: &Value) {
+        if Self::b(res, "stopped") {
+            return;
+        }
+        self.bm25_mid_docs = 0;
+        self.bm25_mid_at = Instant::now();
+        self.bm25_mid_cost = Duration::from_millis(res["ms"].as_u64().unwrap_or(0));
+        if Self::b(res, "ok") {
+            crate::info!("autoindex", "키워드 색인 중간 반영: {}청크 {}ms ({})", res["chunks"], res["ms"], res["mode"]);
+        } else {
+            crate::warn!("autoindex", "키워드 색인 중간 반영 실패: {}", res["why"]);
         }
     }
 
@@ -640,6 +726,7 @@ impl IndexJobs {
         let post = self.post.clone();
         let exts = self.s.index_exts.join(" ");
         let exclude = self.s.exclude_folders.join(";");
+        let job = self.worker.as_ref().and_then(|w| w.job_handle());
         std::thread::spawn(move || {
             let mut results = vec![];
             for (root, args) in jobs {
@@ -662,6 +749,11 @@ impl IndexJobs {
                 c.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
                 match c.spawn() {
                     Ok(mut ch) => {
+                        // 앱을 꺼도 혼자 남아 돌면 인덱스를 쥔 채 프로그램 제거 · 다음 실행을 막는다 — 앱과 함께 끝낸다.
+                        // 끊긴 문서는 다음 대조에서 다시 넣는다
+                        if let Some(j) = job {
+                            crate::win::assign_job(windows::Win32::Foundation::HANDLE(j as *mut _), &ch);
+                        }
                         // stderr 는 따로 받아 둔다 — 안 읽으면 버퍼가 차서 index 명령이 멈출 수 있다
                         let err = ch.stderr.take();
                         let eh = std::thread::spawn(move || {

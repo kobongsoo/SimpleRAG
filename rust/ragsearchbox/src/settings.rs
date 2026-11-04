@@ -50,6 +50,17 @@ pub struct Settings {
     pub ui_mode: String,
     pub page_click: String,
     pub folder_icon: bool,
+    // 탐색기 모드 모두 찾기(모두 찾기 설계서) — 기본 켬, [UI] FindAll
+    pub find_all: bool,
+    // 탐색기 화면 상태(JSON 한 줄) — [UI] BrowseState
+    pub browse_state: String,
+    // 탐색기 창 자리 "x,y,너비,높이,최대화" — [UI] BrowseWindow
+    pub browse_window: String,
+    // 사전 후보 알림(기본 켬) — [UI] CandidateNotify · 알림 상태 JSON 한 줄 — [UI] CandidateState
+    pub cand_notify: bool,
+    pub cand_state: String,
+    // 사용 안내를 본 판(0 = 아직) — [UI] TourDone
+    pub tour_done: u32,
     pub warnings: Vec<String>,
     pub ini_path: String,
 }
@@ -93,6 +104,12 @@ impl Default for Settings {
             ui_mode: "explorer".into(),
             page_click: "preview".into(),
             folder_icon: true,
+            find_all: true,
+            browse_state: String::new(),
+            browse_window: String::new(),
+            cand_notify: true,
+            cand_state: String::new(),
+            tour_done: 0,
             warnings: vec![],
             ini_path: String::new(),
         }
@@ -294,6 +311,12 @@ pub fn load(path: Option<&str>) -> Settings {
         w.push(format!("[UI] PageClick = {} 를 알 수 없어 preview 를 씁니다", pc));
     }
     s.folder_icon = ini.boolean("UI", "FolderIcon", true, &mut w);
+    s.find_all = ini.boolean("UI", "FindAll", true, &mut w);
+    s.browse_state = ini.s("UI", "BrowseState");
+    s.browse_window = ini.s("UI", "BrowseWindow");
+    s.cand_notify = ini.boolean("UI", "CandidateNotify", true, &mut w);
+    s.cand_state = ini.s("UI", "CandidateState");
+    s.tour_done = ini.s("UI", "TourDone").trim().parse().unwrap_or(0);
     let lv = ini.s("Log", "Level");
     s.log_level = if lv.is_empty() { "INFO".into() } else { lv };
     s.warnings = w;
@@ -314,7 +337,7 @@ pub fn find_worker_cmd(s: &Settings) -> Result<(Vec<String>, String), String> {
     let app = app_dir();
     let near = format!("{}\\simplerag-rs.exe", app);
     if std::path::Path::new(&near).is_file() {
-        return Ok((vec![near], "RAGSearchBox-rs 옆".into()));
+        return Ok((vec![near], "MoAISearch 옆".into()));
     }
     let up = std::path::Path::new(&app).parent().map(|p| p.join("dist-rust").join("simplerag-rs.exe"));
     if let Some(d) = up {
@@ -326,14 +349,40 @@ pub fn find_worker_cmd(s: &Settings) -> Result<(Vec<String>, String), String> {
 }
 
 //------------------------------------------------------------------
+// 탐색기 화면 상태 → INI 값 한 줄 — JSON 을 한 줄로, '%' 는 % 로(설정 파일을 읽는 다른 도구가 % 를 특별히 볼 수 있다)
+//------------------------------------------------------------------
+pub fn ui_state_text(v: &serde_json::Value) -> String {
+    if !v.is_object() {
+        return String::new();
+    }
+    serde_json::to_string(v).unwrap_or_default().replace('%', "\\u0025")
+}
+
+//------------------------------------------------------------------
+// INI 의 화면 상태 → 화면 스크립트에 넣을 글 — 깨졌거나 없으면 null
+//=> 스크립트 안에 그대로 들어가므로 '<' 를 < 로 바꿔 </script> 로 끊기지 않게 한다
+//------------------------------------------------------------------
+pub fn ui_state_js(raw: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(v) if v.is_object() => serde_json::to_string(&v).unwrap_or_else(|_| "null".into()).replace('<', "\\u003c"),
+        _ => "null".into(),
+    }
+}
+
+//------------------------------------------------------------------
 // INI 값 하나 고쳐 쓰기 — 그 줄만 바꾸고(들여쓰기 유지), 없으면 섹션 아래에 넣는다
+//=> 파일이 아직 없으면(첫 실행) 새로 만든다 — 첫 인덱싱 폴더를 저장할 곳이 있어야 한다
 // -out: Ok(값) / Err(사유)
 //------------------------------------------------------------------
 pub fn save_ini_value(path: &str, section: &str, key: &str, value: &str) -> Result<String, String> {
-    if path.is_empty() || !std::path::Path::new(path).is_file() {
-        return Err(format!("설정 파일이 없어 저장하지 않습니다: {}", path));
+    if path.is_empty() {
+        return Err("설정 파일 경로가 없어 저장하지 않습니다".into());
     }
-    let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).map_err(|e| format!("설정 파일을 읽지 못했습니다: {}", e))?;
+    let text = if std::path::Path::new(path).is_file() {
+        std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).map_err(|e| format!("설정 파일을 읽지 못했습니다: {}", e))?
+    } else {
+        String::new()
+    };
     let bom = text.starts_with('\u{feff}');
     let mut lines: Vec<String> = text.trim_start_matches('\u{feff}').lines().map(|s| s.to_string()).collect();
     let want = format!("[{}]", section.to_lowercase());

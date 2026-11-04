@@ -8,7 +8,7 @@ use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, HWND, LPARAM, POINT,
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::Shell::{ShellExecuteExW, ShellExecuteW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const GAP: i32 = 6;
@@ -283,6 +283,24 @@ pub fn ask_yes_no(title: &str, text: &str) -> bool {
 
 pub fn open_explorer(path: &str) -> Result<(), String> {
     std::process::Command::new("explorer.exe").arg(path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+//------------------------------------------------------------------
+// Windows 문서 속성 창 띄우기 — 탐색기의 오른쪽 클릭 '속성' 과 같은 창
+//=> 창은 이 프로세스 안에서 뜨므로, 이것을 부르는 스레드는 COM 이 초기화된 메인 스레드여야 한다.
+// -out: Ok(()) / Err(실패 글)
+//------------------------------------------------------------------
+pub fn show_properties(path: &str) -> Result<(), String> {
+    let (file, verb) = (HSTRING::from(path), HSTRING::from("properties"));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_INVOKEIDLIST,
+        lpVerb: PCWSTR(verb.as_ptr()),
+        lpFile: PCWSTR(file.as_ptr()),
+        nShow: SW_SHOW.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info) }.map_err(|e| e.to_string())
 }
 
 // 탐색기에서 그 파일을 골라 보이기(폴더에서 보기)

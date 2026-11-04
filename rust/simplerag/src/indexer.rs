@@ -73,11 +73,111 @@ fn index_excludes() -> &'static [String] {
     })
 }
 
-// 이 경로가 인덱싱에서 뺄 목록에 걸리는가
-pub fn is_excluded(path: &str) -> bool {
-    let low = path.replace('/', "\\").to_lowercase();
+// 이 경로가 사용자가 뺀 목록에 걸리는가 — 폴더 항목은 그 폴더 자신과 그 아래 전부
+fn is_user_excluded(path: &str) -> bool {
+    let low = path.replace('/', "\\").trim_end_matches('\\').to_lowercase();
     let name = pyutil::basename(&low).to_string();
-    index_excludes().iter().any(|e| if e.contains('\\') { low.starts_with(&format!("{}\\", e)) } else { name == *e })
+    index_excludes().iter().any(|e| if e.contains('\\') { low == *e || low.starts_with(&format!("{}\\", e)) } else { name == *e })
+}
+
+//------------------------------------------------------------------
+// 이 경로가 인덱싱에서 빠지는가 — 사용자가 뺀 목록 + 기본 제외 폴더 안
+//=> 워커가 문서 한 건씩 받을 때(폴더 감시)도 폴더 훑기와 같은 결과가 나오게, 위쪽 폴더를 모두 본다.
+//   폴더 추가 단계에서 제외 폴더 안을 막으므로 검색 폴더 바깥쪽이 걸리는 일은 없다.
+//------------------------------------------------------------------
+pub fn is_excluded(path: &str) -> bool {
+    is_excluded_in(path, None, &mut HashMap::new())
+}
+
+//------------------------------------------------------------------
+// is_excluded 의 속 — root 를 주면 그 폴더와 바깥은 보지 않는다, cache 는 폴더별 판정(같은 폴더를 다시 묻지 않게)
+//------------------------------------------------------------------
+fn is_excluded_in(path: &str, root: Option<&str>, cache: &mut HashMap<String, bool>) -> bool {
+    if is_user_excluded(path) {
+        return true;
+    }
+    let stop = root.map(|r| r.replace('/', "\\").trim_end_matches('\\').to_lowercase());
+    let mut dir = pyutil::dirname(&path.replace('/', "\\"));
+    loop {
+        let low = dir.trim_end_matches('\\').to_lowercase();
+        // 드라이브 루트 · 검색 폴더에 닿으면 멈춘다
+        if low.len() <= 2 || stop.as_deref() == Some(low.as_str()) {
+            return false;
+        }
+        let hit = match cache.get(&low) {
+            Some(v) => *v,
+            None => {
+                let v = default_skip_dir(&dir, None).is_some();
+                cache.insert(low.clone(), v);
+                v
+            }
+        };
+        if hit {
+            return true;
+        }
+        let up = pyutil::dirname(&dir);
+        if up.trim_end_matches('\\').len() >= low.len() {
+            return false;
+        }
+        dir = up;
+    }
+}
+
+// 드라이브 바로 아래에 있으면 들어가지 않는 폴더 — 운영체제 · 프로그램 설치 · 복구
+pub const SYSTEM_TOP_DIRS: &[&str] = &["windows", "windows.old", "program files", "program files (x86)", "programdata", "recovery",
+    "perflogs", "$winreagent", "$sysreset", "$windows.~bt", "$windows.~ws", "config.msi", "msocache", "onedrivetemp"];
+// 어디에 있든 들어가지 않는 폴더 이름 — 휴지통 · 앱 데이터 · 개발 도구
+pub const SKIP_DIR_NAMES: &[&str] = &["$recycle.bin", "system volume information", "appdata", "node_modules", ".git", ".svn", ".hg",
+    ".venv", "venv", "__pycache__", "site-packages", ".idea", ".vscode", ".cache", ".tox", ".mypy_cache", ".pytest_cache", ".gradle"];
+
+//------------------------------------------------------------------
+// 기본으로 들어가지 않는 폴더인가 — 사유 또는 None
+//=> 문서가 아닌 파일이 수만 개라 훑는 시간만 들고 검색을 더럽히는 폴더. 사용자 뺄 목록과 따로 늘 적용한다.
+//    1) 드라이브 바로 아래 시스템 폴더(C:\Windows · Program Files …)
+//    2) 어디에 있든 이름으로 — 휴지통 · AppData · node_modules · .git · .venv …
+//    3) 빌드 결과 — 이름이 흔해 옆에 프로젝트 파일이 있을 때만(target + Cargo.toml, bin · obj + .csproj, build · dist + package.json …)
+//    4) 이 앱의 인덱스 폴더(SIMPLERAG_HOME)
+//    5) 숨김 속성 폴더
+// -in: dir = 폴더 전체 경로 / attrs = 이미 아는 파일 속성(없으면 읽는다)
+// -out: Some(사유) / None
+//------------------------------------------------------------------
+pub fn default_skip_dir(dir: &str, attrs: Option<u32>) -> Option<&'static str> {
+    let low = dir.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let name = pyutil::basename(&low).to_string();
+    let parent = pyutil::dirname(&low);
+    let at_top = parent.trim_end_matches('\\').len() == 2 && parent.as_bytes().get(1) == Some(&b':');
+    if at_top && SYSTEM_TOP_DIRS.contains(&name.as_str()) {
+        return Some("시스템 · 프로그램 폴더");
+    }
+    if SKIP_DIR_NAMES.contains(&name.as_str()) {
+        return Some("앱 데이터 · 개발 도구 폴더");
+    }
+    let has = |f: &str| std::path::Path::new(&parent).join(f).exists();
+    let has_ext = |exts: &[&str]| std::fs::read_dir(&parent).map(|rd| rd.flatten().any(|e| {
+        let n = e.file_name().to_string_lossy().to_lowercase();
+        exts.iter().any(|x| n.ends_with(x))
+    })).unwrap_or(false);
+    let built = match name.as_str() {
+        "target" => has("Cargo.toml"),
+        "bin" | "obj" => has_ext(&[".csproj", ".vbproj", ".fsproj"]),
+        "build" | "dist" => has("package.json") || has("pyproject.toml") || has("setup.py") || has("CMakeLists.txt"),
+        _ => false,
+    };
+    if built {
+        return Some("빌드 결과 폴더");
+    }
+    if let Ok(h) = std::env::var("SIMPLERAG_HOME") {
+        if !h.is_empty() && h.replace('/', "\\").trim_end_matches('\\').to_lowercase() == low {
+            return Some("인덱스 폴더");
+        }
+    }
+    use std::os::windows::fs::MetadataExt;
+    let a = attrs.or_else(|| std::fs::metadata(dir).ok().map(|m| m.file_attributes())).unwrap_or(0);
+    // 숨김(0x2) — .git 같은 도구 폴더, 휴지통 · 옛 이름 연결(Application Data …)
+    if a & 0x2 != 0 {
+        return Some("숨김 폴더");
+    }
+    None
 }
 
 //------------------------------------------------------------------
@@ -102,7 +202,8 @@ pub fn list_files(root: &str, recursive: bool) -> std::io::Result<(Vec<String>, 
     let mut files = vec![];
     let mut skipped = 0;
     let mut take = |p: String| {
-        if is_index_ext(&p) && !is_transient(&p) && !is_excluded(&p) {
+        // 폴더는 훑을 때 이미 걸렀으므로 파일은 사용자 뺄 목록만 본다
+        if is_index_ext(&p) && !is_transient(&p) && !is_user_excluded(&p) {
             files.push(p);
         } else {
             skipped += 1;
@@ -124,7 +225,14 @@ pub fn list_files(root: &str, recursive: bool) -> std::io::Result<(Vec<String>, 
             for e in rd.flatten() {
                 let p = pyutil::join(&d, &e.file_name().to_string_lossy());
                 match e.file_type() {
-                    Ok(t) if t.is_dir() => stack.push(p),
+                    Ok(t) if t.is_dir() => {
+                        // 뺀 폴더 · 기본 제외 폴더는 안으로 들어가지 않는다 — 수십만 개 파일을 훑지 않게
+                        use std::os::windows::fs::MetadataExt;
+                        let attrs = e.metadata().ok().map(|m| m.file_attributes());
+                        if !is_user_excluded(&p) && default_skip_dir(&p, attrs).is_none() {
+                            stack.push(p);
+                        }
+                    }
                     Ok(_) => take(p),
                     Err(_) => {}
                 }
@@ -421,6 +529,11 @@ pub struct SyncOpts {
 //------------------------------------------------------------------
 pub fn defer_over() -> Option<usize> {
     if cfg().defer_vectors_over > 0 { Some(cfg().defer_vectors_over as usize) } else { None }
+}
+
+// 앱 워커의 문서 반영 문턱 — 벡터 백그라운드가 켜져 있으면 새 청크를 모두 미룬다(다시 쓸 벡터는 그대로 쓴다)
+pub fn worker_defer_over() -> Option<usize> {
+    if cfg().vectors_background { Some(0) } else { defer_over() }
 }
 
 // blocks 엔진으로 한 문서 추출·청킹 → (전체 글자, 표 행 수, 청크 메타)
@@ -774,10 +887,12 @@ pub fn find_removed(state: &State, root: &str, present: &HashSet<String>, recurs
 pub fn find_dropped(state: &State, root: &str, recursive: bool) -> Vec<String> {
     let base = norm_path(root);
     let prefix = format!("{}\\", pyutil::rstrip_chars(&base, "\\/"));
+    // 폴더 판정은 문서마다 되풀이되므로 모아 둔다 · 검색 폴더 바깥쪽은 보지 않는다
+    let mut cache = HashMap::new();
     let mut out: Vec<String> = docs(state).keys().filter(|key| {
         let k = norm_path(key);
         let inside = if recursive { k.starts_with(&prefix) } else { pyutil::dirname(&k) == base };
-        inside && (!is_index_ext(key) || is_excluded(key)) && std::path::Path::new(key.as_str()).exists()
+        inside && (!is_index_ext(key) || is_excluded_in(key, Some(root), &mut cache)) && std::path::Path::new(key.as_str()).exists()
     }).cloned().collect();
     out.sort();
     out
@@ -1299,6 +1414,43 @@ pub fn refresh_bm25(store: &VectorStore, bm25: &Bm25Index, state: Option<&State>
     store.prune_tf()?;
     rep.mode = "full";
     rep.tokenized = n_tok;
+    rep.sec = t0.elapsed().as_secs_f64();
+    Ok(rep)
+}
+
+//------------------------------------------------------------------
+// BM25 중간 반영 — 덧붙임 · 지움만 (벡터 백그라운드 설계서 §7-2)
+//=> 라운드 도중 새 문서가 바로 찾히도록 바뀐 청크만 고친다. 문턱을 넘어도 합치지 않고,
+//   고아 청소 · 합치기는 라운드 끝의 refresh_bm25 가 한다.
+//    1) 색인이 있으면 넣을 id · 뺄 id 만 반영한다
+//    2) 색인이 아직 없으면(처음 인덱싱) refresh_bm25 로 만든다
+//
+// -in: store · bm25 = 저장소 · 색인 / tok = e5 토크나이저 / log = 안내 출력
+//
+// -out: Bm25Report
+// -out: error = 저장소 · 파일 쓰기 실패면 Err
+//------------------------------------------------------------------
+pub fn append_bm25(store: &VectorStore, bm25: &Bm25Index, tok: &crate::tok::Tok,
+                   log: &mut dyn FnMut(&str)) -> Result<Bm25Report, String> {
+    let t0 = Instant::now();
+    let live = store.ids()?;
+    // 색인을 아직 메모리에 안 올렸을 수 있다 — 읽어 본 뒤 계획을 세운다
+    bm25.ensure_loaded();
+    let (add, rem) = match bm25.plan_update(&live) {
+        Some(p) if !live.is_empty() => p,
+        _ => return refresh_bm25(store, bm25, None, tok, false, log),
+    };
+    let mut rep = Bm25Report { chunks: live.len(), ..Default::default() };
+    if add.is_empty() && rem.is_empty() {
+        rep.mode = "same";
+    } else {
+        let (tfs, n_tok) = tfs_for(store, &add, tok, false)?;
+        bm25.update(add.iter().copied().zip(tfs).collect(), &rem)?;
+        rep.mode = "update";
+        rep.added = add.len();
+        rep.removed = rem.len();
+        rep.tokenized = n_tok;
+    }
     rep.sec = t0.elapsed().as_secs_f64();
     Ok(rep)
 }

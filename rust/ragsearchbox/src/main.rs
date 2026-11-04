@@ -1,5 +1,5 @@
 //------------------------------------------------------------------
-// RAGSearchBox-rs — 트레이 상주 앱 진입점 (Python main.py · app.py)
+// MoAISearch(RAGSearchBox Rust 판) — 트레이 상주 앱 진입점 (Python main.py · app.py)
 //=> 탐색기에서 지정 폴더를 열면 오른쪽에 대화 패널이 붙고, 질문은 상주 워커(simplerag-rs chat)가 답한다.
 //   구성: 트레이(자기 스레드) · 탐색기 감시(자기 스레드) · 워커 관리(자기 스레드) · 폴더 감시(폴더마다 스레드)
 //         · 패널/설정 창(메인 스레드, WebView2). 다른 스레드의 일은 모두 사용자 이벤트로 메인에 넘어온다.
@@ -7,7 +7,9 @@
 #![windows_subsystem = "windows"]
 
 mod browse_win;
+mod candidates;
 mod explorer;
+mod folder_check;
 mod folder_icon;
 mod history;
 mod jobs;
@@ -51,6 +53,12 @@ const INFO_EVERY: Duration = Duration::from_secs(1);
 const SCOPE_WARN: &str = "범위 폴더 미설정 — RAGSearchBox.ini 의 [Scope] Folders 를 지정하세요";
 const PANEL_HTML: &str = include_str!("../ui/panel.html");
 const BROWSE_HTML: &str = include_str!("../ui/browse.html");
+// 사용 설명서 파일 이름(설치 폴더 doc 안) · 사용 안내 판 — 안내 단계가 크게 바뀌면 올려 다시 보여 준다
+const MANUAL_NAME: &str = "MoAISearch-사용자-설명서.html";
+const TOUR_VERSION: u32 = 1;
+// 설정 창 크기(논리 픽셀) — 작은 화면에서는 작업 영역에 맞춰 줄인다(show_info)
+const INFO_W: f64 = 720.0;
+const INFO_H: f64 = 720.0;
 const INFO_HTML: &str = include_str!("../ui/info.html");
 const MOAI_PNG: &[u8] = include_bytes!("../moai.png");
 
@@ -160,12 +168,17 @@ struct App {
     roots_ver: u64,
     t_roots: Instant,
     t_info: Instant,
+    // 사전 후보 알림 — 상태 · 1분마다 보기 · 화면을 마지막으로 건드린 때 · 설정 버튼 숫자
+    cand: candidates::CandState,
+    t_cand: Instant,
+    t_user: Instant,
+    cand_n: usize,
     quitting: bool,
     selftest_done: bool,
     // 탐색기 모드(탐색기 모드 설계서) — MoAI 탐색기 창 · 패널에 지금 올린 화면(explorer | rag)
     browse: Browse,
     panel_mode: String,
-    // AI 답(RAG)을 어느 화면이 물었나 — true 면 탐색기 창, false 면 패널
+    // 답 · AI 정리를 어느 화면이 요청했나 — true 면 탐색기 창, false 면 패널
     ask_to_browse: bool,
     // /find 결과(워커 스레드가 넣고 pump 가 화면으로 옮긴다) — (탐색기 창으로?, 결과)
     find_done: Arc<Mutex<Vec<(bool, Value)>>>,
@@ -174,6 +187,11 @@ struct App {
     // 화면 모드를 바꾼 결과 안내(설정 창 화면 모드 칸에)
     mode_msg: String,
     moai_b64: String,
+    // 이번 실행에서 "인덱싱 폴더를 지정해 주세요" 를 이미 물었나 — 취소하면 다음 실행 때 다시 묻는다
+    first_folder_asked: bool,
+    // 모델 준비 막대를 보이는 중인가 · 마지막으로 보낸 때
+    load_shown: bool,
+    t_load: Instant,
 }
 
 //------------------------------------------------------------------
@@ -227,12 +245,24 @@ fn font_px(pt: i64) -> String {
 }
 
 //------------------------------------------------------------------
+// 사용자에게 보일 오류 글 — 인덱스 잠금 오류는 할 수 있는 일을 알려 주는 말로 바꾼다
+//=> 인덱싱 프로세스가 인덱스를 쥐고 있을 때 나는 오류라 끝나면 저절로 풀린다. 원래 글은 로그에 남는다.
+//------------------------------------------------------------------
+fn plain_error(msg: &str) -> String {
+    if msg.contains("already accessed") {
+        "문서를 인덱싱하고 있어 잠시 검색할 수 없습니다 — 끝나면 다시 시도해 주세요".into()
+    } else {
+        msg.to_string()
+    }
+}
+
+//------------------------------------------------------------------
 // 패널 화면 고르기 — 탐색기 모드면 browse.html(좁은 배치), RAG 모드면 대화 화면 panel.html
 //------------------------------------------------------------------
 fn panel_html(mode: &str, s: &Settings, moai: &str) -> String {
     let font = font_px(s.font_size);
     if mode == "explorer" {
-        BROWSE_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", moai).replace("__LAYOUT__", "panel")
+        BROWSE_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", moai).replace("__LAYOUT__", "panel").replace("__UISTATE__", "null")
     } else {
         PANEL_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", moai).replace("__SCOPE__", &s.panel_search_scope)
     }
@@ -256,9 +286,13 @@ impl App {
             crate::warn!("app", "[Trigger] SearchBox=1(검색창 ? 질문)은 Rust 판에서 지원하지 않는다 — 폴더 패널만 동작한다");
         }
         let usable = self.scope.lock().unwrap().usable();
+        let tray_only = std::env::args().any(|a| a == "--tray");
         if !usable {
             crate::warn!("app", "{}", SCOPE_WARN);
-            self.tray.notify("MoAI-S", SCOPE_WARN);
+            // 직접 실행했고 폴더가 하나도 없으면 곧 안내 창으로 묻는다 — ini 를 고치라는 풍선은 띄우지 않는다
+            if tray_only || !self.current_folders().is_empty() {
+                self.tray.notify("MoAI-S", SCOPE_WARN);
+            }
         } else if let Some(w) = &self.worker {
             w.start();
             if self.s.start_mode == "boot" {
@@ -282,10 +316,11 @@ impl App {
             crate::info!("app", "자체 시험: 탐색기 창 열기 ({})", selftest);
             let q = if selftest == "1" { None } else { Some(selftest) };
             self.open_browse(q.as_deref(), None, Value::Null);
-        } else if !std::env::args().any(|a| a == "--tray") {
+        } else if !tray_only {
             // 직접 실행하면 화면을 바로 띄운다(트레이 "열기" 와 같다) — 로그인 자동 시작(--tray)은 트레이에만
             crate::info!("app", "시작 화면 띄우기 ({} 모드)", self.s.ui_mode);
-            if self.s.ui_mode == "explorer" {
+            // 인덱싱 폴더가 없으면 채팅 모드는 열 폴더가 없다 — 폴더를 고르는 탐색기 창으로 연다
+            if self.s.ui_mode == "explorer" || self.current_folders().is_empty() {
                 self.open_browse(None, None, Value::Null);
             } else {
                 self.open_panel();
@@ -316,18 +351,135 @@ impl App {
         if self.info.visible && self.t_info.elapsed() >= INFO_EVERY {
             self.refresh_info();
         }
+        if self.t_load.elapsed() >= Duration::from_millis(500) {
+            self.t_load = Instant::now();
+            self.push_load();
+        }
         self.pump_uploads();
         self.pump_finds();
+        if self.t_cand.elapsed() >= Duration::from_secs(60) {
+            self.t_cand = Instant::now();
+            self.check_candidates();
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 사전 후보 점검(1분마다) — 설정 버튼 숫자, 쉬는 동안 후보 만들기, 새 후보 알림 (candidates.rs)
+    //    1) 남은 후보 수를 탐색기 [⚙ 설정] 버튼에 — 알림을 놓쳐도 보이게
+    //    2) 화면을 10분 넘게 안 썼고 인덱싱 · 답변 · 후보 만들기 중이 아니면 이름 별칭(하루 한 번),
+    //       놓친 질문이 10개 넘게 새로 쌓였으면 동의어 후보를 만든다
+    //    3) 새 후보 묶음이면 하루 한 번까지 트레이 알림 — 누르면 설정 창 그 탭
+    //------------------------------------------------------------------
+    fn check_candidates(&mut self) {
+        use std::sync::atomic::Ordering;
+        let Some(home) = self.data_home() else { return };
+        let (n_syn, n_ppl, sig) = candidates::pending(&home);
+        if n_syn + n_ppl != self.cand_n {
+            self.cand_n = n_syn + n_ppl;
+            self.browse.call("setCandCount", json!(self.cand_n));
+        }
+        if !self.s.cand_notify {
+            return;
+        }
+        let t = candidates::now();
+        let before = self.cand.clone();
+        let busy = self.index_running() || self.info.syn_running.load(Ordering::SeqCst) || self.info.ppl_running.load(Ordering::SeqCst)
+            || self.worker.as_ref().map(|w| w.availability() == "starting" || (w.availability() == "up" && !w.is_idle())).unwrap_or(false);
+        let idle = self.t_user.elapsed() >= Duration::from_secs(candidates::IDLE_SECS) && !busy;
+        if idle && candidates::ppl_due(&self.cand, t) {
+            crate::info!("app", "사전 후보: 쉬는 동안 이름 별칭 후보를 만든다");
+            self.cand.ppl_at = t;
+            self.info.ppl_msg = self.people_cmd(vec!["suggest".into()]);
+        } else if idle {
+            let (n_miss, _) = synonyms::counts(&home);
+            if candidates::syn_due(&self.cand, n_miss, t) {
+                crate::info!("app", "사전 후보: 놓친 질문 {}개 — 쉬는 동안 동의어 후보를 만든다", n_miss);
+                self.cand.syn_at = t;
+                self.cand.syn_base = n_miss;
+                self.info.syn_msg = self.suggest_synonyms();
+            }
+        }
+        // 설정 창을 보고 있으면 알리지 않는다(이미 보고 있다)
+        if !self.info.visible && candidates::should_notify(&self.cand, &sig, t) {
+            crate::info!("app", "사전 후보 알림: 동의어 {} · 이름 별칭 {}", n_syn, n_ppl);
+            self.tray.notify_action("MoAI-S 사전 후보", &candidates::message(n_syn, n_ppl), Some("candidates"));
+            self.cand.last_notify = t;
+            self.cand.last_sig = sig;
+        }
+        if self.cand != before {
+            self.save_cand_state();
+        }
+    }
+
+    // 사전 후보 알림 상태 저장 — INI [UI] CandidateState
+    fn save_cand_state(&mut self) {
+        let v = self.cand.text();
+        if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "CandidateState", &v) {
+            crate::warn!("app", "사전 후보 알림 상태를 저장하지 못했다: {}", e);
+        }
+        self.s.cand_state = v;
+    }
+
+    //------------------------------------------------------------------
+    // 알림 · [⚙ 설정] 숫자를 눌렀다 — 설정 창을 후보가 있는 탭으로 연다(동의어 먼저)
+    //------------------------------------------------------------------
+    fn open_candidates(&mut self) {
+        self.show_info();
+        let tab = match self.data_home() {
+            Some(home) if candidates::pending(&home).0 == 0 => "ppl",
+            _ => "syn",
+        };
+        if self.info.ready {
+            let _ = self.info.webview.evaluate_script(&format!("showTab('{}')", tab));
+        }
+    }
+
+    // 탐색기 창 맨 아래 줄의 모델 준비 막대 — 올리는 동안 % 를 보내고, 끝나면 한 번 지운다
+    fn push_load(&mut self) {
+        let st = self.worker.as_ref().and_then(|w| w.starting());
+        if st.is_some() || self.load_shown {
+            self.load_shown = st.is_some();
+            self.browse.call("setLoad", st.unwrap_or(Value::Null));
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 지금 인덱싱 단계 — 검색 결과에 실어 보낸다. 화면은 결과가 비었을 때 이 값으로 안내 글을 고른다
+    //=> 결과가 대조 시작 직전에 올 수 있어, 화면이 가진 진행 값 대신 결과를 보낼 때의 상태를 쓴다
+    //------------------------------------------------------------------
+    fn index_note(&self) -> Value {
+        if self.worker.as_ref().map(|w| w.starting().is_some()).unwrap_or(false) {
+            return json!({"stage": "model"});
+        }
+        match self.jobs.as_ref().and_then(|j| j.index_stage()) {
+            Some((n, total)) => json!({"stage": "index", "n": n, "total": total}),
+            None => Value::Null,
+        }
     }
 
     // /find 결과를 물은 화면으로
     fn pump_finds(&mut self) {
         let done: Vec<(bool, Value)> = std::mem::take(&mut *self.find_done.lock().unwrap());
-        for (to_browse, r) in done {
+        let note = self.index_note();
+        for (to_browse, mut r) in done {
+            r["indexing"] = note.clone();
+            // 화면은 done.error · why 를 그대로 보여 준다 — 잠금 오류는 쉬운 말로 바꿔 넘긴다
+            if let Some(e) = r["why"].as_str().map(plain_error) {
+                r["why"] = json!(e);
+            }
+            if let Some(e) = r["done"]["error"].as_str().map(plain_error) {
+                r["done"]["error"] = json!(e);
+            }
+            // 모두 찾기의 나머지 쪽 · 쪽 본문은 따로 받는다
+            let func = match r["kind"].as_str() {
+                Some("doc") => "docPages",
+                Some("page") => "pageText",
+                _ => "results",
+            };
             if to_browse {
-                self.browse.call("results", r);
+                self.browse.call(func, r);
             } else {
-                self.panel.call("results", r);
+                self.panel.call(func, r);
             }
         }
     }
@@ -358,6 +510,7 @@ impl App {
         self.browse.call("setExcluded", json!(self.s.exclude_folders));
         self.browse.call("setRoots", roots.clone());
         self.browse.call("setPageClick", json!(self.s.page_click));
+        self.browse.call("setFindAll", json!(self.s.find_all));
         if self.panel_mode == "explorer" {
             self.panel.call("setRoots", roots);
             self.panel.call("setPageClick", json!(self.s.page_click));
@@ -411,6 +564,42 @@ impl App {
                 w.ensure_started();
             }
         }
+        self.ask_first_folder();
+    }
+
+    //------------------------------------------------------------------
+    // 첫 실행 — 인덱싱 폴더가 하나도 없으면 안내 창을 띄우고 폴더 고르기 창으로 넣게 한다
+    //=> 탐색기 창이 보이고 화면이 다 뜬 뒤에 묻는다(창은 답할 때까지 멈춘다). 한 실행에 한 번만 묻고,
+    //   취소하면 탐색 창의 [＋ 폴더 추가] 로 넣게 안내한다 — 폴더가 없으면 다음 실행 때 다시 묻는다.
+    //------------------------------------------------------------------
+    fn ask_first_folder(&mut self) {
+        if self.first_folder_asked || !self.browse.visible || !self.browse.is_ready() || !self.current_folders().is_empty() {
+            return;
+        }
+        self.first_folder_asked = true;
+        // 알림 창 대신 탐색기 창 안의 환영 화면 — [검색 폴더 고르기] 를 누르면 add_folder (첫 실행 안내 설계서 §4)
+        crate::info!("app", "인덱싱 폴더가 없어 환영 화면을 보인다");
+        self.browse.call("setFirstRun", json!(true));
+        self.browse.call("notice", json!("찾을 문서가 든 폴더를 고르세요"));
+    }
+
+    //------------------------------------------------------------------
+    // 사용 설명서 경로 — 설치 폴더(MoAISearch.exe 옆)의 doc\MoAISearch-사용자-설명서.html, 없으면 None
+    //------------------------------------------------------------------
+    fn manual_path() -> Option<String> {
+        let p = std::env::current_exe().ok()?.parent()?.join("doc").join(MANUAL_NAME);
+        p.is_file().then(|| p.to_string_lossy().into_owned())
+    }
+
+    // 사용 안내를 본 것으로 기록 — INI [UI] TourDone (안내 판)
+    fn mark_tour_done(&mut self) {
+        if self.s.tour_done >= TOUR_VERSION {
+            return;
+        }
+        self.s.tour_done = TOUR_VERSION;
+        if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "TourDone", &TOUR_VERSION.to_string()) {
+            crate::warn!("app", "사용 안내 기록을 저장하지 못했다: {}", e);
+        }
     }
 
     //------------------------------------------------------------------
@@ -431,16 +620,17 @@ impl App {
     //------------------------------------------------------------------
     // 화면 모드 바꾸기 ([채팅 모드] · [탐색기 모드] 버튼)
     //=> 모드를 저장하고 지금 화면을 닫은 뒤 그 모드의 화면을 연다.
-    //    · 채팅 모드: 탐색기 창을 숨기고 탐색기 옆 대화 패널(트레이 "열기" 와 같다)
+    //    · 채팅 모드: 탐색기 창을 숨기고 고른 폴더(없으면 맨 처음 인덱싱 폴더)를 탐색기로 열어 옆에 대화 패널
     //    · 탐색기 모드: 대화 패널을 숨기고 MoAI 탐색기 창
+    //   folder = 탐색 창에서 고른 폴더
     //------------------------------------------------------------------
-    fn switch_ui_mode(&mut self, mode: &str) {
+    fn switch_ui_mode(&mut self, mode: &str, folder: Option<String>) {
         crate::info!("app", "화면 모드 바꾸기: {}", mode);
         self.save_ui_mode(mode);
         self.set_panel_mode(mode);
         if mode == "rag" {
             self.browse.hide();
-            self.open_panel();
+            self.open_panel_at(folder);
         } else {
             self.panel.hide(true);
             self.open_browse(None, None, Value::Null);
@@ -451,27 +641,43 @@ impl App {
     // 인덱싱 폴더 추가 — 폴더 고르기 창을 띄워 넣는다. 돌려줌: 안내 글(취소하면 빈 글)
     //------------------------------------------------------------------
     fn add_folder_dialog(&mut self) -> String {
-        let p = match rfd::FileDialog::new().set_title("인덱싱할 폴더 고르기").pick_folder() {
+        let p = match rfd::FileDialog::new().set_title("검색할 폴더 고르기").pick_folder() {
             Some(p) => p.to_string_lossy().into_owned(),
             None => return String::new(),
         };
+        // 드라이브 전체 · 네트워크 · 클라우드 · 시스템 폴더는 넣지 않는다
+        if let Some(why) = folder_check::refusal(&p) {
+            crate::info!("app", "폴더 추가 거절: {} — {}", p, why);
+            return why;
+        }
         let cur = self.current_folders();
         if cur.iter().any(|f| f.to_lowercase() == p.to_lowercase()) {
             return "이미 들어 있는 폴더입니다".into();
         }
+        let first = cur.is_empty();
         let mut v = cur;
         v.push(p.clone());
+        let mut added = false;
         let msg = match self.set_folders(v) {
             Ok(m) => {
                 // 직접 고른 폴더는 새 문서가 많아도 묻지 않고 바로 인덱싱한다
                 if let Some(j) = self.jobs.as_mut() {
                     j.approve_folder(&p, "폴더 추가");
                 }
+                added = true;
                 m
             }
             Err(e) => e,
         };
         self.push_roots();
+        // 첫 폴더 — 환영 화면을 거두고, 아직 안 봤으면 인덱싱이 도는 동안 사용 안내(설계서 §3)
+        if added && first {
+            self.browse.call("setFirstRun", json!(false));
+            if self.s.tour_done < TOUR_VERSION {
+                crate::info!("app", "첫 폴더를 넣었다 — 사용 안내를 시작한다");
+                self.browse.call("startTour", Value::Null);
+            }
+        }
         msg
     }
 
@@ -490,7 +696,7 @@ impl App {
 
     //------------------------------------------------------------------
     // 탐색기 모드 화면 요청 (탐색기 창 · 패널 공통) — 처리했으면 true
-    //   find · preview · preview_hide · pv_rect · open_page · reveal · list_dirs · ask_ai · big · mode
+    //   find · preview · preview_hide · pv_rect · open_page · reveal · list_dirs · brief · brief_cancel · big · mode
     //------------------------------------------------------------------
     fn on_find_ipc(&mut self, to_browse: bool, m: &Value) -> bool {
         match m["type"].as_str().unwrap_or("") {
@@ -525,7 +731,9 @@ impl App {
                         waits = w.is_indexing();
                         // 조건 칩에서 끈 조건 · 넓힌 기간(메타데이터 검색 설계서 §14)을 함께 넘긴다
                         let req = json!({"q": q, "folder": folder, "off": m["off"].as_array().cloned().unwrap_or_default(),
-                                         "widen": m["widen"].as_i64().unwrap_or(0)});
+                                         "widen": m["widen"].as_i64().unwrap_or(0),
+                                         // 모두 찾기 — 그것을 아는 워커에게만(옛 워커는 지금처럼 찾는다)
+                                         "all": m["all"].as_bool().unwrap_or(false) && w.knows("find-all")});
                         let qq = q.clone();
                         w.command(format!("/find {}", worker::ascii_json(&req)), Box::new(move |mut r: Value| {
                             r["q"] = json!(qq);
@@ -560,6 +768,14 @@ impl App {
                 };
                 if to_browse { self.browse.call("notice", json!(msg)) } else { self.panel.notice(&msg) }
             }
+            "properties" => {
+                let path = m["path"].as_str().unwrap_or("");
+                if let Err(e) = win::show_properties(path) {
+                    crate::warn!("browse", "문서 속성을 열지 못했다: {} ({})", path, e);
+                    let msg = format!("문서 속성을 열지 못했습니다: {}", e);
+                    if to_browse { self.browse.call("notice", json!(msg)) } else { self.panel.notice(&msg) }
+                }
+            }
             "reveal" => {
                 let path = m["path"].as_str().unwrap_or("");
                 if let Err(e) = win::reveal(path) {
@@ -572,20 +788,69 @@ impl App {
                 let code = format!("rsb.setDirs({}, {})", json!(path), json!(names));
                 if to_browse { self.browse.js(code) } else { self.panel.js(code) }
             }
-            "ask_ai" => {
+            // AI 답변창 — 화면 목록의 문서를 문서별로 정리한다(다시 검색하지 않는다)
+            "brief" => {
                 let q = match one_line(m["q"].as_str().unwrap_or("")) {
                     Some(q) => q,
                     None => return true,
                 };
-                let folder = m["folder"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
-                crate::info!("browse", "AI 답 요청: {:?} (범위 {:?})", q.chars().take(40).collect::<String>(), folder);
+                crate::info!("browse", "AI 정리 요청: {:?} (후보 {})", q.chars().take(40).collect::<String>(),
+                             m["items"].as_array().map(|a| a.len()).unwrap_or(0));
                 self.ask_to_browse = to_browse;
-                match &self.worker {
-                    Some(w) => w.ask(&q, folder, None, None, false),
-                    None => {
-                        let e = self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into());
-                        if to_browse { self.browse.call("error", json!(e)) } else { self.panel.show_error(&e) }
+                let failed = match &self.worker {
+                    // 이미 떠 있는 옛 워커는 /brief 를 모른다 — 새로 빌드하라고 알린다
+                    Some(w) if w.availability() == "up" && !w.knows("brief") => {
+                        Some("워커가 AI 정리(/brief)를 모릅니다 — simplerag-rs.exe 를 새로 빌드하세요".to_string())
                     }
+                    Some(w) => {
+                        w.brief(&json!({"q": q, "items": m["items"]}));
+                        None
+                    }
+                    None => Some(self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into())),
+                };
+                if let Some(e) = failed {
+                    if to_browse { self.browse.call("error", json!(e)) } else { self.panel.show_error(&e) }
+                }
+            }
+            "brief_cancel" => {
+                if let Some(w) = &self.worker {
+                    w.cancel_brief();
+                }
+            }
+            // 모두 찾기 — 문서들의 나머지 쪽 줄 · 쪽 본문. 결과는 찾기 결과와 같은 길로 돌아와 kind 로 나뉜다
+            "find_doc" | "find_page" => {
+                let kind = if m["type"] == "find_doc" { "doc" } else { "page" };
+                let line = if kind == "doc" {
+                    format!("/find-doc {}", worker::ascii_json(&json!({"kws": m["kws"], "paths": m["paths"]})))
+                } else {
+                    format!("/find-page {}", worker::ascii_json(&json!({"ids": m["ids"]})))
+                };
+                if let Some(w) = &self.worker {
+                    let done = self.find_done.clone();
+                    let req = m.clone();
+                    w.command(line, Box::new(move |mut r: Value| {
+                        r["kind"] = json!(kind);
+                        r["req"] = req;
+                        done.lock().unwrap().push((to_browse, r));
+                    }));
+                }
+            }
+            // 탐색기 화면 상태(창 켜짐 · 묶기 · 정렬 · 창 나눔 · 최근 검색) — 다음 실행에 되살린다
+            "ui_state" => {
+                let v = settings::ui_state_text(&m["state"]);
+                if v != self.s.browse_state {
+                    if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "BrowseState", &v) {
+                        crate::warn!("browse", "화면 상태를 저장하지 못했다: {}", e);
+                    }
+                    self.s.browse_state = v;
+                }
+            }
+            // 모두 찾기 체크 — 이 PC 에 기억한다
+            "find_all" => {
+                let on = m["on"].as_bool().unwrap_or(true);
+                self.s.find_all = on;
+                if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "FindAll", if on { "1" } else { "0" }) {
+                    crate::warn!("browse", "모두 찾기 설정을 저장하지 못했다: {}", e);
                 }
             }
             "big" => {
@@ -601,7 +866,8 @@ impl App {
             // [채팅 모드] · [탐색기 모드] 버튼 — 화면 모드를 바꿔 저장하고 그 모드의 화면으로 옮겨 간다
             "switch_mode" => {
                 let mode = if m["mode"] == "rag" { "rag" } else { "explorer" };
-                self.switch_ui_mode(mode);
+                let folder = m["folder"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                self.switch_ui_mode(mode, folder);
             }
             // 탐색 창 폴더 오른쪽 클릭 — 폴더 열기(그 폴더 안을 보여 준다) · 지금 인덱싱(그 폴더만)
             "open_folder" => {
@@ -650,9 +916,45 @@ impl App {
             Ok(v) => v,
             Err(_) => return,
         };
+        // 사용자가 화면을 쓰는 중 — 쉬는 동안에만 하는 후보 만들기를 미룬다(pv_rect · ui_state 같은 자동 알림은 빼고)
+        if !matches!(m["type"].as_str(), Some("pv_rect") | Some("ui_state") | Some("ready")) {
+            self.t_user = Instant::now();
+        }
         if m["type"] == "ready" {
             self.browse.on_ready();
+            self.browse.call("setManual", json!(Self::manual_path().is_some()));
+            // 이미 검색 폴더가 있는 사람(업데이트)에게는 안내를 자동으로 띄우지 않는다 — [?] 로만
+            if !self.current_folders().is_empty() {
+                self.mark_tour_done();
+            }
             self.push_roots();
+            self.ask_first_folder();
+            return;
+        }
+        // 사용 안내를 끝까지 봤거나 건너뛰었다
+        if m["type"] == "tour_done" {
+            self.mark_tour_done();
+            return;
+        }
+        // [?] → 사용 설명서 열기 — 기본 브라우저로
+        if m["type"] == "open_manual" {
+            let msg = match Self::manual_path() {
+                Some(p) => match win::open_path(&p) {
+                    Ok(()) => "사용 설명서를 열었습니다".to_string(),
+                    Err(e) => format!("사용 설명서를 열지 못했습니다: {}", e),
+                },
+                None => "사용 설명서가 설치 폴더에 없습니다".to_string(),
+            };
+            self.browse.call("notice", json!(msg));
+            return;
+        }
+        // 명령줄 오른쪽 [⚙ 설정] — 트레이 메뉴의 설정과 같은 창. 고를 후보가 있으면 그 탭으로
+        if m["type"] == "settings" {
+            if m["cand"].as_bool().unwrap_or(false) {
+                self.open_candidates();
+            } else {
+                self.show_info();
+            }
             return;
         }
         self.on_find_ipc(true, &m);
@@ -748,7 +1050,7 @@ impl App {
             let why = if !UPLOAD_EXTS.contains(&ext.as_str()) {
                 Some("지원하지 않는 형식입니다".to_string())
             } else if size > UPLOAD_MAX_MB * 1024 * 1024 {
-                Some(format!("{}MB 를 넘습니다 — 인덱싱 폴더에 넣어 쓰세요", UPLOAD_MAX_MB))
+                Some(format!("{}MB 를 넘습니다 — 검색 폴더에 넣어 쓰세요", UPLOAD_MAX_MB))
             } else if n >= UPLOAD_MAX_FILES {
                 Some(format!("대화 하나에 {}개까지 올릴 수 있습니다", UPLOAD_MAX_FILES))
             } else {
@@ -836,7 +1138,7 @@ impl App {
                 }
                 self.update_tooltip();
             }
-            // AI 답은 물은 화면으로(탐색기 창의 "AI에게 묻기" 면 그 창)
+            // 답 · AI 정리는 요청한 화면으로(탐색기 창의 AI 답변창이면 그 창)
             WEvent::Evidence(items, _ms) => self.answer_call("evidence", Value::Array(items)),
             WEvent::Token(t) => self.answer_call("token", json!(t)),
             WEvent::Done(info) => self.answer_call("finish", info),
@@ -857,12 +1159,13 @@ impl App {
 
     fn on_error(&mut self, msg: &str) {
         crate::warn!("app", "오류: {}", msg);
+        let msg = plain_error(msg);
         if self.ask_to_browse && self.browse.visible {
             self.browse.call("error", json!(msg));
         } else if self.panel.visible {
-            self.panel.show_error(msg);
+            self.panel.show_error(&msg);
         } else {
-            self.tray.notify("MoAI-S", msg);
+            self.tray.notify("MoAI-S", &msg);
         }
     }
 
@@ -1028,6 +1331,9 @@ impl App {
             Ok(v) => v,
             Err(_) => return,
         };
+        if m["type"] != "ready" {
+            self.t_user = Instant::now();
+        }
         match m["type"].as_str().unwrap_or("") {
             "ready" => {
                 self.panel.on_ready();
@@ -1044,6 +1350,13 @@ impl App {
                 }
             }
             "ask" => {
+                // 채팅 질문이 먼저다 — 쓰던 AI 정리는 멈추고 그 화면에 알린다
+                if let Some(w) = &self.worker {
+                    if w.cancel_brief() {
+                        let code = "rsb.briefStopped()".to_string();
+                        if self.ask_to_browse { self.browse.js(code) } else { self.panel.js(code) }
+                    }
+                }
                 self.ask_to_browse = false;
                 let q = match one_line(m["text"].as_str().unwrap_or("")) {
                     Some(q) => q,
@@ -1145,6 +1458,13 @@ impl App {
     fn on_tray(&mut self, name: &str) {
         crate::info!("app", "트레이: {}", name);
         match name {
+            // 사전 후보 알림을 눌렀다
+            "candidates" => self.open_candidates(),
+            // 트레이 "사용 안내" — 탐색기 창을 열고 1단계부터
+            "tour" => {
+                self.open_browse(None, None, Value::Null);
+                self.browse.call("startTour", Value::Null);
+            }
             // 화면 열기 — 탐색기 모드면 MoAI 탐색기 창, RAG 모드면 지금처럼 탐색기 옆 패널
             "open" if self.s.ui_mode == "explorer" => self.open_browse(None, None, Value::Null),
             "open" => self.open_panel(),
@@ -1195,6 +1515,31 @@ impl App {
                     self.tray.notify("MoAI-S", &format!("탐색기를 열지 못했습니다: {}", t));
                 }
             }
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 그 폴더를 열고 옆에 패널 띄우기 — 폴더를 이미 보는 탐색기 창이 있으면 그 창을 앞으로, 없으면 새로 연다
+    //   (새 창은 폴더 감시가 알아채 패널을 띄운다). folder 가 없으면 맨 처음 인덱싱 폴더
+    //------------------------------------------------------------------
+    fn open_panel_at(&mut self, folder: Option<String>) {
+        let first = self.scope.lock().unwrap().active.first().cloned();
+        let target = match folder.or(first) {
+            Some(t) => t,
+            None => return self.tray.notify("MoAI-S", SCOPE_WARN),
+        };
+        let norm = |p: &str| p.trim_end_matches(['\\', '/']).to_lowercase();
+        let open = self.monitor.in_scope_windows().into_iter().find(|(_, f)| norm(f) == norm(&target));
+        if let Some((h, f)) = open {
+            win::bring_to_front(h);
+            self.panel.forget_closed(h);
+            self.on_folder(h, Some(f));
+            self.panel.activate();
+            return;
+        }
+        crate::info!("app", "채팅 모드: 폴더를 탐색기로 연다 — {}", target);
+        if win::open_explorer(&target).is_err() {
+            self.tray.notify("MoAI-S", &format!("탐색기를 열지 못했습니다: {}", target));
         }
     }
 
@@ -1361,9 +1706,16 @@ impl App {
         self.refresh_info();
         if !was {
             let (cx, cy) = win::cursor_pos();
-            let (_, _, r, b) = win::work_area_at(cx, cy);
-            let size = self.info.window.outer_size();
-            self.info.window.set_outer_position(tao::dpi::PhysicalPosition::new(r - size.width as i32 - 16, b - size.height as i32 - 16));
+            let (l, t, r, b) = win::work_area_at(cx, cy);
+            // 먼저 그 모니터로 옮긴다 — 배율이 다른 모니터(200% ↔ 100%)면 이때 Windows 가 창 배율을 바꾼다.
+            //   예전에는 옮기기 전 배율로 잰 크기로 자리를 정해, 창이 화면 위로 넘치거나 꽉 찼다
+            self.info.window.set_outer_position(tao::dpi::PhysicalPosition::new(l, t));
+            // 크기는 그 모니터 작업 영역에 맞춘다 — 720×720(논리)을 넘지 않고 높이는 85% 까지(넘치면 안에서 스크롤)
+            let k = self.info.window.scale_factor();
+            let (ww, wh) = ((r - l) as f64 / k, (b - t) as f64 / k);
+            self.info.window.set_inner_size(tao::dpi::LogicalSize::new(INFO_W.min(ww - 32.0), INFO_H.min(wh * 0.85)));
+            let o = self.info.window.outer_size();
+            self.info.window.set_outer_position(tao::dpi::PhysicalPosition::new((r - o.width as i32 - 16).max(l), (b - o.height as i32 - 16).max(t)));
         }
         self.info.window.set_visible(true);
         self.info.window.set_focus();
@@ -1423,6 +1775,7 @@ impl App {
         info["mode_msg"] = json!(self.mode_msg);
         info["page_click"] = json!(self.s.page_click);
         info["folder_icon"] = json!(self.s.folder_icon);
+        info["cand_notify"] = json!(self.s.cand_notify);
         // 동의어 칸 — 후보 만들기가 끝났으면 그 소식을 결과 글로 옮긴다
         if let Some(m) = self.info.syn_done.lock().unwrap().take() {
             self.info.syn_msg = m;
@@ -1581,6 +1934,9 @@ impl App {
             Ok(v) => v,
             Err(_) => return,
         };
+        if m["type"] != "ready" {
+            self.t_user = Instant::now();
+        }
         match m["type"].as_str().unwrap_or("") {
             "ready" => {
                 self.info.ready = true;
@@ -1644,10 +2000,18 @@ impl App {
                 }
                 self.push_roots();
             }
+            // 사전 후보 알림 켜기 · 끄기 — INI [UI] CandidateNotify
+            "cand_notify" => {
+                let on = m["on"].as_bool().unwrap_or(true);
+                self.s.cand_notify = on;
+                if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "CandidateNotify", if on { "1" } else { "0" }) {
+                    crate::warn!("app", "사전 후보 알림 설정을 저장하지 못했다: {}", e);
+                }
+            }
             "folder_icon" => {
                 let on = m["on"].as_bool().unwrap_or(true);
                 self.s.folder_icon = on;
-                self.icon_msg = if on { "인덱싱 폴더 아이콘을 바꾸는 중…".into() } else { "아이콘을 원래대로 돌리는 중…".into() };
+                self.icon_msg = if on { "검색 폴더 아이콘을 바꾸는 중…".into() } else { "아이콘을 원래대로 돌리는 중…".into() };
                 if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "FolderIcon", if on { "1" } else { "0" }) {
                     self.icon_msg = e;
                 }
@@ -1678,7 +2042,15 @@ impl App {
                 };
             }
             "syn_msg" => self.info.syn_msg = m["msg"].as_str().unwrap_or("").to_string(),
-            "syn_suggest" => self.info.syn_msg = self.suggest_synonyms(),
+            "syn_suggest" => {
+                // 직접 만들었으면 지금까지의 놓친 질문은 반영된 것 — 자동 만들기는 여기서부터 센다
+                if let Some(home) = self.data_home() {
+                    self.cand.syn_base = synonyms::counts(&home).0;
+                    self.cand.syn_at = candidates::now();
+                    self.save_cand_state();
+                }
+                self.info.syn_msg = self.suggest_synonyms();
+            }
             // 사람 탭 — [맞음] · [아님] · [빼기] · [나 저장] · [후보 만들기]
             "ppl_approve" | "ppl_reject" | "ppl_remove" | "ppl_me" | "ppl_suggest" => {
                 let a = |k: &str| m[k].as_str().unwrap_or("").trim().to_string();
@@ -1755,7 +2127,7 @@ impl App {
         let norm = |p: &str| p.trim_end_matches(['\\', '/']).to_lowercase();
         let target = norm(path);
         if on && !self.current_folders().iter().any(|r| target.starts_with(&format!("{}\\", norm(r)))) {
-            return Err("인덱싱 폴더의 하위 폴더만 뺄 수 있습니다".into());
+            return Err("검색 폴더의 하위 폴더만 뺄 수 있습니다".into());
         }
         if self.index_running() {
             return Err("인덱싱이 돌고 있습니다 — 끝난 뒤 다시 하세요".into());
@@ -1897,17 +2269,32 @@ impl App {
         self.tray.stop();
         self.panel.close();
         self.browse.hide();
+        self.save_browse_place();
         self.info.window.set_visible(false);
         crate::info!("app", "종료 완료");
+    }
+
+    // 탐색기 창 자리 저장 — INI [UI] BrowseWindow (바뀌었을 때만)
+    fn save_browse_place(&mut self) {
+        let Some(t) = self.browse.place_text() else { return };
+        if t == self.s.browse_window {
+            return;
+        }
+        if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", "BrowseWindow", &t) {
+            crate::warn!("browse", "탐색기 창 자리를 저장하지 못했다: {}", e);
+        }
+        self.s.browse_window = t;
     }
 }
 
 //------------------------------------------------------------------
 // --autorun on|off|status — 부모 콘솔에 결과를 쓰고(없으면 알림 창) 끝낸다
+//   --quiet 를 붙이면 알림 창을 띄우지 않는다 — 설치 · 제거 프로그램이 부를 때 창이 절차를 멈추지 않게
 //------------------------------------------------------------------
 fn autorun_cli(action: &str) -> i32 {
     use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
     let attached = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) }.is_ok();
+    let quiet = std::env::args().any(|a| a == "--quiet");
     let out = |text: &str, modal: bool| {
         crate::info!("autorun", "{}", text);
         if attached {
@@ -1915,7 +2302,7 @@ fn autorun_cli(action: &str) -> i32 {
                 use std::io::Write;
                 let _ = writeln!(f, "{}", text);
             }
-        } else if modal {
+        } else if modal && !quiet {
             rfd::MessageDialog::new().set_title("MoAI-S").set_description(text).show();
         }
     };
@@ -1951,7 +2338,7 @@ fn autorun_cli(action: &str) -> i32 {
             }
         },
         _ => {
-            out("사용법: RAGSearchBox-rs.exe --autorun on|off|status", false);
+            out("사용법: MoAISearch.exe --autorun on|off|status", false);
             2
         }
     }
@@ -1978,7 +2365,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    crate::info!("main", "RAGSearchBox-rs 시작 — 설정 {}", s.ini_path);
+    crate::info!("main", "MoAISearch 시작 — 설정 {}", s.ini_path);
     watcher::set_exts(&s.index_exts);
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -2006,7 +2393,7 @@ fn main() {
 
     // 설정 창
     let iwin = WindowBuilder::new().with_title("MoAI-S 설정").with_visible(false).with_window_icon(icon)
-        .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(760.0, 800.0)).build(&event_loop).expect("설정 창");
+        .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(INFO_W, INFO_H)).build(&event_loop).expect("설정 창");
     let p2 = proxy.clone();
     let iview = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
         .with_html(INFO_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai))
@@ -2019,7 +2406,7 @@ fn main() {
         .build(&event_loop).expect("탐색기 창");
     let p3 = proxy.clone();
     let bview = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
-        .with_html(BROWSE_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai).replace("__LAYOUT__", "window"))
+        .with_html(BROWSE_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai).replace("__LAYOUT__", "window").replace("__UISTATE__", &settings::ui_state_js(&s.browse_state)))
         .with_ipc_handler(move |req| post(&p3, UserEvent::BrowseIpc(req.into_body())))
         .build(&bwin).expect("탐색기 화면");
     let pv = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
@@ -2057,6 +2444,9 @@ fn main() {
     let pm = proxy.clone();
     let monitor = Monitor::start(scope.clone(), s.folder_poll_ms, s.panel_enabled, Arc::new(move |e| post(&pm, UserEvent::Monitor(e))));
     let history_path = history::default_path();
+    // 지난 탐색기 창 자리 — s 는 App 으로 옮겨지므로 먼저 읽어 둔다
+    let browse_place = Browse::parse_place(&s.browse_window);
+    let cand_state = candidates::CandState::parse(&s.cand_state);
     let mut app = App {
         panel: Panel::new(pwin, pview, &s),
         info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
@@ -2082,16 +2472,29 @@ fn main() {
         roots_ver: 0,
         t_roots: Instant::now(),
         t_info: Instant::now(),
+        cand: cand_state,
+        // 처음 점검은 뜬 지 10초 뒤 — [⚙ 설정] 숫자가 곧 보이게
+        t_cand: Instant::now().checked_sub(Duration::from_secs(50)).unwrap_or_else(Instant::now),
+        t_user: Instant::now(),
+        cand_n: usize::MAX,
         quitting: false,
         selftest_done: false,
         up_done: Arc::new(Mutex::new(vec![])),
         up_running: 0,
-        browse: Browse::new(bwin, bview, pv),
+        browse: {
+            // 지난 창 자리 — 처음 보일 때 쓴다
+            let mut b = Browse::new(bwin, bview, pv);
+            b.place = browse_place;
+            b
+        },
         panel_mode: String::new(),
         ask_to_browse: false,
         find_done: Arc::new(Mutex::new(vec![])),
         icon_msg: String::new(),
         mode_msg: String::new(),
+        first_folder_asked: false,
+        load_shown: false,
+        t_load: Instant::now(),
         moai_b64: moai,
     };
     app.panel_mode = app.s.ui_mode.clone();
@@ -2109,6 +2512,10 @@ fn main() {
             Event::WindowEvent { window_id, event: WindowEvent::ScaleFactorChanged { .. }, .. } if window_id == panel_id => {
                 app.panel.dpi_changed_at = Some(Instant::now());
             }
+            // 탐색기 창을 배율이 다른 모니터로 옮겼다 — PDF 미리 보기 자리를 새 배율로
+            Event::WindowEvent { window_id, event: WindowEvent::ScaleFactorChanged { .. }, .. } if window_id == browse_id => {
+                app.browse.dpi_changed();
+            }
             Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
                 if window_id == panel_id {
                     app.panel.close_by_user();
@@ -2116,8 +2523,9 @@ fn main() {
                     app.info.visible = false;
                     app.info.window.set_visible(false);
                 } else if window_id == browse_id {
-                    // 닫기 = 숨기기(트레이에 남는다)
+                    // 닫기 = 숨기기(트레이에 남는다) · 창 자리를 기억한다
                     app.browse.hide();
+                    app.save_browse_place();
                 }
             }
             _ => {}

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoAISearch 설치 파일 빌드 설명서</title>
+<style>
+  :root { --bg:#fff; --fg:#1f2329; --muted:#646b75; --line:#e2e5ea; --soft:#f5f6f8; --accent:#c8102e; --warn-bg:#fff6e5; --warn-line:#e5a93c; --code:#f1f2f5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#17191d; --fg:#e7e9ec; --muted:#9aa1ab; --line:#30343b; --soft:#20232a; --accent:#ff5a6e; --warn-bg:#33291a; --warn-line:#a87a24; --code:#262a31; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.7 "Malgun Gothic","맑은 고딕",system-ui,sans-serif; }
+  main { max-width:860px; margin:0 auto; padding:40px 20px 80px; }
+  h1 { font-size:28px; margin:0 0 6px; }
+  h2 { font-size:21px; margin:44px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  h3 { font-size:17px; margin:26px 0 6px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  nav { background:var(--soft); border-radius:8px; padding:12px 20px; }
+  nav ol { margin:0; padding-left:20px; }
+  a { color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px; font:14px Consolas,monospace; }
+  pre { background:var(--code); padding:12px 14px; border-radius:8px; overflow-x:auto; font:14px/1.55 Consolas,"D2Coding",monospace; }
+  pre code { background:none; padding:0; }
+  table { width:100%; border-collapse:collapse; margin:10px 0; font-size:15px; display:block; overflow-x:auto; }
+  th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:var(--soft); white-space:nowrap; }
+  .warn { background:var(--warn-bg); border-left:4px solid var(--warn-line); padding:10px 14px; border-radius:4px; margin:14px 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>MoAISearch 설치 파일 빌드 설명서</h1>
+<p class="sub">2026-11-02 · Rust 판 기준 · 결과물: <code>dist-rust</code>의 설치 파일 2개</p>
+
+<nav><ol>
+  <li><a href="#s1">한눈에 보기</a></li>
+  <li><a href="#s2">준비: Inno Setup 설치</a></li>
+  <li><a href="#s3">설치 파일 만들기</a></li>
+  <li><a href="#s4">폴더 구성</a></li>
+  <li><a href="#s5">설치 파일에 들어가는 것과 빠지는 것</a></li>
+  <li><a href="#s6">설치된 PC에서 일어나는 일</a></li>
+  <li><a href="#s7">자주 하는 변경</a></li>
+  <li><a href="#s8">배포 전 확인 목록</a></li>
+  <li><a href="#s9">문제가 생기면</a></li>
+</ol></nav>
+
+<h2 id="s1">1. 한눈에 보기</h2>
+<p>명령 두 개로 끝납니다. 첫 번째가 프로그램을 빌드해 <code>dist-rust</code>를 갱신하고, 두 번째가 그 파일을 설치 exe 2개로 묶습니다.</p>
+<table>
+  <tr><th>순서</th><th>명령</th><th>하는 일</th></tr>
+  <tr><td>1</td><td><code>rust\build_dist.ps1</code></td><td>Rust 빌드, <code>dist-rust</code>에 exe · DLL · 모델 배치, 라이선스 문서 생성</td></tr>
+  <tr><td>2</td><td><code>rust\build_installer.ps1</code></td><td>빈 설정 파일을 만들고 Inno Setup으로 설치 exe 2개 생성</td></tr>
+</table>
+<table>
+  <tr><th>설치 파일</th><th>크기</th><th>내용</th><th>대상</th></tr>
+  <tr><td><code>MoAISearch_Setup_0.1.0.exe</code></td><td>1.45GB</td><td>프로그램, 임베딩 · 리랭커, 기본 모델 <code>Qwen3-1.7B</code></td><td>모든 사용자</td></tr>
+  <tr><td><code>MoAISearch_PrecisionModel_Setup_0.1.0.exe</code></td><td>2.5GB</td><td>정밀 모드 모델 <code>Qwen3-4B</code></td><td>정밀 모드를 쓸 사용자만</td></tr>
+</table>
+
+<h2 id="s2">2. 준비: Inno Setup 설치</h2>
+<p>Inno Setup은 Windows 설치 프로그램을 만드는 도구입니다. 빌드하는 PC에만 있으면 되고, 설치 exe를 받는 사용자에게는 필요 없습니다.</p>
+<h3>설치 명령</h3>
+<p>PowerShell에서 아래 명령을 한 번만 실행합니다. 관리자 권한이 필요 없습니다.</p>
+<pre><code>winget install --id JRSoftware.InnoSetup --exact --scope user</code></pre>
+<p>설치 위치는 <code>%LOCALAPPDATA%\Programs\Inno Setup 6</code>입니다. <code>Program Files</code>에 설치해도 빌드 스크립트가 찾습니다.</p>
+<h3>설치 확인</h3>
+<pre><code>Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"</code></pre>
+<p><code>True</code>가 나오면 준비가 끝난 것입니다. <code>ISCC.exe</code>는 Inno Setup의 명령줄 컴파일러이고, 한국어 화면에 쓰는 <code>Languages\Korean.isl</code>이 함께 설치됩니다.</p>
+<h3>그 밖에 필요한 것</h3>
+<table>
+  <tr><th>항목</th><th>쓰임</th></tr>
+  <tr><td>Rust (<code>cargo</code>)</td><td>프로그램 빌드</td></tr>
+  <tr><td>저장소의 <code>.venv</code></td><td>라이선스 문서 생성</td></tr>
+  <tr><td><code>dist\simplerag</code></td><td>모델 · 런타임 DLL · Visual C++ 런타임의 원본(<code>dist-rust</code>에 없을 때 가져옴)</td></tr>
+  <tr><td>디스크 여유 공간</td><td>설치 exe 2개가 약 4GB이므로 D: 드라이브에 5GB 이상</td></tr>
+</table>
+
+<h2 id="s3">3. 설치 파일 만들기</h2>
+<div class="warn">먼저 <b>MoAISearch를 종료</b>합니다. 실행 중이면 exe가 잠겨서 덮어쓰지 못합니다. 트레이 아이콘의 메뉴에서 종료하세요.</div>
+<h3>1단계: 배포 폴더 갱신</h3>
+<p>저장소 루트(<code>D:\Project\SimpleRAG</code>)에서 실행합니다.</p>
+<pre><code>powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1</code></pre>
+<p>끝에 <code>완료 — ...dist-rust</code>가 나오면 성공입니다. ⚠️ 경고가 있으면 내용을 먼저 처리합니다.</p>
+<h3>2단계: 설치 exe 만들기</h3>
+<pre><code>powershell -ExecutionPolicy Bypass -File rust\build_installer.ps1</code></pre>
+<p>이 PC에서는 2개 합쳐 약 90초 걸렸습니다. GGUF 모델은 압축해도 12%밖에 줄지 않아 그대로 저장하고, ONNX 모델과 tokenizer만 압축합니다.</p>
+<h3>결과</h3>
+<pre><code>dist-rust\MoAISearch_Setup_0.1.0.exe                  (1.45GB)
+dist-rust\MoAISearch_PrecisionModel_Setup_0.1.0.exe   (2.5GB)</code></pre>
+
+<h2 id="s4">4. 폴더 구성</h2>
+<h3>저장소</h3>
+<pre><code>D:\Project\SimpleRAG
+├─ rust\
+│  ├─ build_dist.ps1        1단계: 빌드 + dist-rust 배치
+│  ├─ build_installer.ps1   2단계: 설치 exe 만들기
+│  ├─ installer.iss         기본 설치 파일 설정(무엇을 어디에 설치할지)
+│  ├─ installer_precision.iss  정밀 모드 모델 추가 설치 설정
+│  ├─ gen_licenses.py       라이선스 문서 생성
+│  ├─ ragsearchbox\         MoAISearch.exe 소스 (버전은 Cargo.toml)
+│  ├─ simplerag\            simplerag-rs.exe 소스(검색 · 인덱싱 워커)
+│  └─ target\installer\     빈 RAGSearchBox.ini 를 임시로 만드는 곳
+├─ RAGSearchBox\RAGSearchBox.ini   설치 때 쓰는 빈 설정의 원본
+├─ licenses\                모델 · 런타임 라이선스 원문
+├─ dist\simplerag\          Python 판 배포본(모델 · DLL 원본)
+└─ dist-rust\               Rust 판 배포 폴더 + 설치 exe</code></pre>
+<h3>dist-rust</h3>
+<pre><code>dist-rust\
+├─ MoAISearch.exe           화면 · 트레이 프로그램
+├─ simplerag-rs.exe         검색 · 인덱싱 워커
+├─ onnxruntime*.dll, pdfium.dll
+├─ vcruntime140*.dll, msvcp140*.dll, vcomp140.dll
+├─ runtime\                 llama.cpp (llama_cpu · llama_vulkan)
+├─ models\                  임베딩 · 리랭커 · 생성 모델
+├─ LICENSES_MODELS.txt, LICENSES_THIRD_PARTY.txt
+├─ config.yaml, synonyms.default.yaml, people.default.yaml
+├─ RAGSearchBox.ini         이 PC 전용 설정 (설치 exe에 안 들어감)
+├─ rag_index\, bm25_index.bin, meta.sqlite, index_state.json
+│                           이 PC 의 인덱스 (설치 exe에 안 들어감)
+├─ MoAISearch_Setup_0.1.0.exe                 ← 결과물
+└─ MoAISearch_PrecisionModel_Setup_0.1.0.exe  ← 결과물</code></pre>
+
+<h2 id="s5">5. 설치 파일에 들어가는 것과 빠지는 것</h2>
+<p><code>dist-rust</code>에는 개발 PC의 데이터가 섞여 있습니다. 그래서 <code>installer.iss</code>는 폴더를 통째로 묶지 않고 넣을 파일을 하나씩 지정합니다.</p>
+<table>
+  <tr><th>구분</th><th>파일</th><th>이유</th></tr>
+  <tr><td>포함</td><td>exe, DLL, <code>runtime\</code></td><td>실행에 필요</td></tr>
+  <tr><td>포함</td><td><code>e5-small-ko</code>, <code>bge-reranker-base-int8</code>, <code>Qwen3-1.7B</code></td><td>임베딩 · 리랭커 · 기본 모델</td></tr>
+  <tr><td>별도</td><td><code>Qwen3-4B</code></td><td>정밀 모드 전용(2.5GB). 추가 설치 파일에 들어감</td></tr>
+  <tr><td>포함</td><td><code>config.yaml</code>, 기본 사전, 라이선스 문서</td><td>기본 설정과 고지 의무</td></tr>
+  <tr><td>포함</td><td>빈 <code>RAGSearchBox.ini</code></td><td>저장소 원본에서 새로 만든 것. 검색 폴더가 비어 있음</td></tr>
+  <tr><td>제외</td><td><code>rag_index\</code>, <code>bm25_index.*</code>, <code>meta.sqlite</code>, <code>index_state.json</code></td><td><b>문서 내용이 들어 있음</b></td></tr>
+  <tr><td>제외</td><td><code>dist-rust\RAGSearchBox.ini</code></td><td>이 PC의 폴더 경로가 들어 있음</td></tr>
+  <tr><td>제외</td><td><code>people.yaml</code>, <code>synonyms.yaml</code>, <code>synonym_*</code></td><td>사용자 사전과 검색 기록</td></tr>
+  <tr><td>제외</td><td><code>gen_backend.json</code>, <code>uploads\</code></td><td>PC별 측정값, 올린 문서</td></tr>
+</table>
+<div class="warn"><code>installer.iss</code>의 <code>[Files]</code>에 폴더 전체를 넣지 마세요. 인덱스가 설치 exe에 들어가면 문서 내용이 외부로 나갑니다.</div>
+
+<h2 id="s6">6. 설치된 PC에서 일어나는 일</h2>
+<table>
+  <tr><th>항목</th><th>내용</th></tr>
+  <tr><td>설치 위치</td><td><code>%LOCALAPPDATA%\Programs\MoAISearch</code>. 앱이 exe 옆에 인덱스와 설정을 쓰기 때문에 <code>Program Files</code>를 쓰지 않습니다. 관리자 권한이 필요 없습니다.</td></tr>
+  <tr><td>선택 항목</td><td>바탕 화면 바로 가기(기본 켬), 로그인 때 자동 시작(기본 끔)</td></tr>
+  <tr><td>첫 실행</td><td>탐색기 창이 뜨고 "검색 폴더를 지정해 주세요" 안내 뒤 폴더 고르기 창이 열립니다.</td></tr>
+  <tr><td>정밀 모드</td><td>기본 설치에는 모델이 없어, 켜도 기본 모델로 답하고 설정 창에 안내가 나옵니다. 앱을 끄고 추가 설치 파일을 실행하면 설치 폴더의 <code>models</code>에 들어갑니다. 기본 프로그램이 없으면 설치되지 않습니다.</td></tr>
+  <tr><td>업데이트</td><td>새 설치 exe를 실행하면 프로그램만 바뀌고 <code>RAGSearchBox.ini</code>, <code>config.yaml</code>, 인덱스는 유지됩니다.</td></tr>
+  <tr><td>제거</td><td>자동 시작 해제, 폴더 아이콘 복원 후 설치 폴더 전체(인덱스 · 정밀 모델 포함)를 지웁니다. 원본 문서는 건드리지 않습니다.</td></tr>
+  <tr><td>남는 것</td><td><code>%LOCALAPPDATA%\RAGSearchBox-rs</code>의 로그 · 대화 기록은 제거 후에도 남습니다.</td></tr>
+  <tr><td>WebView2</td><td>런타임이 없으면 설치 시작 때 안내합니다. Windows 11에는 기본으로 있습니다.</td></tr>
+</table>
+
+<h2 id="s7">7. 자주 하는 변경</h2>
+<h3>버전 올리기</h3>
+<p><code>rust\ragsearchbox\Cargo.toml</code>의 <code>version</code>을 고치고 1 · 2단계를 다시 실행합니다. 설치 exe 이름에 자동으로 반영됩니다.</p>
+<h3>배포하는 생성 모델 바꾸기</h3>
+<p>아래 파일을 함께 고칩니다. 하나라도 빠지면 경고가 나오거나 라이선스 문서와 실제 파일이 어긋납니다.</p>
+<table>
+  <tr><th>파일</th><th>고칠 곳</th></tr>
+  <tr><td><code>rust\build_dist.ps1</code></td><td>"생성 모델은 배포 대상만 건다" 아래 목록</td></tr>
+  <tr><td><code>rust\gen_licenses.py</code></td><td><code>SHIP_SLLM</code>, 새 모델이면 <code>MODELS</code>와 <code>licenses\models\</code> 원문도</td></tr>
+  <tr><td><code>rust\installer.iss</code></td><td><code>[Files]</code>의 <code>.gguf</code> 줄 (기본 모델)</td></tr>
+  <tr><td><code>rust\installer_precision.iss</code></td><td><code>ModelFile</code> (정밀 모드 모델)</td></tr>
+</table>
+<p>뺀 모델은 <code>dist-rust\models</code>에서도 지워야 합니다.</p>
+<h3>넣을 파일 추가하기</h3>
+<p><code>installer.iss</code>의 <code>[Files]</code>에 한 줄 추가합니다. 사용자가 고칠 수 있는 파일이면 <code>Flags: onlyifdoesntexist</code>를 붙여 업데이트 때 덮어쓰지 않게 합니다.</p>
+
+<h2 id="s8">8. 배포 전 확인 목록</h2>
+<ul>
+  <li><code>build_dist.ps1</code> 끝에 ⚠️ 경고가 없다.</li>
+  <li><code>LICENSES_MODELS.txt</code>의 모델이 설치되는 모델과 같다.</li>
+  <li>새 Windows 계정이나 다른 PC에 설치해 첫 실행, 인덱싱, 검색, AI 답을 확인했다.</li>
+  <li>제거 후 설치 폴더가 사라지는지 확인했다.</li>
+  <li>법무 검토를 받았다(라이선스 문서는 기술 조사 결과입니다).</li>
+</ul>
+<div class="warn"><b>EXAONE은 넣지 마세요.</b> 비상업 라이선스라 상업 배포가 금지됩니다.</div>
+<div class="warn"><b>코드 서명이 없습니다.</b> 서명하지 않은 exe는 다른 PC에서 SmartScreen 경고가 뜰 수 있습니다. 외부에 배포한다면 코드 서명 인증서가 필요합니다.</div>
+<p>Inno Setup은 상업적 사용이 허용된 라이선스이고, 개발사는 상업 사용자에게 유료 라이선스 구매를 요청하고 있습니다.</p>
+
+<h2 id="s9">9. 문제가 생기면</h2>
+<table>
+  <tr><th>증상</th><th>원인과 해결</th></tr>
+  <tr><td>"Inno Setup 6 이 없습니다"</td><td>2장의 설치 명령을 실행합니다.</td></tr>
+  <tr><td>"건너뜀(실행 중이라 잠김)"</td><td>앱이 켜져 있습니다. 트레이에서 종료하고 1단계를 다시 실행합니다.</td></tr>
+  <tr><td>"배포 대상이 아닌 모델이 배포본에 있음"</td><td><code>dist-rust\models</code>에 남은 파일을 지웁니다.</td></tr>
+  <tr><td>"빈 ini 에 폴더 값이 있습니다"</td><td><code>RAGSearchBox\RAGSearchBox.ini</code>의 <code>Folders</code>를 비웁니다.</td></tr>
+  <tr><td><code>Source file ... does not exist</code></td><td><code>dist-rust</code>에 파일이 없습니다. 1단계를 먼저 실행합니다.</td></tr>
+  <tr><td>설치 때 "실행 중입니다"</td><td>대상 PC에서 앱을 종료하고 다시 시도합니다.</td></tr>
+  <tr><td>설치 후 앱 화면이 뜨지 않음</td><td>WebView2 Runtime을 설치합니다. 로그는 <code>%LOCALAPPDATA%\RAGSearchBox-rs\log</code>에 있습니다.</td></tr>
+</table>
+</main>
+</body>
+</html>

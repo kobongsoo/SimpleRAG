@@ -6,7 +6,7 @@ Python 판(`src/simplerag`, `RAGSearchBox`)과 **같은 기능·같은 입출력
 | 실행 파일 | 하는 일 | Python 판 |
 |---|---|---|
 | `simplerag-rs.exe` | index · search · ask · chat(워커) · status · clear · extract · backend · warmup · **import** | `simplerag.exe` |
-| `RAGSearchBox-rs.exe` | 트레이 상주, 탐색기 옆 대화 패널(WebView2), 자동 인덱싱, 설정 창 | `RAGSearchBox.exe` |
+| `MoAISearch.exe` | 트레이 상주, 탐색기 옆 대화 패널(WebView2), 자동 인덱싱, 설정 창 | `RAGSearchBox.exe` |
 
 ## 1. 빌드·배포
 
@@ -39,19 +39,23 @@ rust\
 │   ├─ chunk.rs structure.rs   청킹(fixed · structured · blocks)
 │   ├─ embed.rs          e5 임베더 · bge 리랭커 (onnxruntime.dll 동적 적재)
 │   ├─ store.rs bm25.rs  벡터 저장(sqlite, 메모리 전수 비교) · BM25 역색인
-│   ├─ indexer.rs commands.rs  증분 인덱싱(이동·복사 포함) · 워커 인덱싱 명령(@index)
+│   ├─ indexer.rs commands.rs  증분 인덱싱(이동·복사 포함) · 워커 인덱싱 명령(@index) · 기본 제외 폴더(default_skip_dir)
 │   ├─ retrieve.rs       하이브리드(RRF) · 리랭킹 · 관련도 판정 · Parent-Child
 │   ├─ find.rs           탐색기 모드 찾기 — 문서 ▸ 쪽 ▸ 발췌 (/find · search --group)
+│   ├─ brief.rs          탐색기 모드 AI 정리 — 상위 3건 문서별 요약 · 안전 대체 (/brief)
 │   ├─ generate\         llama.dll FFI · 생성기 · 백엔드(CPU/iGPU) 측정 · 프롬프트 · 표 평문화
 │   ├─ app.rs cli.rs main.rs   병렬 예열 · 2단계 응답 · 명령들
 │   ├─ pdfium.rs pickle.rs xmldom.rs htmlparse.rs pyutil.rs   보조
-└─ ragsearchbox\src\     RAGSearchBox-rs
+└─ ragsearchbox\src\     MoAISearch
     ├─ main.rs           이벤트 루프(tao) · 앱 조립 (app.py)
     ├─ worker.rs         워커 수명 관리 + 출력 해석 (rag_worker.py · chat_parser.py)
     ├─ monitor.rs explorer.rs   탐색기 폴더 추적(Shell COM) · 탐색기에서 보기(UIA)
     ├─ panel.rs win.rs   패널 도킹 · Win32 도우미 (chat_panel.py · dock.py)
     ├─ jobs.rs watcher.rs     자동 인덱싱 · 폴더 감시 (index_jobs.py · watcher.py)
     ├─ browse_win.rs     MoAI 탐색기 창(탐색기 모드) · PDF 미리 보기 WebView · file:// 주소
+    ├─ (uirowse.html)   첫 실행 환영 화면 · 사용 안내 7단계 · [?] 메뉴 — [UI] TourDone
+    ├─ candidates.rs     사전 후보 알림 — 쉬는 동안 동의어 · 이름 별칭 후보 만들기, 새 후보면 하루 한 번 트레이 알림
+    ├─ folder_check.rs   폴더 추가 거르기 — 드라이브 전체 · 네트워크 · 클라우드 · 시스템 폴더
     ├─ folder_icon.rs    인덱싱 폴더(desktop.ini) · 드라이브(HKCU DriveIcons) 아이콘 붙이기 · 되돌리기
     ├─ tray.rs settings.rs history.rs log.rs scope.rs
     └─ ui\panel.html ui\info.html ui\browse.html   패널(RAG) · 설정 창 · 탐색기 모드 화면
@@ -61,7 +65,8 @@ rust\
 
 - **워커 프로토콜이 같습니다** — `질문> ` 프롬프트, `── 근거 N건 (ms)` / `── 답변` / `── 소요` 블록,
   `@ev {json}` 전체 근거 줄(`SIMPLERAG_EVIDENCE_FULL=1`), `@index {json}` · `@index-summary {json}` 결과 줄,
-  `/ask {"q","folder"}` · `/find {"q","folder"}`(Rust 판만 — `@find` · `@find_done` 줄) · `/index-doc` · `/remove-doc` · `/bm25` · `/index-plan` · `/index-outside`, stderr 의 `리랭커 적재 완료`.
+  `/ask {"q","folder"}` · `/find {"q","folder","all"}`(Rust 판만 — `@find` · `@find_done` 줄, `all` 은 모두 찾기) · `/find-doc {"kws","paths"}` · `/find-page {"ids"}` · `/brief {"q","items"}` · `/cancel`(Rust 판만) · `/index-doc` · `/remove-doc` · `/bm25` · `/index-plan` · `/index-outside`, stderr 의 `리랭커 적재 완료`.
+  앱 워커의 `/index-doc` 은 벡터를 모두 뒤로 미룹니다(`index.vectors_background`, 기본 켬). `/bm25 {"merge": false}` 는 라운드 도중 덧붙임만 반영합니다.
   그래서 Python RAGSearchBox 가 `simplerag-rs.exe` 를 워커로 써도(INI `SimpleRagExe`) 동작하도록 맞췄습니다(이 조합은 직접 시험하지 않았습니다).
   stdin 은 UTF-8 을 먼저 읽고, 아니면 cp949 로 풉니다(Python RAGSearchBox 는 cp949 로 보냄).
 - **config.yaml · 환경변수 · index_state.json 모양이 같습니다**(지문·내용 해시·id 범위 규칙 동일).
@@ -77,7 +82,7 @@ rust\
 | 검색(리랭킹 포함) | 질의 12개 상위 결과 모두 같음(Rust 로 만든 인덱스·가져온 인덱스 둘 다) |
 | 답변(iGPU, 1.7B · 0.6B) | 질의 3개 답 글자까지 같음 |
 | chat 워커 | `/help` `/status` `/ask` `@ev` `/index-plan` `/index-doc`(추가·변경 없음·이동) `/remove-doc`(있는 파일 거절) `/bm25` `/index-outside` |
-| RAGSearchBox-rs | 탐색기 감지 → 패널 도킹(탐색기 왼쪽으로 물림) → 워커 기동 → 지정 폴더 밖 확인 → 대조 → 자동 인덱싱 3건 → BM25 → 패널 질문 → 근거·답·소요 줄 표시 → 대화 기록 저장 → 설정 창 → 트레이 '종료'(워커 정상 종료, 탐색기 자리 복원) |
+| MoAISearch | 탐색기 감지 → 패널 도킹(탐색기 왼쪽으로 물림) → 워커 기동 → 지정 폴더 밖 확인 → 대조 → 자동 인덱싱 3건 → BM25 → 패널 질문 → 근거·답·소요 줄 표시 → 대화 기록 저장 → 설정 창 → 트레이 '종료'(워커 정상 종료, 탐색기 자리 복원) |
 
 ## 5. Python 판과 다른 점
 

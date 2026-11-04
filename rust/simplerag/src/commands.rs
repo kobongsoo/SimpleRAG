@@ -76,7 +76,7 @@ pub fn run(app: &App, cmd: &str, arg: &str) -> Map<String, Value> {
         "/index-doc" => index_doc(app, &parse_path(arg)),
         "/remove-doc" => remove_doc(app, &parse_path(arg), parse_value(arg, "outside_of")),
         "/index-outside" => Ok(outside(&parse_value(arg, "roots").and_then(|v| v.as_array().cloned()).unwrap_or_default())),
-        "/bm25" => rebuild_bm25(app),
+        "/bm25" => rebuild_bm25(app, parse_value(arg, "merge").and_then(|v| v.as_bool()).unwrap_or(true)),
         "/index-plan" => Ok(plan(app, &parse_path(arg), truthy(parse_value(arg, "allow_delete")))),
         "/embed-pending" => embed_pending(app, parse_value(arg, "max").and_then(|v| v.as_u64()).unwrap_or(64) as usize),
         _ => Ok(obj(json!({"ok": false, "why": "알 수 없는 명령"}))),
@@ -135,8 +135,8 @@ fn index_doc(app: &App, path: &str) -> Result<Map<String, Value>, String> {
         }
     }
     app.embedder.ensure_loaded()?;
-    // 큰 문서는 벡터를 미룬다 — 한 건 임베딩이 명령 시간 한도(5분)를 넘어 워커가 죽지 않게. /embed-pending 이 채운다
-    let opts = indexer::SyncOpts { defer_over: indexer::defer_over(), ..Default::default() };
+    // 벡터는 뒤로 미룬다 — 문서 처리가 빨리 끝나 찾기가 기다리지 않게. /embed-pending 이 채운다
+    let opts = indexer::SyncOpts { defer_over: indexer::worker_defer_over(), ..Default::default() };
     let r = indexer::sync_doc_with(&path, &fp, &mut st, &app.embedder, &app.store, &mut |_| {}, opts)?;
     let mut out = obj(json!({"ok": r.ok, "path": path, "result": r.op, "chunks": r.chunks, "deferred": r.deferred}));
     if let Some(f) = &r.from {
@@ -181,11 +181,16 @@ fn remove_doc(app: &App, path: &str, outside_of: Option<Value>) -> Result<Map<St
 // BM25 반영 + 고아 청소
 //=> 바뀐 청크만 덧붙이고 지운 청크는 표시만 한다(인덱싱 속도 개선 설계서 §4 — 운영 36초 → ms 단위).
 //   덧붙임 · 지움이 5% 를 넘으면 이때 합친다(전체 다시 만들기). 남은 벡터 대기 청크 수도 알려 준다.
+//   merge=false 는 라운드 도중 반영이다 — 합치기 · 고아 청소 · 메타 마무리는 라운드 끝으로 미룬다.
 //------------------------------------------------------------------
-fn rebuild_bm25(app: &App) -> Result<Map<String, Value>, String> {
-    let mut st = state()?;
+fn rebuild_bm25(app: &App, merge: bool) -> Result<Map<String, Value>, String> {
     let mut logs: Vec<String> = vec![];
     let tok = app.embedder.tokenizer()?;
+    if !merge {
+        let rep = indexer::append_bm25(&app.store, &app.bm25, &tok, &mut |m| logs.push(m.to_string()))?;
+        return Ok(obj(json!({"ok": true, "chunks": rep.chunks, "mode": rep.mode, "pending": app.store.pending_count()?})));
+    }
+    let mut st = state()?;
     let rep = indexer::refresh_bm25(&app.store, &app.bm25, Some(&st), &tok, false, &mut |m| logs.push(m.to_string()))?;
     st.insert("bm25_built_at".into(), pyutil::jf(pyutil::now_ts()));
     indexer::save_state(&st)?;

@@ -29,6 +29,13 @@ pub const RERANK_N: usize = 12;
 const RERANK_BATCH: usize = 4;
 const LOCATE_TOP: usize = 15;      // 옛 인덱스 쪽 보정은 점수 상위 이만큼만(PDF 를 읽어야 해서 느리다)
 pub const MAX_DOCS: usize = 20;    // 내보낼 문서 수 상한
+// 모두 찾기(모두 찾기 설계서) — 문서마다 먼저 보낼 쪽 줄 수 · 비슷한 내용 묶음 상한 · 쪽 줄에 싣는 청크 id 수
+pub const FIRST_PAGES: usize = 5;
+pub const SIMILAR_MAX: usize = 20;
+const PAGE_IDS: usize = 8;
+// 본문이 같으면 점수를 함께 쓰는 최소 길이(공백 뺀 글자) — 이보다 짧은 글(별표1 · 표 머리글)은
+//   관계없는 문서끼리도 같을 수 있어 묶지 않는다
+const SAME_BODY_MIN: usize = 50;
 const SNIP_CHARS: usize = 120;     // 발췌 길이(글자)
 const SNIP_LEAD: usize = 30;       // 발췌 창에서 첫 검색어 앞에 남길 글자
 const PDF_CACHE: usize = 8;        // 쪽 보정용 PDF 본문 캐시(문서 수)
@@ -40,11 +47,40 @@ const LOCATE_CHARS: usize = 40;    // 쪽 보정 때 대조할 청크 첫머리 
 //        low = 관련도 문턱 아래 / page·exact = 쪽과 그 쪽이 확실한지
 //------------------------------------------------------------------
 struct Hit {
+    id: i64,
     payload: Payload,
     score: f64,
     low: bool,
     page: Option<i64>,
     exact: bool,
+}
+
+//------------------------------------------------------------------
+// 채점할 청크 고르기 — 후보 순서대로 서로 다른 본문 n 개
+//=> 같은 문서의 복사본은 후보 순위가 흩어져 일부만 채점되고, 앞쪽 칸도 같은 글로 찬다.
+//   접두 "[문서 > 절]" 과 공백을 뺀 본문이 같으면 한 청크로 보고 점수를 함께 쓴다(이름만 다른 복사본도 묶인다).
+//
+// -in: texts = 후보 청크 글(후보 순서) / n = 채점할 수
+// -out: (채점할 후보 번호들, 후보마다 채점 목록의 몇 번째 점수를 쓸지 — 없으면 None)
+//------------------------------------------------------------------
+fn pick_rerank(texts: &[&str], n: usize) -> (Vec<usize>, Vec<Option<usize>>) {
+    let mut reps: Vec<usize> = vec![];
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut rep_of: Vec<Option<usize>> = vec![None; texts.len()];
+    for (i, text) in texts.iter().enumerate() {
+        let body: String = split_prefix(text).0.chars().filter(|c| !c.is_whitespace()).collect();
+        let key = (body.chars().count() >= SAME_BODY_MIN).then_some(body);
+        if let Some(r) = key.as_ref().and_then(|k| seen.get(k)) {
+            rep_of[i] = Some(*r);
+        } else if reps.len() < n {
+            rep_of[i] = Some(reps.len());
+            if let Some(k) = key {
+                seen.insert(k, reps.len());
+            }
+            reps.push(i);
+        }
+    }
+    (reps, rep_of)
 }
 
 //------------------------------------------------------------------
@@ -64,7 +100,22 @@ pub fn find(r: &Retriever, query: &str, folder: Option<&str>, limit: usize) -> R
 //------------------------------------------------------------------
 pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
                  opts: &crate::meta::query::PlanOpts) -> Result<(Vec<Value>, Value), String> {
+    find_core(r, query, folder, limit, opts, false)
+}
+
+//------------------------------------------------------------------
+// 찾기 본체 — all 이면 모두 찾기의 바탕(상한 없음 · 쪽 줄은 본문 대신 청크 id)
+//
+// -in: r · query · folder · limit · opts = find_with 와 같음 / all = 모두 찾기의 바탕으로 쓰나
+//
+// -out: (줄 목록, 마침 줄)
+// -out: error = 검색 실패 문자열
+//------------------------------------------------------------------
+fn find_core(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
+             opts: &crate::meta::query::PlanOpts, all: bool) -> Result<(Vec<Value>, Value), String> {
     let t0 = Instant::now();
+    // 모두 찾기는 문서 · 이름 일치 상한을 두지 않는다
+    let cap = |n: usize| if all { usize::MAX } else { n };
     let pool = if limit == 0 { POOL } else { limit };
     // 메타데이터 조건(메타데이터 검색 설계서 §13) — 조건이 없는 질의는 mp 가 None 이라 예전과 똑같다
     let mp = crate::retrieve::meta_plan_opts(query, folder, opts);
@@ -73,7 +124,7 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
         crate::meta::query::rows(&crate::meta::store::default_path(&home)).ok()
     });
     if let Some(p) = mp.as_ref().filter(|p| p.meta_only) {
-        return Ok(find_meta_only(p, meta_rows.as_deref(), folder, t0));
+        return Ok(find_meta_only(p, meta_rows.as_deref(), folder, t0, cap(MAX_DOCS)));
     }
     let query: &str = mp.as_ref().map(|p| p.query.as_str()).unwrap_or(query);
     let docs = mp.as_ref().and_then(|p| p.docs.as_ref());
@@ -88,16 +139,18 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
     let env_n = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(d);
     let rerank_n = env_n("SIMPLERAG_FIND_RERANK", RERANK_N);
     let batch = env_n("SIMPLERAG_FIND_BATCH", RERANK_BATCH).max(1);
-    let n_rr = if rr.is_some() { chunks.len().min(rerank_n) } else { 0 };
+    // 본문이 같은 청크는 한 번만 채점해 점수를 함께 쓴다 — 복사본이 채점 칸을 차지하지 않게
+    let (reps, rep_of) = pick_rerank(&chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), if rr.is_some() { rerank_n } else { 0 });
+    let n_rr = reps.len();
     let mut scores: Vec<Option<f64>> = vec![None; chunks.len()];
     let mut rerank_ms = 0.0;
     if let Some(rr) = &rr {
         if n_rr > 0 {
             let t = Instant::now();
-            let texts: Vec<String> = chunks[..n_rr].iter().map(|c| c.text.clone()).collect();
+            let texts: Vec<String> = reps.iter().map(|&i| chunks[i].text.clone()).collect();
             if let Ok(s) = rr.score_batched(query, &texts, batch) {
-                for (i, v) in s.into_iter().enumerate() {
-                    scores[i] = Some(v as f64);
+                for (i, r) in rep_of.iter().enumerate() {
+                    scores[i] = r.and_then(|r| s.get(r)).map(|v| *v as f64);
                 }
             }
             rerank_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -122,7 +175,7 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
             (None, _) => false,
             _ => false,
         };
-        hits.push(Hit { payload: pl, score, low, page: None, exact: false });
+        hits.push(Hit { id: c.id, payload: pl, score, low, page: None, exact: false });
     }
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     // 쪽 정하기 — 옛 인덱스 보정(PDF 읽기)은 점수 상위 LOCATE_TOP 개만
@@ -153,7 +206,7 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
     let mut n_places = 0usize;
     let mut n_low = 0usize;
     let mut seen: Vec<String> = vec![];
-    for (di, key) in order.iter().take(MAX_DOCS).enumerate() {
+    for (di, key) in order.iter().take(cap(MAX_DOCS)).enumerate() {
         let v = &groups[key];
         let no = di + 1;
         let name = pl_str(&v[0].payload, "doc_name").to_string();
@@ -186,20 +239,26 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
             };
             let (snippet, marks) = snippet(&body, &kws);
             n_places += 1;
-            lines.push(json!({
+            let mut pl = json!({
                 "doc": no, "page": pg, "page_to": best.payload.get("page_to").cloned().unwrap_or(Value::Null),
                 "exact": best.exact, "section": section, "score": round2(best.score), "low": best.low,
                 "snippet": snippet, "marks": marks, "more": hs.len() - 1,
                 // 글 미리 보기(PDF 아닌 문서 · 설계서 §14-③ C)에 쓰는 청크 본문 — 이 쪽의 청크들을 이어서
-                "text": hs.iter().take(3).map(|h| clean_body(&split_prefix(pl_str(&h.payload, "text")).0)).collect::<Vec<_>>().join("\n…\n"),
+                "text": hs.iter().map(|h| clean_body(&split_prefix(pl_str(&h.payload, "text")).0)).collect::<Vec<_>>().join("\n…\n"),
                 "chunk_idx": best.payload.get("chunk_idx").cloned().unwrap_or(Value::Null),
-            }));
+            });
+            if all {
+                // 모두 찾기는 줄이 많아 본문 대신 청크 id 를 싣고, 쪽을 고를 때 /find-page 로 본문을 받는다
+                pl.as_object_mut().unwrap().remove("text");
+                pl["ids"] = json!(hs.iter().take(PAGE_IDS).map(|h| h.id).collect::<Vec<_>>());
+            }
+            lines.push(pl);
         }
     }
     // ── 이름만 맞은 문서 — 내용 후보에 없어도 "파일 이름 일치" 묶음에 보이게(이름 일치 상위 5개)
     let mut name_only = 0;
     for (key, meta) in docs_state.iter() {
-        if name_only >= 5 || seen.contains(key) {
+        if name_only >= cap(5) || seen.contains(key) {
             continue;
         }
         // 메타데이터 조건이 문서를 좁혔으면 이름 일치도 그 안에서만
@@ -231,7 +290,7 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
         };
         keys.sort_by(|a, b| hits(b).cmp(&hits(a)).then(a.cmp(b)));
         for key in keys {
-            if extra >= 5 {
+            if extra >= cap(5) {
                 break;
             }
             let name = pyutil::basename(key).to_string();
@@ -269,6 +328,269 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
 }
 
 //------------------------------------------------------------------
+// 모두 찾기의 문서 하나 (묶기 · 정렬용)
+// -필드: key = 문서 경로 / doc · pages = 문서 줄과 보낼 쪽 줄 / tier = 0 이름·조건, 1 모두 포함, 2 일부 포함, 3 비슷한 내용
+//        matched · nhits = 맞은 낱말 수 · 맞은 청크 수 / score = 리랭킹 문서 점수(없으면 None) / left = 더 있는 쪽 수
+//------------------------------------------------------------------
+struct Entry {
+    key: String,
+    doc: Value,
+    pages: Vec<Value>,
+    tier: u8,
+    matched: u32,
+    nhits: usize,
+    score: Option<f64>,
+    left: usize,
+}
+
+//------------------------------------------------------------------
+// 글자 일치 청크들로 쪽 줄 하나 만들기
+//
+// -in: no = 문서 번호 / ids = 같은 쪽의 청크 id(맞은 순) / pls = 그 payload 들 / kws = 핵심 낱말
+//
+// -out: 쪽 줄(본문 없이 청크 id 를 싣는다)
+// -out: error = 없음
+//------------------------------------------------------------------
+fn scan_page_line(no: usize, ids: &[i64], pls: &HashMap<i64, Payload>, kws: &[String]) -> Value {
+    let empty = Payload::new();
+    let best = pls.get(&ids[0]).unwrap_or(&empty);
+    let (body, prefix_sec) = split_prefix(pl_str(best, "text"));
+    let body = clean_body(&body);
+    let section = match best.get("path").and_then(|p| p.as_array()) {
+        Some(a) if !a.is_empty() => a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" › "),
+        _ => prefix_sec,
+    };
+    let (snip, marks) = snippet(&body, kws);
+    let (pg, exact) = chunk_page(best, false);
+    json!({
+        "doc": no, "page": pg, "page_to": best.get("page_to").cloned().unwrap_or(Value::Null),
+        "exact": exact, "section": section, "score": Value::Null, "low": false,
+        "snippet": snip, "marks": marks, "more": ids.len() - 1,
+        "chunk_idx": best.get("chunk_idx").cloned().unwrap_or(Value::Null),
+        "ids": ids.iter().take(PAGE_IDS).copied().collect::<Vec<_>>(),
+    })
+}
+
+//------------------------------------------------------------------
+// 글자 일치 청크를 쪽별로 묶기 → [(쪽, 청크 id 들)] 맞은 청크가 많은 쪽부터
+//
+// -in: ids = 한 문서의 글자 일치 청크 / pls = 그 payload 들
+//
+// -out: 쪽 목록 (쪽을 모르면 None 하나로 모인다)
+// -out: error = 없음
+//------------------------------------------------------------------
+fn pages_of(ids: &[i64], pls: &HashMap<i64, Payload>) -> Vec<(Option<i64>, Vec<i64>)> {
+    let mut order: Vec<Option<i64>> = vec![];
+    let mut by: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
+    for id in ids {
+        let pg = pls.get(id).map(|p| chunk_page(p, false).0).unwrap_or(None);
+        if !by.contains_key(&pg) {
+            order.push(pg);
+        }
+        by.entry(pg).or_default().push(*id);
+    }
+    let mut v: Vec<(Option<i64>, Vec<i64>)> = order.into_iter().map(|p| { let ids = by.remove(&p).unwrap_or_default(); (p, ids) }).collect();
+    // 맞은 청크가 많은 쪽부터, 같으면 앞쪽부터 — 안정 정렬이라 같은 수는 문서 순서를 지킨다
+    v.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    v
+}
+
+//------------------------------------------------------------------
+// 모두 찾기 (모두 찾기 설계서 §3 · §7)
+//=> 지금 찾기의 결과에 본문 글자 일치 문서를 더해 묶는다.
+//    1) 지금 찾기(하이브리드 · 리랭킹)를 상한 없이 돌린다 — 쪽 줄은 본문 없이 청크 id 만
+//    2) 메모리 본문에서 핵심 낱말이 든 청크를 모두 찾는다(폴더 · 조건 범위 안)
+//    3) 문서마다 맞은 낱말 수로 ① 모두 포함 ② 일부 포함, 글자 일치 없이 1)에만 있으면 ③ 비슷한 내용(최대 SIMILAR_MAX)
+//    4) 문서마다 쪽 줄은 앞 FIRST_PAGES 개만 보내고 남은 수를 pages_left 로 알린다
+//
+// -in: r = 검색기 / query = 검색어 / folder = 범위 폴더 / opts = 조건 칩
+//
+// -out: (줄 목록, 마침 줄 — all · tiers · kws 포함)
+// -out: error = 검색 실패 문자열
+//------------------------------------------------------------------
+pub fn find_all_docs(r: &Retriever, query: &str, folder: Option<&str>,
+                opts: &crate::meta::query::PlanOpts) -> Result<(Vec<Value>, Value), String> {
+    let t0 = Instant::now();
+    let (lines, mut done) = find_core(r, query, folder, 0, opts, true)?;
+    done["all"] = json!(true);
+    // 조건만 있는 질의는 본문 낱말이 없다 — 조건에 맞는 문서를 상한 없이 그대로
+    if done["meta"]["meta_only"].as_bool() == Some(true) {
+        return Ok((lines, done));
+    }
+    let mp = crate::retrieve::meta_plan_opts(query, folder, opts);
+    let q2 = mp.as_ref().map(|p| p.query.clone()).unwrap_or_else(|| query.to_string());
+    let kws = keywords(&q2);
+    done["kws"] = json!(kws);
+    if kws.is_empty() {
+        return Ok((lines, done));
+    }
+    // 폴더 범위 · 조건 범위는 지금 찾기와 같게
+    let allow = match (mp.as_ref().and_then(|p| p.docs.as_ref()), folder) {
+        (Some(d), f) => Some(r.store.docs_scope(d, f)?.1),
+        (None, Some(f)) => Some(r.store.folder_scope(f)?.1),
+        _ => None,
+    };
+    let t_scan = Instant::now();
+    let found = r.store.scan_words(&kws, allow.as_ref())?;
+    let scan_ms = t_scan.elapsed().as_secs_f64() * 1000.0;
+    let full = (1u32 << kws.len().min(32)) - 1;
+    let mut by_doc: HashMap<String, (u32, Vec<i64>)> = HashMap::new();
+    for (id, mask, doc) in &found {
+        let e = by_doc.entry(doc.clone()).or_insert((0, vec![]));
+        e.0 |= mask;
+        e.1.push(*id);
+    }
+    let all_ids: Vec<i64> = found.iter().map(|x| x.0).collect();
+    let pls = r.store.payloads(&all_ids)?;
+
+    // 지금 찾기 결과를 문서별로
+    let mut entries: Vec<Entry> = vec![];
+    for l in lines {
+        if l.get("page").is_none() {
+            let key = l["doc_path"].as_str().unwrap_or("").to_string();
+            let score = l["score"].as_f64();
+            entries.push(Entry { key, doc: l, pages: vec![], tier: 0, matched: 0, nhits: 0, score, left: 0 });
+        } else if let Some(e) = entries.last_mut() {
+            e.pages.push(l);
+        }
+    }
+    let state = indexer::load_state();
+    let docs_state = indexer::docs(&state);
+    let meta_rows = mp.as_ref().and_then(|_| {
+        let home = crate::meta::hook::data_dir();
+        crate::meta::query::rows(&crate::meta::store::default_path(&home)).ok()
+    });
+    let known: std::collections::HashSet<String> = entries.iter().map(|e| e.key.clone()).collect();
+    for (key, (_, ids)) in by_doc.iter() {
+        if known.contains(key) {
+            continue;
+        }
+        let meta = docs_state.get(key);
+        let name = meta.and_then(|m| m.get("name")).and_then(|v| v.as_str()).map(|s| s.to_string())
+            .unwrap_or_else(|| pyutil::basename(key).to_string());
+        let mut dl = doc_line(0, key, &name, &kws, &q2, meta, None, false, ids.len());
+        add_meta(&mut dl, key, meta_rows.as_deref());
+        entries.push(Entry { key: key.clone(), doc: dl, pages: vec![], tier: 0, matched: 0, nhits: 0, score: None, left: 0 });
+    }
+
+    // 묶음 정하기 · 쪽 줄 채우기
+    for e in entries.iter_mut() {
+        match by_doc.get(&e.key) {
+            Some((mask, ids)) => {
+                e.tier = if *mask & full == full { 1 } else { 2 };
+                e.matched = mask.count_ones();
+                e.nhits = ids.len();
+                // 지금 찾기가 낸 쪽(점수 있음)은 그대로 앞에, 글자 일치 쪽은 그 뒤에 — 문서마다 앞 FIRST_PAGES 개
+                let have: std::collections::HashSet<Option<i64>> = e.pages.iter().map(|p| p["page"].as_i64()).collect();
+                let more: Vec<(Option<i64>, Vec<i64>)> = pages_of(ids, &pls).into_iter().filter(|(p, _)| !have.contains(p)).collect();
+                let total = e.pages.len() + more.len();
+                for (_, pids) in more.iter().take(FIRST_PAGES.saturating_sub(e.pages.len())) {
+                    e.pages.push(scan_page_line(0, pids, &pls, &kws));
+                }
+                e.left = total - e.pages.len();
+            }
+            // 글자 일치 없이 지금 찾기에만 — 쪽 줄이 있으면 비슷한 내용, 없으면 이름 · 조건 일치
+            None => e.tier = if e.pages.is_empty() { 0 } else { 3 },
+        }
+    }
+    // 리랭킹 점수가 있는 문서 먼저(점수 순), 그다음 맞은 낱말 · 청크가 많은 문서
+    let rank = |e: &Entry| -> (u8, i64, i64, i64) {
+        let scored = e.score.filter(|s| *s > -50.0);
+        (e.tier, if scored.is_some() { 0 } else { 1 }, -((scored.unwrap_or(0.0) * 1000.0) as i64), -((e.matched as i64) * 1_000_000 + e.nhits as i64))
+    };
+    let mut idx: Vec<usize> = (0..entries.len()).collect();
+    idx.sort_by_key(|&i| { let r = rank(&entries[i]); (r.0, if r.0 == 0 || r.0 == 3 { (0, 0, 0) } else { (r.1, r.2, r.3) }) });
+    let mut out: Vec<Value> = vec![];
+    let (mut tiers, mut places, mut similar) = ([0usize; 3], 0usize, 0usize);
+    for i in idx {
+        let e = &mut entries[i];
+        if e.tier == 3 {
+            similar += 1;
+            if similar > SIMILAR_MAX {
+                continue;
+            }
+        }
+        if (1..=3).contains(&e.tier) {
+            tiers[(e.tier - 1) as usize] += 1;
+        }
+        let no = out.iter().filter(|l| l.get("page").is_none()).count() + 1;
+        e.doc["doc"] = json!(no);
+        e.doc["tier"] = json!(e.tier);
+        e.doc["matched"] = json!(e.matched);
+        e.doc["pages_left"] = json!(e.left);
+        if e.nhits > 0 {
+            e.doc["hits"] = json!(e.nhits);
+        }
+        places += e.pages.len() + e.left;
+        out.push(e.doc.take());
+        for mut p in e.pages.drain(..) {
+            p["doc"] = json!(no);
+            out.push(p);
+        }
+    }
+    done["docs"] = json!(out.iter().filter(|l| l.get("page").is_none()).count());
+    done["places"] = json!(places);
+    done["tiers"] = json!(tiers);
+    done["scan_ms"] = json!(scan_ms.round());
+    done["ms"] = json!((t0.elapsed().as_secs_f64() * 1000.0).round());
+    Ok((out, done))
+}
+
+//------------------------------------------------------------------
+// 모두 찾기 — 문서들의 나머지 쪽 줄 (＋ 더 보기 · 쪽 목록)
+//=> 그 문서들 안에서 낱말이 든 청크를 다시 찾아 모든 쪽 줄을 낸다. 줄마다 doc_path 를 단다.
+//
+// -in: r = 검색기 / kws = 핵심 낱말(모두 찾기 마침 줄의 kws) / paths = 문서 경로들
+//
+// -out: (쪽 줄 목록, 마침 줄 {"pages": n})
+// -out: error = 저장소 읽기 실패 문자열
+//------------------------------------------------------------------
+pub fn find_doc_pages(r: &Retriever, kws: &[String], paths: &[String]) -> Result<(Vec<Value>, Value), String> {
+    let t0 = Instant::now();
+    if kws.is_empty() || paths.is_empty() {
+        return Ok((vec![], json!({"pages": 0, "ms": 0})));
+    }
+    let want: std::collections::HashSet<String> = paths.iter().cloned().collect();
+    let (_, allow) = r.store.docs_scope(&want, None)?;
+    let found = r.store.scan_words(kws, Some(&allow))?;
+    let ids: Vec<i64> = found.iter().map(|x| x.0).collect();
+    let pls = r.store.payloads(&ids)?;
+    let mut order: Vec<String> = vec![];
+    let mut by_doc: HashMap<String, Vec<i64>> = HashMap::new();
+    for (id, _, doc) in &found {
+        if !by_doc.contains_key(doc) {
+            order.push(doc.clone());
+        }
+        by_doc.entry(doc.clone()).or_default().push(*id);
+    }
+    let mut out = vec![];
+    for doc in order {
+        for (_, pids) in pages_of(&by_doc[&doc], &pls) {
+            let mut l = scan_page_line(0, &pids, &pls, kws);
+            l["doc_path"] = json!(doc);
+            out.push(l);
+        }
+    }
+    let done = json!({"pages": out.len(), "ms": (t0.elapsed().as_secs_f64() * 1000.0).round()});
+    Ok((out, done))
+}
+
+//------------------------------------------------------------------
+// 쪽 본문 — 쪽을 고를 때 글 미리 보기에 쓴다(모두 찾기 쪽 줄은 본문을 싣지 않는다)
+//
+// -in: r = 검색기 / ids = 그 쪽의 청크 id 들
+//
+// -out: (줄 하나 {"text"}, 마침 줄)
+// -out: error = 저장소 읽기 실패 문자열
+//------------------------------------------------------------------
+pub fn page_text(r: &Retriever, ids: &[i64]) -> Result<(Vec<Value>, Value), String> {
+    let pls = r.store.payloads(ids)?;
+    let text = ids.iter().filter_map(|i| pls.get(i))
+        .map(|p| clean_body(&split_prefix(pl_str(p, "text")).0)).collect::<Vec<_>>().join("\n…\n");
+    Ok((vec![json!({"text": text})], json!({"ok": true})))
+}
+
+//------------------------------------------------------------------
 // 조건만 있는 질의 — 본문 검색 없이 조건에 맞는 문서 줄만 (§13-2)
 //=> 계획의 순서(가산 · 수정일)로 MAX_DOCS 개. 쪽 줄은 없다(어느 쪽이 맞았는지 알 수 없으므로).
 //
@@ -276,12 +598,12 @@ pub fn find_with(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
 // -out: (문서 줄들, 마침 줄 — meta.meta_only = true)
 //------------------------------------------------------------------
 fn find_meta_only(mp: &crate::meta::query::Plan, rows: Option<&crate::meta::query::Cached>, folder: Option<&str>,
-                  t0: Instant) -> (Vec<Value>, Value) {
+                  t0: Instant, max_docs: usize) -> (Vec<Value>, Value) {
     let state = indexer::load_state();
     let docs_state = indexer::docs(&state);
     let mut lines = vec![];
     for key in mp.order.iter() {
-        if lines.len() >= MAX_DOCS {
+        if lines.len() >= max_docs {
             break;
         }
         // 폴더 한정은 계획에서 이미 걸렀지만, 인덱스에 없는 문서(메타만 남은 것)는 상태 파일 이름으로 보인다
@@ -385,7 +707,7 @@ fn squash(s: &str) -> String {
 //------------------------------------------------------------------
 // 청크 앞 접두 "[문서 > 절]\n" 떼기 → (본문, 접두 속 절 경로)
 //------------------------------------------------------------------
-fn split_prefix(text: &str) -> (String, String) {
+pub fn split_prefix(text: &str) -> (String, String) {
     if text.starts_with('[') {
         if let Some(i) = text.find("]\n") {
             let inner = &text[1..i];
@@ -401,7 +723,7 @@ fn split_prefix(text: &str) -> (String, String) {
 // 본문 속 접두 줄 빼기 — 작은 절 여럿을 묶은 청크는 절마다 "[문서 > 절]" 줄이 중간에 들어 있다
 //   ("[별표 1]" 같은 진짜 본문은 " > " 가 없어 남는다)
 //------------------------------------------------------------------
-fn clean_body(body: &str) -> String {
+pub fn clean_body(body: &str) -> String {
     body.lines().filter(|l| {
         let t = l.trim();
         !(t.starts_with('[') && t.ends_with(']') && t.contains(" > "))
@@ -573,6 +895,27 @@ pub fn error_line(e: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_body_scored_once() {
+        let body = "숙박비는 숙박일수에 따라 계산하며, 기산은 오전 0시를 경과함으로써 1박으로 하며, 숙박이 다른 출장목적지로의 이동 중 이루어졌을 경우";
+        let (a, b, spaced) = (format!("[규정A > 4.1]\n{}", body), format!("[규정B > 4.1]\n{}", body), format!("[규정C]\n{}", body.replace(' ', "  ")));
+        let other = format!("[규정A > 5]\n다른 조항 {}", body);
+        // 접두 · 공백만 다른 청크는 앞 청크의 점수를 함께 쓰고, 칸을 차지하지 않는다
+        let (reps, of) = pick_rerank(&[&a, &b, &other, &spaced], 2);
+        assert_eq!(reps, vec![0, 2]);
+        assert_eq!(of, vec![Some(0), Some(0), Some(1), Some(0)]);
+        // 칸이 다 차도 이미 채점한 본문의 복사본은 점수를 받고, 새 본문은 채점되지 않는다
+        let (reps, of) = pick_rerank(&[&a, &other, &b], 1);
+        assert_eq!(reps, vec![0]);
+        assert_eq!(of, vec![Some(0), None, Some(0)]);
+        // 짧은 글은 본문이 같아도 묶지 않는다
+        let (reps, of) = pick_rerank(&["[가]\n별표1", "[나]\n별표1"], 2);
+        assert_eq!(reps, vec![0, 1]);
+        assert_eq!(of, vec![Some(0), Some(1)]);
+        // 리랭커가 없으면(n=0) 아무것도 채점하지 않는다
+        assert_eq!(pick_rerank(&[&a, &b], 0).0.len(), 0);
+    }
 
     #[test]
     fn snippet_marks_keyword() {

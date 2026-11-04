@@ -71,6 +71,16 @@ fn from_blob(b: &[u8]) -> Vec<f32> {
     b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
+// 영문 낱말이 단어로 들어 있나 — 앞뒤가 영문 · 숫자가 아니어야 한다(한글이 붙은 "AI기반" 은 맞음)
+fn contains_word(hay: &str, w: &str) -> bool {
+    let b = hay.as_bytes();
+    hay.match_indices(w).any(|(i, _)| {
+        let before = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+        let after = i + w.len() >= b.len() || !b[i + w.len()].is_ascii_alphanumeric();
+        before && after
+    })
+}
+
 // payload 의 문자열 값
 pub fn pl_str<'a>(p: &'a Payload, k: &str) -> &'a str {
     p.get(k).and_then(|v| v.as_str()).unwrap_or("")
@@ -376,6 +386,52 @@ impl VectorStore {
     //------------------------------------------------------------------
     // 점들의 본문 (없는 id 는 빈 글)
     //------------------------------------------------------------------
+    //------------------------------------------------------------------
+    // 본문 글자 훑기 (모두 찾기 설계서 §7)
+    //=> 메모리에 올린 청크 본문에서 낱말이 글자 그대로 든 청크를 찾는다.
+    //    1) 앞 접두 "[문서 > 절]" 줄은 빼고 본다 — 문서 이름만 맞는 청크가 모두 걸리지 않게
+    //    2) 영문이 섞인 낱말이 있으면 대소문자를 가리지 않는다
+    //
+    // -in: words = 찾을 낱말(앞 32개까지) / allow = 이 id 들 안에서만(None = 전부)
+    //
+    // -out: [(청크 id, 맞은 낱말 비트, 문서 경로)]
+    // -out: error = 적재 실패면 Err
+    //------------------------------------------------------------------
+    pub fn scan_words(&self, words: &[String], allow: Option<&HashSet<i64>>) -> Result<Vec<(i64, u32, String)>, String> {
+        let ws: Vec<String> = words.iter().take(32).map(|w| w.to_ascii_lowercase()).collect();
+        let fold = ws.iter().any(|w| w.bytes().any(|b| b.is_ascii_alphabetic()));
+        // 영문 · 숫자로만 된 낱말은 단어 경계로 — "ai" 가 "maintain" 안에서 걸리지 않게
+        let ascii: Vec<bool> = ws.iter().map(|w| w.bytes().all(|b| b.is_ascii_alphanumeric())).collect();
+        self.with(|inn| {
+            let mut out = vec![];
+            for (i, p) in &inn.points {
+                if allow.is_some_and(|a| !a.contains(i)) {
+                    continue;
+                }
+                let text = pl_str(&p.payload, "text");
+                let body = if text.starts_with('[') { text.find("]\n").map_or(text, |k| &text[k + 2..]) } else { text };
+                let low;
+                let hay: &str = if fold {
+                    low = body.to_ascii_lowercase();
+                    &low
+                } else {
+                    body
+                };
+                let mut mask = 0u32;
+                for (k, w) in ws.iter().enumerate() {
+                    let hit = if ascii[k] { contains_word(hay, w) } else { hay.contains(w.as_str()) };
+                    if hit {
+                        mask |= 1 << k;
+                    }
+                }
+                if mask != 0 {
+                    out.push((*i, mask, pl_str(&p.payload, "doc_path").to_string()));
+                }
+            }
+            Ok(out)
+        })
+    }
+
     pub fn texts_of(&self, ids: &[i64]) -> Result<Vec<String>, String> {
         self.with(|inn| Ok(ids.iter().map(|i| inn.points.get(i).map(|p| pl_str(&p.payload, "text").to_string()).unwrap_or_default()).collect()))
     }
