@@ -75,6 +75,8 @@ enum UserEvent {
     PanelIpc(String),
     InfoIpc(String),
     BrowseIpc(String),
+    // 패널에 파일을 끌어 놓음(들어옴 · 놓음 · 나감) — 채팅 모드 문서 올리기
+    PanelDrop(wry::DragDropEvent),
     // 폴더 아이콘 맞추기가 끝났다 — 실패 안내 목록(성공이면 비어 있음)
     IconNotes(Vec<String>),
 }
@@ -126,6 +128,36 @@ fn upload_safe_id(conv: &str) -> Option<String> {
     let s: String = conv.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' }).collect();
     let s = s.trim_matches(|c| c == '.' || c == '_').to_string();
     if s.is_empty() { None } else { Some(s) }
+}
+
+// JSON 글자 배열 → Vec<String> (배열이 아니거나 글자가 아닌 칸은 건너뛴다)
+fn str_list(v: &Value) -> Vec<String> {
+    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()).unwrap_or_default()
+}
+
+//------------------------------------------------------------------
+// 올릴 수 없는 이유 — 올릴 수 있으면 None ([+] · 끌어 놓기 공통 검사, 채팅 첨부 설계서 §2-4)
+//   is_dir = 폴더인가 · ext = 소문자 확장자 · size = 바이트 · have = 이미 받아 둔 수 · dup = 같은 이름이 이미 있나
+//------------------------------------------------------------------
+fn upload_reject(is_dir: bool, ext: &str, size: u64, have: usize, dup: bool) -> Option<String> {
+    if is_dir {
+        // 폴더는 문서 묶음이라 업로드(대화당 몇 건) 대신 검색 폴더로 쓰는 게 맞다
+        return Some("폴더는 올릴 수 없습니다 — 검색 폴더로 추가하세요".into());
+    }
+    if !UPLOAD_EXTS.contains(&ext) {
+        return Some("지원하지 않는 형식입니다".into());
+    }
+    if size > UPLOAD_MAX_MB * 1024 * 1024 {
+        // 실제 크기를 함께 — 얼마나 넘는지 보이게
+        return Some(format!("{:.1}MB — {}MB 를 넘습니다 · 검색 폴더에 넣어 쓰세요", size as f64 / 1048576.0, UPLOAD_MAX_MB));
+    }
+    if dup {
+        return Some("같은 이름의 문서가 이미 있습니다".into());
+    }
+    if have >= UPLOAD_MAX_FILES {
+        return Some(format!("대화 하나에 {}개까지 올릴 수 있습니다", UPLOAD_MAX_FILES));
+    }
+    None
 }
 
 //------------------------------------------------------------------
@@ -264,7 +296,9 @@ fn panel_html(mode: &str, s: &Settings, moai: &str) -> String {
     if mode == "explorer" {
         BROWSE_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", moai).replace("__LAYOUT__", "panel").replace("__UISTATE__", "null")
     } else {
+        // 업로드 한도는 상수 한 곳에서 — 화면 안내 글이 숫자를 따로 갖지 않게
         PANEL_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", moai).replace("__SCOPE__", &s.panel_search_scope)
+            .replace("__UP_MAX_FILES__", &UPLOAD_MAX_FILES.to_string()).replace("__UP_MAX_MB__", &UPLOAD_MAX_MB.to_string())
     }
 }
 
@@ -1021,45 +1055,96 @@ impl App {
     }
 
     //------------------------------------------------------------------
-    // [+] — 파일 고르기 · 한도 확인 · 워커에 /upload 맡기기 (문서 업로드 설계서 §4·§10)
-    //   conv = 패널이 정한 대화 id · have = 이미 올린 문서 수
+    // [+] — 파일 고르기 → upload_paths (문서 업로드 설계서 §4·§10)
+    //   conv = 패널이 정한 대화 id · have = 이미 올린 문서 수 · names = 칩에 이미 있는 이름(같은 이름 막기)
     //------------------------------------------------------------------
-    fn upload_pick(&mut self, conv: &str, have: usize) {
+    fn upload_pick(&mut self, conv: &str, have: usize, names: &[String]) {
+        if !self.upload_ready() {
+            return;
+        }
+        // 대화상자 제목에 한도와 남은 자리를 보인다 — 고르기 전에 알 수 있게
+        let left = UPLOAD_MAX_FILES.saturating_sub(have);
+        let title = format!("질문할 문서 고르기 — 최대 {}개 · 파일당 {}MB 이하 (남은 자리 {}개)", UPLOAD_MAX_FILES, UPLOAD_MAX_MB, left);
+        let picked = rfd::FileDialog::new().set_title(&title)
+            .add_filter("문서", UPLOAD_EXTS).pick_files().unwrap_or_default();
+        self.upload_paths(conv, have, names, picked);
+    }
+
+    //------------------------------------------------------------------
+    // 업로드할 수 있는 상태인가 — 워커가 없거나 업로드를 모르면 패널에 알리고 false
+    //------------------------------------------------------------------
+    fn upload_ready(&mut self) -> bool {
         let w = match &self.worker {
             Some(w) => w.clone(),
             None => {
                 self.panel.call("uploadQueued", json!([]));
                 self.panel.show_error(&self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into()));
-                return;
+                return false;
             }
         };
         if w.availability() == "up" && !w.knows("upload") {
             self.panel.call("uploadQueued", json!([]));
             self.panel.set_state("이 SimpleRAG 는 문서 업로드를 모릅니다 — 새로 빌드한 simplerag 가 필요합니다");
+            return false;
+        }
+        true
+    }
+
+    //------------------------------------------------------------------
+    // 패널 끌어 놓기 (채팅 첨부 설계서 §2-3)
+    //=> 들어옴/나감은 입력 상자 강조만, 놓음은 경로를 패널에 넘겨 대화 id · 올린 수와 함께 upload_paths 로 되돌려 받는다
+    //   (대화 id 와 칩 상태는 패널 JS 가 갖고 있다). 탐색기 모드 화면이면 아무 것도 하지 않는다
+    //------------------------------------------------------------------
+    fn on_panel_drop(&mut self, e: wry::DragDropEvent) {
+        if self.panel_mode == "explorer" {
             return;
         }
-        let picked = rfd::FileDialog::new().set_title("질문할 문서 고르기 (여러 개 가능)")
-            .add_filter("문서", UPLOAD_EXTS).pick_files().unwrap_or_default();
+        match e {
+            wry::DragDropEvent::Enter { paths, .. } => self.panel.call("dropHint", json!({"on": true, "n": paths.len()})),
+            wry::DragDropEvent::Leave => self.panel.call("dropHint", json!({"on": false})),
+            wry::DragDropEvent::Drop { paths, .. } => {
+                self.panel.call("dropHint", json!({"on": false}));
+                let list: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                crate::info!("panel", "끌어 놓은 파일 {}개", list.len());
+                self.panel.call("dropFiles", json!(list));
+            }
+            _ => {}
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 파일 목록 → 한도 확인 · 워커에 /upload 맡기기 ([+] 와 끌어 놓기 공통)
+    //   conv = 대화 id · have = 이미 올린 문서 수 · names = 이미 있는 칩 이름 · picked = 올릴 경로들
+    //------------------------------------------------------------------
+    fn upload_paths(&mut self, conv: &str, have: usize, names: &[String], picked: Vec<std::path::PathBuf>) {
+        if picked.is_empty() {
+            self.panel.call("uploadQueued", json!([]));
+            return;
+        }
+        if !self.upload_ready() {
+            return;
+        }
+        let w = match &self.worker {
+            Some(w) => w.clone(),
+            None => return,
+        };
         let mut list = vec![];
         let mut n = have;
+        // 같은 이름 막기 — 칩 · 빼기[×] · 결과 맞추기가 모두 이름 기준이다
+        let mut seen: std::collections::HashSet<String> = names.iter().map(|s| s.to_lowercase()).collect();
         for p in picked {
             let path = p.to_string_lossy().into_owned();
-            let name = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.clone());
             let ext = p.extension().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
-            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-            let why = if !UPLOAD_EXTS.contains(&ext.as_str()) {
-                Some("지원하지 않는 형식입니다".to_string())
-            } else if size > UPLOAD_MAX_MB * 1024 * 1024 {
-                Some(format!("{}MB 를 넘습니다 — 검색 폴더에 넣어 쓰세요", UPLOAD_MAX_MB))
-            } else if n >= UPLOAD_MAX_FILES {
-                Some(format!("대화 하나에 {}개까지 올릴 수 있습니다", UPLOAD_MAX_FILES))
-            } else {
-                None
-            };
+            let meta = std::fs::metadata(&p).ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let why = upload_reject(meta.as_ref().map(|m| m.is_dir()).unwrap_or(false), &ext, size,
+                                    n, seen.contains(&name.to_lowercase()));
             if let Some(why) = why {
                 list.push(json!({"name": name, "ok": false, "why": why}));
                 continue;
             }
+            seen.insert(name.to_lowercase());
             n += 1;
             list.push(json!({"name": name, "ok": true}));
             // 워커가 내려가 있으면 올린다 — 명령은 준비된 뒤 차례로 보내진다(질문이 언제나 먼저)
@@ -1114,6 +1199,7 @@ impl App {
             UserEvent::PanelIpc(s) => self.on_panel_ipc(&s),
             UserEvent::InfoIpc(s) => self.on_info_ipc(&s),
             UserEvent::BrowseIpc(s) => self.on_browse_ipc(&s),
+            UserEvent::PanelDrop(e) => self.on_panel_drop(e),
             UserEvent::IconNotes(notes) => {
                 self.icon_msg = notes.join("\n");
                 if self.info.visible {
@@ -1380,7 +1466,13 @@ impl App {
             }
             "upload_pick" => {
                 let conv = m["conv"].as_str().unwrap_or("").to_string();
-                self.upload_pick(&conv, m["have"].as_u64().unwrap_or(0) as usize);
+                self.upload_pick(&conv, m["have"].as_u64().unwrap_or(0) as usize, &str_list(&m["names"]));
+            }
+            "upload_paths" => {
+                // 끌어 놓은 파일 — 패널이 대화 id · 올린 수를 붙여 되돌려 보냈다
+                let conv = m["conv"].as_str().unwrap_or("").to_string();
+                let paths = str_list(&m["paths"]).into_iter().map(std::path::PathBuf::from).collect();
+                self.upload_paths(&conv, m["have"].as_u64().unwrap_or(0) as usize, &str_list(&m["names"]), paths);
             }
             "upload_remove" => {
                 let (conv, name) = (m["conv"].as_str().unwrap_or("").to_string(), m["name"].as_str().unwrap_or("").to_string());
@@ -2387,8 +2479,11 @@ fn main() {
     // 패널 화면 — 탐색기 모드(기본)면 browse.html 좁은 배치, RAG 모드면 대화 화면
     let html = panel_html(&s.ui_mode, &s, &moai);
     let p1 = proxy.clone();
+    let p1d = proxy.clone();
     let pview = WebViewBuilder::with_web_context(ctx).with_html(html)
         .with_ipc_handler(move |req| post(&p1, UserEvent::PanelIpc(req.into_body())))
+        // 끌어 놓기 — 경로를 이벤트 루프로 넘긴다. 처리기를 달면 WebView2 기본 동작(놓은 파일로 화면 이동)은 꺼진다
+        .with_drag_drop_handler(move |e| { post(&p1d, UserEvent::PanelDrop(e)); true })
         .build(&pwin).expect("패널 화면");
 
     // 설정 창
@@ -2534,4 +2629,29 @@ fn main() {
             *flow = ControlFlow::Exit;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // [+] · 끌어 놓기 공통 검사 — 폴더 · 형식 · 크기 · 같은 이름 · 개수 순으로 막는다
+    #[test]
+    fn upload_reject_rules() {
+        let mb = 1024 * 1024;
+        assert!(upload_reject(false, "pdf", 10 * mb, 0, false).is_none());
+        assert!(upload_reject(true, "", 0, 0, false).unwrap().contains("폴더"));
+        assert!(upload_reject(false, "exe", 1, 0, false).unwrap().contains("형식"));
+        let big = upload_reject(false, "pdf", 42 * mb + mb / 3, 0, false).unwrap();
+        assert!(big.starts_with("42.3MB") && big.contains("30MB"), "{}", big);
+        assert!(upload_reject(false, "pdf", 1, 0, true).unwrap().contains("같은 이름"));
+        assert!(upload_reject(false, "pdf", 1, UPLOAD_MAX_FILES - 1, false).is_none());
+        assert!(upload_reject(false, "pdf", 1, UPLOAD_MAX_FILES, false).unwrap().contains("5개"));
+    }
+
+    #[test]
+    fn str_list_skips_non_strings() {
+        assert_eq!(str_list(&json!(["a", 1, "b"])), vec!["a", "b"]);
+        assert!(str_list(&json!(null)).is_empty());
+    }
 }

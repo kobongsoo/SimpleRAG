@@ -216,6 +216,12 @@ impl App {
             }));
             return Ok(());
         }
+        // 업로드 대화의 개요형 질문("이 문서는 무슨 내용?")은 검색하지 않고 문서 개요로 — 규칙으로 가린다(LLM 라우터 없음)
+        if let Some(c) = &corpus {
+            if crate::overview::is_overview(query) {
+                return self.answer_overview(c, query, max_tokens, t0, "rule", Timing::new(), on_event);
+            }
+        }
         let (chunks, mut timing) = if let Some(c) = &corpus {
             self.retriever.search_with(&search_q, top_k, None, Some(c))?
         } else if cfg().parent_mode == "section" {
@@ -225,6 +231,13 @@ impl App {
         };
         if joined {
             timing.insert("multiturn".into(), serde_json::json!(true));
+        }
+        // 업로드 대화에서 관련도 문턱에 걸려 근거가 0건이면 "답변할 수 없습니다" 대신 문서 개요로 넘긴다
+        //   (사용자가 이 문서에 대해 묻겠다고 이미 정했다 — 규칙이 놓친 개요 질문도 여기서 받는다)
+        if let Some(c) = &corpus {
+            if chunks.is_empty() && timing.remove("no_relevant").is_some() {
+                return self.answer_overview(c, query, max_tokens, t0, "fallback", timing, on_event);
+            }
         }
         on_event(Event::Evidence(chunks.clone(), timing.clone()));
         // 근거를 못 찾았거나 리랭커가 확신하지 못한 질문은 동의어 후보 제안용으로 남긴다(동의어 설계서 3단계)
@@ -280,6 +293,102 @@ impl App {
             total_s: pyutil::round_to((t_end - t0).as_secs_f64(), 2),
             timing,
         }));
+        Ok(())
+    }
+
+    //------------------------------------------------------------------
+    // 업로드 문서 개요 답 (채팅 첨부 설계서 §3-3)
+    //=> 검색하지 않고 문서마다 앞 · 가운데 · 끝 조각(overview::pick)을 근거로 내보낸 뒤 개요를 만든다.
+    //    1) 문서 1건 — [근거]/[질문] 틀로 3~5문장(OVERVIEW_SYSTEM), 인용 번호 바로잡기는 보통 답과 같다
+    //    2) 여러 건 — 문서마다 한 문장(OVERVIEW_DOC_SYSTEM)을 "▸ 문서이름 — 문장 [n]" 줄로 잇는다
+    //       (작은 모델은 한 번에 묶으면 형식이 무너진다 — 탐색기 AI 정리 실측 2026-11-03)
+    //    3) how = "fallback" 이면 답 앞에 "딱 맞는 부분은 못 찾아 개요를 보인다" 한 줄
+    //
+    // -in: c = 대화의 업로드 코퍼스 / query = 사용자 질문 / max_tokens = 답 토큰 상한(None 이면 설정값)
+    // -in: t0 = 질문 받은 시각 / how = "rule"(규칙으로 개요형) | "fallback"(검색이 문턱에 걸림)
+    // -in: timing = 지금까지의 소요(검색을 했으면 그 값) / on_event = 사건 받는 함수
+    //
+    // -out: Ok(()) — 근거 · 토큰 · 끝 사건을 on_event 로 낸다
+    // -out: error = 생성 실패 · 취소면 Err
+    //------------------------------------------------------------------
+    #[allow(clippy::too_many_arguments)]
+    fn answer_overview(&self, c: &crate::uploads::UploadCorpus, query: &str, max_tokens: Option<usize>, t0: Instant,
+                       how: &str, mut timing: Timing, on_event: &mut dyn FnMut(Event)) -> Result<(), String> {
+        use crate::generate::prompts::{OVERVIEW_DOC_SYSTEM, OVERVIEW_SYSTEM};
+        let docs = crate::overview::pick(c);
+        // 화면 · 로그가 개요 답인지, 어떤 길로 왔는지 알 수 있게
+        timing.insert("overview".into(), serde_json::json!(how));
+        timing.insert("uploads".into(), serde_json::json!(c.n_files));
+        timing.entry("total_ms".to_string()).or_insert(serde_json::json!(0.0));
+        let chunks: Vec<Chunk> = docs.iter().flatten().cloned().collect();
+        let mk_done = |answer: String, stream: String, cited: Vec<usize>, note: Option<&'static str>,
+                       first: Option<Instant>, t_gen0: Instant, timing: Timing| {
+            let t_end = Instant::now();
+            let first = first.unwrap_or(t_end);
+            Done {
+                answer, answer_stream: stream, cited, cite_fixes: vec![], note,
+                ttft_s: pyutil::round_to((first - t0).as_secs_f64(), 2),
+                llm_ttft_s: Some(pyutil::round_to((first - t_gen0).as_secs_f64(), 2)),
+                total_s: pyutil::round_to((t_end - t0).as_secs_f64(), 2),
+                timing,
+            }
+        };
+        if chunks.is_empty() {
+            let t = Instant::now();
+            on_event(Event::Evidence(vec![], timing.clone()));
+            on_event(Event::Done(mk_done(NO_RELEVANT.into(), NO_RELEVANT.into(), vec![], None, None, t, timing)));
+            return Ok(());
+        }
+        on_event(Event::Evidence(chunks.clone(), timing.clone()));
+        let prefix = if how == "fallback" { crate::overview::FALLBACK_NOTE } else { "" };
+        if !prefix.is_empty() {
+            on_event(Event::Token(prefix.to_string()));
+        }
+        let t_gen0 = Instant::now();
+        let mut t_first: Option<Instant> = None;
+        if docs.len() == 1 {
+            // 문서 1건 — 보통 답과 같은 틀 · 같은 인용 번호 바로잡기
+            let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+            let out = self.generator.stream(query, &texts, max_tokens, Some(OVERVIEW_SYSTEM), &mut |piece| {
+                t_first.get_or_insert_with(Instant::now);
+                on_event(Event::Token(piece.to_string()));
+            })?;
+            let (body, _) = parse_answer_opt(&out.text, Some(texts.len()), cfg().echo_filter);
+            let (fixed, _) = recite(&body, &texts, false, 0);
+            let (stream, _) = recite(&body, &texts, true, 0);
+            let mut cited: Vec<usize> = CITE_NUM.captures_iter(&fixed).filter_map(|c| c[1].parse().ok())
+                .filter(|n| (1..=texts.len()).contains(n)).collect();
+            cited.sort();
+            cited.dedup();
+            on_event(Event::Done(mk_done(format!("{}{}", prefix, fixed), format!("{}{}", prefix, stream), cited,
+                                         out.note, t_first, t_gen0, timing)));
+            return Ok(());
+        }
+        // 여러 건 — 문서마다 한 문장. 인용 번호는 그 문서 첫 조각의 근거 번호
+        let mut body = String::new();
+        let mut cited = vec![];
+        let mut base = 0;
+        for d in &docs {
+            if crate::cli::INTERRUPT.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let head = format!("▸ {} — ", d[0].doc_name);
+            on_event(Event::Token(head.clone()));
+            let user = format!("[문서 내용]\n{}\n{}", d[0].doc_name, d.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n"));
+            let out = self.generator.stream_chat(OVERVIEW_DOC_SYSTEM, &user, 120, Some("\n"), &mut |piece| {
+                t_first.get_or_insert_with(Instant::now);
+                on_event(Event::Token(piece.to_string()));
+            })?;
+            let cite = format!(" [{}]\n", base + 1);
+            on_event(Event::Token(cite.clone()));
+            body.push_str(&head);
+            body.push_str(out.text.trim_end());
+            body.push_str(&cite);
+            cited.push(base + 1);
+            base += d.len();
+        }
+        let answer = format!("{}{}", prefix, body.trim_end());
+        on_event(Event::Done(mk_done(answer.clone(), answer, cited, None, t_first, t_gen0, timing)));
         Ok(())
     }
 

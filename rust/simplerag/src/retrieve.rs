@@ -320,7 +320,17 @@ impl Retriever {
         if let Some(g) = gate {
             let ov = keyword_overlap(query, &texts);
             timing.insert("keyword_overlap".into(), ov.map(|o| pyutil::jf(pyutil::round_to(o, 2))).unwrap_or(Value::Null));
-            if top < g || (top < relevance_soft() && ov == Some(0.0)) {
+            // 업로드 대화는 문턱을 따로 본다(2026-11-06 실측, 채팅 첨부 설계서 §3-4)
+            //   - 낱말 겹침(SOFT) 조건은 쓰지 않는다 — 한국어 질문 · 영어 문서면 늘 0 이라 "갱신 금액은 얼마인가?" 까지 막았다
+            //   - 하드 문턱(g)은 낮추지 않는다 — -8 로 낮추니 영어 견적서에 "연차 이월 기준은?" 을 지어 답했다
+            //   - 대신 질문 낱말이 근거에 있으면 하드 문턱에 걸려도 통과 — "리프레시 휴가는 며칠인가?" 가 -10 에서도 막혔다
+            //   그래도 막히면 app.rs 가 거절 대신 문서 개요로 넘긴다
+            let block = if corpus.is_some() {
+                top < g && ov.map(|o| o <= 0.0).unwrap_or(true)
+            } else {
+                top < g || (top < relevance_soft() && ov == Some(0.0))
+            };
+            if block {
                 timing.insert("no_relevant".into(), json!(true));
                 return Ok((vec![], timing));
             }

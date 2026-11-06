@@ -154,6 +154,12 @@
   #plus svg { width: 16px; height: 16px; }
   #plus[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: 120%; left: 0; white-space: nowrap;
     background: var(--ink); color: #fff; font-size: calc(var(--fs) * 0.78); padding: 3px 8px; border-radius: 6px; z-index: 20; }
+  #plus.full { opacity: .45; }
+  /* 업로드 한도 안내(남은 자리) · 끌어 놓는 중 입력 카드 강조 */
+  #uphint { color: var(--muted); font-size: calc(var(--fs) * 0.74); margin-top: 4px; }
+  #uphint:empty { display: none; }
+  .card.dropping { border: 1px dashed var(--brand); background: var(--brand-soft); box-shadow: var(--shadow), 0 0 0 3px rgba(229, 22, 63, .12); }
+  #state.warn { color: var(--brand-ink); font-weight: bold; }
   #hint .or { color: var(--muted); font-size: calc(var(--fs) * 0.85); margin-top: 14px; }
   .powered { text-align: center; color: #b0b5be; font-size: calc(var(--fs) * 0.72); margin-top: 7px; }
 
@@ -196,13 +202,14 @@
       <div>경조휴가는 며칠인가요?</div>
       <div>연차 이월 기준은 어떻게 되나요?</div>
     </div>
-    <div class="or">또는 아래 [+] 로 문서를 올려 그 문서에 대해서만 물어보세요</div>
+    <div class="or">또는 아래 [+] 나 끌어 놓기로 문서를 올려 그 문서에 대해서만 물어보세요</div>
   </div>
 </div>
 <footer>
   <div class="card">
     <div><span id="chip">📁 범위 모름</span></div>
     <div id="ups"></div>
+    <div id="uphint"></div>
     <textarea id="input" placeholder="무엇이든 물어보세요 (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
     <div class="bar">
       <span id="plus" data-tip="문서 올리기 — 올린 문서에서만 찾아 답합니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
@@ -230,6 +237,19 @@ let flashTimer = null;
 let ups = [];
 const hasUploads = () => ups.some((u) => u.state === "done");
 const uploading = () => ups.some((u) => u.state === "up");
+// 업로드 한도 — Rust 상수(UPLOAD_MAX_FILES · UPLOAD_MAX_MB)를 화면을 만들 때 끼워 넣는다. 실제로 막는 곳은 Rust upload_paths
+const UP_MAX = __UP_MAX_FILES__, UP_MB = __UP_MAX_MB__;
+const upDone = () => ups.filter((u) => u.state === "done").length;
+const upLeft = () => Math.max(0, UP_MAX - upDone());
+// 칩에 있는 이름(올리는 중 · 다 올림) — 같은 이름을 다시 올리지 않게 Rust 에 넘긴다
+const upNames = () => ups.filter((u) => u.state !== "fail").map((u) => u.name);
+// 지금 올릴 수 있나 — 못 하면 이유 글([+] · 끌어 놓기 공통)
+function uploadBlock() {
+  if (busy) return "답변이 끝난 뒤에 올릴 수 있습니다";
+  if (uploading()) return "올리는 중입니다 — 끝난 뒤에 더 올릴 수 있습니다";
+  if (upLeft() === 0) return "대화 하나에 " + UP_MAX + "개까지 올릴 수 있습니다 — 문서를 빼면 다시 올릴 수 있습니다";
+  return "";
+}
 
 function setState(t) { $("state").textContent = t || ""; }
 function flash(t) {
@@ -312,7 +332,14 @@ function drawUps() {
   }
   const n = ups.filter((u) => u.state === "done").length;
   $("chip").classList.toggle("on", n > 0);
-  $("chip").textContent = n > 0 ? "📎 업로드 문서 " + n + "건에서 찾기" : (scopeDesc ? "📁 " + scopeDesc.replace("범위: ", "") : "📁 범위 모름");
+  $("chip").textContent = n > 0 ? "📎 업로드 문서 " + n + "/" + UP_MAX + "건에서 찾기" : (scopeDesc ? "📁 " + scopeDesc.replace("범위: ", "") : "📁 범위 모름");
+  // 한도 안내 — 칩이 하나라도 있으면 남은 자리를, 꽉 차면 [+] 를 흐리게
+  const left = upLeft();
+  $("uphint").textContent = ups.length ? (left > 0 ? "남은 자리 " + left + "개 · 파일당 " + UP_MB + "MB 이하"
+                                                   : "최대 " + UP_MAX + "개를 다 올렸습니다 — 문서를 빼면 다시 올릴 수 있습니다") : "";
+  $("plus").classList.toggle("full", left === 0);
+  $("plus").dataset.tip = left === 0 ? "대화 하나에 " + UP_MAX + "개까지 올릴 수 있습니다 — 문서를 빼면 다시 올릴 수 있습니다"
+                                     : "문서 올리기 · 끌어 놓기 가능 — 최대 " + UP_MAX + "개 · 파일당 " + UP_MB + "MB 이하";
   $("scopebtn").classList.toggle("off", n > 0);
   $("input").placeholder = n > 0 ? "올린 문서에 대해 물어보세요 (Enter 전송)"
                                  : "무엇이든 물어보세요 (Enter 전송 · Shift+Enter 줄바꿈)";
@@ -331,12 +358,26 @@ function removeUpload(u) {
   drawUps();
 }
 $("plus").onclick = () => {
-  if (busy) { setState("답변이 끝난 뒤에 올릴 수 있습니다"); return; }
-  if (uploading()) { setState("올리는 중입니다 — 끝난 뒤에 더 올릴 수 있습니다"); return; }
+  const why = uploadBlock(); if (why) { setState(why); return; }
   ensureConv();
   setState("문서를 고르세요…");
-  send({ type: "upload_pick", conv: conv.id, have: ups.filter((u) => u.state === "done").length });
+  send({ type: "upload_pick", conv: conv.id, have: upDone(), names: upNames() });
 };
+// 끌어 놓는 중 안내 — 놓으면 몇 개가 올라가는지 미리 보인다
+function dropHint(on, n) {
+  $("state").classList.remove("warn");
+  document.querySelector(".card").classList.toggle("dropping", !!on);
+  if (!on) { setState(""); return; }
+  const why = uploadBlock();
+  if (why) { setState(why); $("state").classList.add("warn"); return; }
+  const left = upLeft();
+  if (n > left) {
+    setState("놓으면 문서 " + n + "개 중 " + left + "개만 올립니다 — 최대 " + UP_MAX + "개");
+    $("state").classList.add("warn");
+  } else {
+    setState("놓으면 문서 " + n + "개를 올립니다 (남은 자리 " + left + "개 · " + UP_MB + "MB 이하)");
+  }
+}
 
 // 기다림 줄 — 브랜드색 점 세 개 + 글
 function waitEl(text) {
@@ -552,6 +593,15 @@ window.rsb = {
     for (const it of list || []) ups.push(it.ok ? { name: it.name, state: "up", pct: 0 } : { name: it.name, state: "fail", why: it.why });
     drawUps();
   },
+  // 끌어 놓기 — 들어옴/나감 강조 · 놓은 경로를 대화 id 와 함께 Rust 로 되돌린다(검사는 Rust upload_paths)
+  dropHint(p) { dropHint(p && p.on, (p && p.n) || 0); },
+  dropFiles(paths) {
+    if (!paths || !paths.length) return;
+    const why = uploadBlock(); if (why) { flash(why); return; }
+    ensureConv();
+    setState("문서 " + paths.length + "개를 올립니다…");
+    send({ type: "upload_paths", conv: conv.id, have: upDone(), names: upNames(), paths });
+  },
   // 올리는 중 진행(맨 앞 "up" 칩)
   uploadProgress(p) {
     const u = ups.find((x) => x.state === "up"); if (!u) return;
@@ -589,7 +639,9 @@ window.rsb = {
     if (!t) return;
     for (const w of info.warnings || []) rsb.token("\n" + w);
     dropWait(t);
-    const meta = metaLine(info, !!t.answer) + (hasUploads() ? " , 업로드 문서" : "");
+    // 업로드 문서 표시 — 소요 줄이 비었으면 앞에 쉼표를 붙이지 않는다
+    const ml = metaLine(info, !!t.answer);
+    const meta = hasUploads() ? (ml ? ml + " , 업로드 문서" : "업로드 문서") : ml;
     if (t.answer) {
       t.answer.textContent = t.answer.textContent.replace(/\s+$/, "");
       t.record.answer = (t.record.answer || "").replace(/\s+$/, "");
