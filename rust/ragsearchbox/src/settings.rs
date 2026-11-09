@@ -52,6 +52,9 @@ pub struct Settings {
     pub folder_icon: bool,
     // 탐색기 모드 모두 찾기(모두 찾기 설계서) — 기본 켬, [UI] FindAll
     pub find_all: bool,
+    // 항상 위에 표시(📌) — 패널(채팅 · 탐색기 옆) 창 · MoAI 탐색기 창 따로 기억한다. [UI] PanelOnTop · BrowseOnTop (기본 켬)
+    pub panel_on_top: bool,
+    pub browse_on_top: bool,
     // 탐색기 화면 상태(JSON 한 줄) — [UI] BrowseState
     pub browse_state: String,
     // 탐색기 창 자리 "x,y,너비,높이,최대화" — [UI] BrowseWindow
@@ -105,6 +108,8 @@ impl Default for Settings {
             page_click: "preview".into(),
             folder_icon: true,
             find_all: true,
+            panel_on_top: true,
+            browse_on_top: true,
             browse_state: String::new(),
             browse_window: String::new(),
             cand_notify: true,
@@ -312,6 +317,8 @@ pub fn load(path: Option<&str>) -> Settings {
     }
     s.folder_icon = ini.boolean("UI", "FolderIcon", true, &mut w);
     s.find_all = ini.boolean("UI", "FindAll", true, &mut w);
+    s.panel_on_top = ini.boolean("UI", "PanelOnTop", true, &mut w);
+    s.browse_on_top = ini.boolean("UI", "BrowseOnTop", true, &mut w);
     s.browse_state = ini.s("UI", "BrowseState");
     s.browse_window = ini.s("UI", "BrowseWindow");
     s.cand_notify = ini.boolean("UI", "CandidateNotify", true, &mut w);

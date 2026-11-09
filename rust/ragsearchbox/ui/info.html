@@ -105,6 +105,7 @@
   <div class="row" style="align-items:center;margin-top:4px"><span class="note">쪽을 누르면</span>
     <label style="margin:0"><input type="radio" name="pclick" id="pc_preview" value="preview"> 미리 보기 창</label>
     <label style="margin:0"><input type="radio" name="pclick" id="pc_app" value="app"> 기본 PDF 앱에서 그 쪽</label></div>
+  <div><label><input type="checkbox" id="dock"> 나란히 보기 — 탐색기 오른쪽에 나란히 띄웁니다. 끄면 채팅 모드도 탐색기 모드처럼 따로 창으로 뜹니다</label></div>
   <div class="note" id="modenote"></div>
 </fieldset>
 <fieldset><legend>검색 폴더</legend>
@@ -237,6 +238,7 @@ window.rsb = {
     $("logdir").textContent = info.log_dir || "";
     // 화면 모드 · 쪽 열기 · 폴더 아이콘 — ini 값으로 매번 맞춘다
     if (info.ui_mode) $(info.ui_mode === "rag" ? "m_rag" : "m_explorer").checked = true;
+    if (typeof info.dock === "boolean") $("dock").checked = info.dock;
     if (info.page_click) $(info.page_click === "app" ? "pc_app" : "pc_preview").checked = true;
     if (typeof info.folder_icon === "boolean") $("folder_icon").checked = info.folder_icon;
     $("modenote").textContent = info.mode_msg || "";
@@ -470,6 +472,7 @@ $("candnotify").onchange = () => send({ type: "cand_notify", on: $("candnotify")
 $("precision").onchange = () => send({ type: "precision", on: $("precision").checked });
 $("multiturn").onchange = () => send({ type: "multiturn", on: $("multiturn").checked });
 for (const id of ["m_explorer", "m_rag"]) $(id).onchange = () => send({ type: "ui_mode", value: $(id).value });
+$("dock").onchange = () => send({ type: "dock", value: $("dock").checked });
 for (const id of ["pc_preview", "pc_app"]) $(id).onchange = () => send({ type: "page_click", value: $(id).value });
 $("folder_icon").onchange = () => send({ type: "folder_icon", on: $("folder_icon").checked });
 $("b_logs").onclick = () => send({ type: "open_logs" });

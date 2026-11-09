@@ -354,7 +354,8 @@ impl App {
             // 직접 실행하면 화면을 바로 띄운다(트레이 "열기" 와 같다) — 로그인 자동 시작(--tray)은 트레이에만
             crate::info!("app", "시작 화면 띄우기 ({} 모드)", self.s.ui_mode);
             // 인덱싱 폴더가 없으면 채팅 모드는 열 폴더가 없다 — 폴더를 고르는 탐색기 창으로 연다
-            if self.s.ui_mode == "explorer" || self.current_folders().is_empty() {
+            //   탐색기 모드는 [나란히 보기] 켬이면 채팅 모드처럼 Windows 탐색기 옆 패널로 띄운다
+            if self.current_folders().is_empty() || (self.s.ui_mode == "explorer" && !self.s.panel_enabled) {
                 self.open_browse(None, None, Value::Null);
             } else {
                 self.open_panel();
@@ -548,6 +549,8 @@ impl App {
         if self.panel_mode == "explorer" {
             self.panel.call("setRoots", roots);
             self.panel.call("setPageClick", json!(self.s.page_click));
+        } else {
+            self.push_panel_folders();
         }
     }
 
@@ -590,6 +593,8 @@ impl App {
     fn open_browse(&mut self, q: Option<&str>, folder: Option<String>, select: Value) {
         self.push_roots();
         self.browse.show();
+        // tao 가 창을 보이며 스타일을 다시 쓰므로 📌 항상 위를 다시 건다
+        win::set_topmost(self.browse.hwnd(), self.s.browse_on_top);
         if let Some(q) = q.filter(|q| !q.trim().is_empty()) {
             self.browse.js(format!("rsb.runQuery({}, {}, {})", json!(q), json!(folder), select));
         }
@@ -665,6 +670,17 @@ impl App {
         if mode == "rag" {
             self.browse.hide();
             self.open_panel_at(folder);
+        } else if self.s.panel_enabled && !self.current_folders().is_empty() {
+            // [나란히 보기] 켬 — MoAI 탐색기 창이 아니라 같은 패널이 탐색기 모드 화면으로 바뀐다(탐색기 옆 팝업)
+            if self.panel.docked() {
+                self.panel.activate();
+            } else {
+                // 따로 떠 있던 패널(탐색기를 닫아 남은 것) · 숨은 패널 → 폴더를 탐색기로 열어 옆에 붙인다
+                let f = folder.or_else(|| self.panel.folder.clone());
+                self.panel.hide(false);
+                self.browse.hide();
+                self.open_panel_at(f);
+            }
         } else {
             self.panel.hide(true);
             self.open_browse(None, None, Value::Null);
@@ -897,6 +913,18 @@ impl App {
                 let mode = if m["mode"] == "rag" { "rag" } else { "explorer" };
                 self.set_panel_mode(mode);
             }
+            // 📌 항상 위 — 누른 창만 바꾼다(패널 · 탐색기 창 따로 기억)
+            "ontop" => {
+                let on = m["on"].as_bool().unwrap_or(false);
+                self.set_on_top(to_browse, on);
+            }
+            // [나란히 보기] 단추 — 패널 · 탐색기 창 어디서 눌러도 같다
+            "dock" => {
+                let on = m["on"].as_bool().unwrap_or(true);
+                // 탐색기 창에서 누르면 그 창이 보던 폴더("" = 검색 폴더 전체 → 맨 처음 검색 폴더)를 탐색기로 연다
+                let folder = m["folder"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                self.set_dock(on, if to_browse { "탐색기 창" } else { "패널" }, folder);
+            }
             // [채팅 모드] · [탐색기 모드] 버튼 — 화면 모드를 바꿔 저장하고 그 모드의 화면으로 옮겨 간다
             "switch_mode" => {
                 let mode = if m["mode"] == "rag" { "rag" } else { "explorer" };
@@ -957,6 +985,10 @@ impl App {
         if m["type"] == "ready" {
             self.browse.on_ready();
             self.browse.call("setManual", json!(Self::manual_path().is_some()));
+            let dock = self.s.panel_enabled;
+            self.browse.call("setDock", json!(dock));
+            let top = self.s.browse_on_top;
+            self.browse.call("setOnTop", json!(top));
             // 이미 검색 폴더가 있는 사람(업데이트)에게는 안내를 자동으로 띄우지 않는다 — [?] 로만
             if !self.current_folders().is_empty() {
                 self.mark_tour_done();
@@ -1277,11 +1309,25 @@ impl App {
     //------------------------------------------------------------------
     fn on_folder(&mut self, hwnd: isize, folder: Option<String>) {
         if !self.s.panel_enabled {
+            // [나란히 보기] 끔 — 패널을 붙이지는 않고, 탐색기에서 연 검색 폴더를 질문 폴더로 따라간다.
+            //   검색 폴더가 아닌 곳으로 가면(None) 이전 폴더를 그대로 둔다
+            if let Some(f) = folder {
+                if self.panel.folder.as_deref() != Some(f.as_str()) {
+                    crate::info!("panel", "일반 창 질문 폴더 바뀜: {}", f);
+                    self.panel.folder = Some(f.clone());
+                    self.panel.call("setFolder", json!(f));
+                    self.refresh_scope();
+                }
+                self.follow_root(&f);
+                // 그 탐색기 창 — [탐색기에서 보기] 가 근거 파일을 거기서 찾는다
+                self.answer_hwnd = hwnd;
+            }
             return;
         }
         match folder {
             Some(f) => {
                 self.panel.show_for(hwnd, &f, &self.s);
+                self.follow_root(&f);
                 if self.panel.visible && self.panel.target == hwnd {
                     self.monitor.watch_window(Some(hwnd));
                     self.answer_hwnd = hwnd;
@@ -1304,21 +1350,17 @@ impl App {
             None => {
                 self.panel.forget_closed(hwnd);
                 if self.panel.visible && self.panel.target == hwnd {
-                    self.panel.hide(true);
-                    self.monitor.watch_window(None);
+                    if win::is_window(hwnd) {
+                        // 검색 폴더가 아닌 곳으로 옮겨 갔다 — 패널은 그대로 붙여 두고 범위도 이전 검색 폴더를 지킨다
+                        crate::info!("panel", "탐색기가 검색 폴더 밖으로 옮겨 갔다 — 패널은 그대로 둔다");
+                    } else {
+                        // 탐색기 창을 닫았다 — 패널은 닫지 않고 그 자리에 따로 남긴다
+                        self.panel.detach();
+                        self.monitor.watch_window(None);
+                    }
                 }
             }
         }
-    }
-
-    // 질문 범위 폴더 — root 모드면 그 폴더가 속한 지정 폴더
-    fn search_folder(&self, folder: Option<&str>) -> Option<String> {
-        let f = folder?;
-        if self.panel.scope_mode == "root" {
-            let (ok, root) = self.scope.lock().unwrap().contains(f);
-            return Some(if ok { root } else { f.to_string() });
-        }
-        Some(f.to_string())
     }
 
     //------------------------------------------------------------------
@@ -1383,9 +1425,13 @@ impl App {
 
     // 범위 설명 — "범위: 이름 · 문서 N건"
     fn scope_desc(&mut self) -> String {
-        let folder = match self.search_folder(self.panel.folder.clone().as_deref()) {
+        // 채팅 질문 범위 = [+] 옆에서 고른 검색 폴더. 안 골랐으면 모든 검색 폴더(문서 수는 검색 폴더마다 센 합)
+        let folder = match self.panel.sel.clone() {
             Some(f) => f,
-            None => return String::new(),
+            None => {
+                let n: Option<usize> = self.panel_folders().map(|(_, total)| total);
+                return format!("범위: 모든 검색 폴더 · 문서 {}건", n.map(|x| x.to_string()).unwrap_or("?".into()));
+            }
         };
         let name = folder.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or(&folder).to_string();
         let name = if name.is_empty() { folder.clone() } else { name };
@@ -1399,6 +1445,59 @@ impl App {
     fn refresh_scope(&mut self) {
         let d = self.scope_desc();
         self.panel.call("setScope", json!(d));
+    }
+
+    //------------------------------------------------------------------
+    // 채팅 [+] 옆 검색 폴더 목록 — (검색 폴더마다 {path, name, n}, 모든 검색 폴더 문서 수)
+    //=> 상태 파일의 문서 키를 경로 앞부분으로 센다. 상태 파일을 못 읽으면 None
+    //------------------------------------------------------------------
+    fn panel_folders(&mut self) -> Option<(Vec<Value>, usize)> {
+        let keys = self.state_keys()?;
+        let mut items = vec![];
+        let mut total = 0;
+        for f in self.current_folders() {
+            let base = format!("{}\\", scope::norm(&f).trim_end_matches('\\'));
+            let n = keys.iter().filter(|k| k.starts_with(&base)).count();
+            total += n;
+            let name = f.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().filter(|s| !s.is_empty()).unwrap_or(&f).to_string();
+            items.push(json!({"path": f, "name": name, "n": n}));
+        }
+        Some((items, total))
+    }
+
+    //------------------------------------------------------------------
+    // 검색 폴더 목록 · 고른 값 · 범위 글을 채팅 화면에 보낸다
+    //   고른 폴더가 목록에서 빠졌으면(폴더 빼기) 모든 검색 폴더로 되돌린다
+    //------------------------------------------------------------------
+    fn push_panel_folders(&mut self) {
+        let roots = self.current_folders();
+        if let Some(sel) = self.panel.sel.clone() {
+            if !roots.iter().any(|r| r.eq_ignore_ascii_case(&sel)) {
+                self.panel.sel = None;
+            }
+        }
+        let (items, total) = match self.panel_folders() {
+            Some(x) => x,
+            None => (roots.iter().map(|f| json!({"path": f, "name": f, "n": Value::Null})).collect(), 0),
+        };
+        let sel = self.panel.sel.clone();
+        self.panel.call("setFolders", json!({"items": items, "all_n": total, "sel": sel}));
+        self.refresh_scope();
+    }
+
+    //------------------------------------------------------------------
+    // 탐색기에서 연 폴더를 따라 질문 범위를 그 검색 폴더로 — 다른 검색 폴더로 옮겼을 때만 바꾼다
+    //   (같은 검색 폴더 안에서 하위 폴더를 오가면 사용자가 [+] 옆에서 고른 값을 지킨다)
+    //------------------------------------------------------------------
+    fn follow_root(&mut self, folder: &str) {
+        let (ok, root) = self.scope.lock().unwrap().contains(folder);
+        if !ok || self.panel.auto_root.as_deref() == Some(root.as_str()) {
+            return;
+        }
+        crate::info!("panel", "질문 범위를 탐색기 폴더의 검색 폴더로: {}", root);
+        self.panel.auto_root = Some(root.clone());
+        self.panel.sel = Some(root);
+        self.push_panel_folders();
     }
 
     fn history_list(&self) -> Value {
@@ -1425,15 +1524,19 @@ impl App {
                 self.panel.on_ready();
                 let h = self.history_list();
                 self.panel.call("setHistory", h);
-                let mode = self.panel.scope_mode.clone();
-                self.panel.call("setScopeMode", json!(mode));
                 if let Some(f) = self.panel.folder.clone() {
                     self.panel.call("setFolder", json!(f));
                 }
-                self.refresh_scope();
+                // [+] 옆 검색 폴더 목록과 고른 값(범위 글도 함께)
+                self.push_panel_folders();
                 if self.panel_mode == "explorer" {
                     self.push_roots();
                 }
+                // [나란히 보기] 단추 상태
+                let dock = self.s.panel_enabled;
+                self.panel.call("setDock", json!(dock));
+                let top = self.s.panel_on_top;
+                self.panel.call("setOnTop", json!(top));
             }
             "ask" => {
                 // 채팅 질문이 먼저다 — 쓰던 AI 정리는 멈추고 그 화면에 알린다
@@ -1448,7 +1551,8 @@ impl App {
                     Some(q) => q,
                     None => return,
                 };
-                let folder = self.search_folder(self.panel.folder.clone().as_deref());
+                // 질문 범위 = [+] 옆에서 고른 검색 폴더(None 이면 모든 검색 폴더)
+                let folder = self.panel.sel.clone();
                 // 같은 대화의 바로 앞 질문(멀티턴) — 워커 설정(generation.multiturn)이 켜져 있으면 검색에 이어 붙인다
                 let prev = m["prev"].as_str().and_then(one_line);
                 // 대화 id · 올린 문서가 있는 대화인가 — 있으면 워커는 그 문서에서만 찾는다(문서 업로드)
@@ -1521,6 +1625,14 @@ impl App {
             }
             "show_files" => {
                 let docs: Vec<String> = m["docs"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+                // 일반 창(붙은 탐색기 없음)이면 질문 범위 폴더를 탐색기로 열어 준다 — 그 창 검색으로 이름을 찾을 수 있다
+                if !self.panel.docked() && !docs.is_empty() && !(self.answer_hwnd != 0 && win::is_window(self.answer_hwnd)) {
+                    if let Some(f) = self.panel.folder.clone() {
+                        let _ = win::open_explorer(&f);
+                        self.panel.notice("탐색기에서 질문 폴더를 열었습니다 — 근거 파일 이름으로 찾아보세요");
+                    }
+                    return;
+                }
                 if self.answer_hwnd == 0 || docs.is_empty() {
                     self.panel.notice("근거 파일을 알 수 없습니다");
                     return;
@@ -1535,6 +1647,13 @@ impl App {
                     crate::warn!("app", "검색 범위를 설정에 저장하지 못했다: {}", e);
                 }
                 self.refresh_scope();
+            }
+            // [+] 옆 검색 폴더 고르기 — path 가 비면 모든 검색 폴더
+            "pick_folder" => {
+                let p = m["path"].as_str().unwrap_or("").to_string();
+                crate::info!("panel", "질문 범위 고름: {}", if p.is_empty() { "모든 검색 폴더" } else { &p });
+                self.panel.sel = if p.is_empty() { None } else { Some(p) };
+                self.push_panel_folders();
             }
             "close" => self.panel.close_by_user(),
             // 탐색기 모드 요청(찾기 · 쪽 열기 · 크게 보기 · 모드 바꾸기 …)
@@ -1558,7 +1677,8 @@ impl App {
                 self.browse.call("startTour", Value::Null);
             }
             // 화면 열기 — 탐색기 모드면 MoAI 탐색기 창, RAG 모드면 지금처럼 탐색기 옆 패널
-            "open" if self.s.ui_mode == "explorer" => self.open_browse(None, None, Value::Null),
+            // 탐색기 모드라도 [나란히 보기] 켬이면 Windows 탐색기 옆 탐색기 모드 패널로 띄운다
+            "open" if self.s.ui_mode == "explorer" && !(self.s.panel_enabled && !self.current_folders().is_empty()) => self.open_browse(None, None, Value::Null),
             "open" => self.open_panel(),
             "index_now" | "autoindex" => self.on_tray_autoindex(name),
             "unload" => {
@@ -1587,6 +1707,10 @@ impl App {
 
     // 화면 열기 — 범위 탐색기가 있으면 그 옆에, 없으면 첫 범위 폴더를 탐색기로 연다
     fn open_panel(&mut self) {
+        // 나란히 보기를 껐으면 탐색기를 열지 않고 채팅 창을 일반 창으로
+        if !self.s.panel_enabled {
+            return self.open_panel_window(None);
+        }
         if self.panel.visible {
             self.panel.activate();
             return;
@@ -1615,6 +1739,9 @@ impl App {
     //   (새 창은 폴더 감시가 알아채 패널을 띄운다). folder 가 없으면 맨 처음 인덱싱 폴더
     //------------------------------------------------------------------
     fn open_panel_at(&mut self, folder: Option<String>) {
+        if !self.s.panel_enabled {
+            return self.open_panel_window(folder);
+        }
         let first = self.scope.lock().unwrap().active.first().cloned();
         let target = match folder.or(first) {
             Some(t) => t,
@@ -1632,6 +1759,100 @@ impl App {
         crate::info!("app", "채팅 모드: 폴더를 탐색기로 연다 — {}", target);
         if win::open_explorer(&target).is_err() {
             self.tray.notify("MoAI-S", &format!("탐색기를 열지 못했습니다: {}", target));
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 채팅 화면을 일반 창으로 열기 ([나란히 보기] 끔)
+    //=> 탐색기를 열지 않고 패널 창을 화면 가운데 보통 창으로 띄운다. 질문 범위는 고른 폴더(없으면 지금 폴더 → 맨 처음 인덱싱 폴더).
+    //   folder = 탐색 창에서 고른 폴더
+    //------------------------------------------------------------------
+    fn open_panel_window(&mut self, folder: Option<String>) {
+        let first = self.scope.lock().unwrap().active.first().cloned();
+        let target = match folder.or_else(|| self.panel.folder.clone()).or(first) {
+            Some(t) => t,
+            None => return self.tray.notify("MoAI-S", SCOPE_WARN),
+        };
+        // 탐색기를 따라가지 않는다 — 감시 대상 창도 비운다
+        self.monitor.watch_window(None);
+        let s = self.s.clone();
+        self.panel.show_window(&target, &s);
+        self.follow_root(&target);
+        self.refresh_scope();
+        if let Some(w) = &self.worker {
+            if self.s.start_mode != "lazy" {
+                w.ensure_started();
+            }
+        }
+    }
+
+    //------------------------------------------------------------------
+    // [나란히 보기] 켜기 · 끄기 — 설정 창 · 패널 · 탐색기 창의 단추 공통 (INI [Panel] Enabled)
+    //=> 값을 저장하고 모든 화면의 단추를 맞춘 뒤, 지금 떠 있는 창을 새 방식으로 옮긴다.
+    //    · 끔: 탐색기 옆 채팅 패널 → 일반 창으로 / 탐색기 옆 탐색기 모드 패널 → 숨기고 MoAI 탐색기 창
+    //    · 켬: 일반 창으로 뜬 채팅 → 그 폴더를 탐색기로 열어 옆에 붙인다
+    //          MoAI 탐색기 창 → 창을 숨기고 보던 폴더를 Windows 탐색기로 열어 오른쪽에 탐색기 모드 패널을 붙인다
+    //   on = 나란히 보기 켬 / from = 누른 곳(로그용) / folder = 탐색기 창이 보던 폴더(None = 맨 처음 검색 폴더)
+    //------------------------------------------------------------------
+    fn set_dock(&mut self, on: bool, from: &str, folder: Option<String>) {
+        crate::info!("app", "나란히 보기: {} ({})", if on { "켬" } else { "끔" }, from);
+        self.s.panel_enabled = on;
+        if let Err(e) = settings::save_ini_value(&self.s.ini_path, "Panel", "Enabled", if on { "1" } else { "0" }) {
+            crate::warn!("app", "나란히 보기 설정을 저장하지 못했다: {}", e);
+        }
+        self.panel.call("setDock", json!(on));
+        self.browse.call("setDock", json!(on));
+        let note = if on { "나란히 보기를 켰습니다 — 탐색기에서 검색 폴더를 열면 오른쪽에 나란히 뜹니다" }
+                   else { "나란히 보기를 껐습니다 — 따로 창으로 띄웁니다" };
+        if on {
+            // 일반 창으로 떠 있던 채팅을 탐색기 옆으로
+            if self.panel.visible && !self.panel.docked() {
+                let f = self.panel.folder.clone();
+                self.panel.hide(false);
+                self.open_panel_at(f);
+            } else if self.browse.visible && self.panel_mode == "explorer" {
+                // MoAI 탐색기 창 → 보던 폴더를 Windows 탐색기로 열고(이미 열려 있으면 앞으로) 옆에 패널을 붙인다.
+                //   새로 연 탐색기 창은 폴더 감시가 알아채 패널을 띄운다(채팅 모드 나란히 보기와 같은 길)
+                self.browse.hide();
+                self.open_panel_at(folder);
+            } else {
+                self.browse.call("notice", json!(note));
+            }
+        } else if self.panel.docked() {
+            let f = self.panel.folder.clone();
+            if self.panel_mode == "rag" {
+                self.open_panel_window(f);
+            } else {
+                // 탐색기 모드 패널은 MoAI 탐색기 창이 일반 창 몫이다
+                self.panel.hide(true);
+                self.monitor.watch_window(None);
+                self.open_browse(None, f, Value::Null);
+            }
+        } else {
+            self.browse.call("notice", json!(note));
+        }
+        self.panel.call("notice", json!(note));
+    }
+
+    //------------------------------------------------------------------
+    // 📌 항상 위에 표시 켜기 · 끄기 — 다른 창에 가리지 않게
+    //=> 누른 창(패널 또는 MoAI 탐색기 창)만 바꾸고 INI 에 남긴다. 다음 실행 때 창을 만들며 되살린다.
+    //   browse = MoAI 탐색기 창이면 true, 패널(채팅 · 탐색기 옆)이면 false / on = 항상 위
+    //------------------------------------------------------------------
+    fn set_on_top(&mut self, browse: bool, on: bool) {
+        let key = if browse { "BrowseOnTop" } else { "PanelOnTop" };
+        crate::info!("app", "항상 위에 표시: {} {}", if browse { "탐색기 창" } else { "패널" }, if on { "켬" } else { "끔" });
+        if browse {
+            self.s.browse_on_top = on;
+            win::set_topmost(self.browse.hwnd(), on);
+            self.browse.call("setOnTop", json!(on));
+        } else {
+            self.s.panel_on_top = on;
+            win::set_topmost(self.panel.hwnd(), on);
+            self.panel.call("setOnTop", json!(on));
+        }
+        if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", key, if on { "1" } else { "0" }) {
+            crate::warn!("app", "항상 위 설정을 저장하지 못했다: {}", e);
         }
     }
 
@@ -1864,6 +2085,7 @@ impl App {
         info["exts_default"] = json!(settings::DEFAULT_EXTS);
         info["ext_msg"] = json!(self.info.ext_msg);
         info["ui_mode"] = json!(self.s.ui_mode);
+        info["dock"] = json!(self.s.panel_enabled);
         info["mode_msg"] = json!(self.mode_msg);
         info["page_click"] = json!(self.s.page_click);
         info["folder_icon"] = json!(self.s.folder_icon);
@@ -2083,6 +2305,10 @@ impl App {
                 let mode = if m["value"] == "rag" { "rag" } else { "explorer" };
                 self.save_ui_mode(mode);
                 self.set_panel_mode(mode);
+            }
+            "dock" => {
+                let on = m["value"].as_bool().unwrap_or(true);
+                self.set_dock(on, "설정 창", None);
             }
             "page_click" => {
                 let v = if m["value"] == "app" { "app" } else { "preview" };
@@ -2537,7 +2763,8 @@ fn main() {
     let pt = proxy.clone();
     let tray = Tray::start(Box::new(move |name: &str| post(&pt, UserEvent::Tray(name.to_string()))));
     let pm = proxy.clone();
-    let monitor = Monitor::start(scope.clone(), s.folder_poll_ms, s.panel_enabled, Arc::new(move |e| post(&pm, UserEvent::Monitor(e))));
+    // 탐색기 감시는 늘 켠다 — [나란히 보기]([Panel] Enabled)를 실행 중에 켜고 끌 수 있게(끄면 on_folder 가 무시한다)
+    let monitor = Monitor::start(scope.clone(), s.folder_poll_ms, true, Arc::new(move |e| post(&pm, UserEvent::Monitor(e))));
     let history_path = history::default_path();
     // 지난 탐색기 창 자리 — s 는 App 으로 옮겨지므로 먼저 읽어 둔다
     let browse_place = Browse::parse_place(&s.browse_window);
@@ -2593,6 +2820,9 @@ fn main() {
         moai_b64: moai,
     };
     app.panel_mode = app.s.ui_mode.clone();
+    // 📌 항상 위 — 지난 값(기본 켬)을 창에 적용. 숨긴 창에도 걸어 두면 보일 때 그대로다
+    win::set_topmost(app.panel.hwnd(), app.s.panel_on_top);
+    win::set_topmost(app.browse.hwnd(), app.s.browse_on_top);
     app.jobs = app.make_jobs();
     app.start();
 

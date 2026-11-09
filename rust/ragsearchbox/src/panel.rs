@@ -28,6 +28,10 @@ pub struct Panel {
     pub folder: Option<String>,
     pub target: isize,
     pub scope_mode: String,
+    // 채팅 질문 범위 — [+] 옆에서 고른 검색 폴더(None = 모든 검색 폴더)
+    pub sel: Option<String>,
+    // 탐색기를 따라 마지막으로 자동 선택한 검색 폴더 — 같은 검색 폴더 안에서 옮겨 다닐 땐 사용자가 고른 값을 지킨다
+    pub auto_root: Option<String>,
     closed_for: HashSet<isize>,
     saved: Option<(bool, (i32, i32, i32, i32))>,
     room_rect: Option<(i32, i32, i32, i32)>,
@@ -45,6 +49,7 @@ impl Panel {
     pub fn new(window: Window, webview: WebView, s: &Settings) -> Panel {
         Panel {
             window, webview, visible: false, folder: None, target: 0, scope_mode: s.panel_search_scope.clone(),
+            sel: None, auto_root: None,
             closed_for: HashSet::new(), saved: None, room_rect: None, last_rect: None,
             width: s.win_width as i32, saved_width: s.win_width as i32, width_save_at: None, ready: false, queued: vec![], dpi_changed_at: None,
         }
@@ -116,6 +121,59 @@ impl Panel {
     }
 
     //------------------------------------------------------------------
+    // 일반 창으로 띄우기 — [나란히 보기] 를 끈 때 (채팅 모드도 탐색기 모드 창처럼 따로 뜬다)
+    //=> 탐색기에 붙어 있었으면 자리를 돌려주고 따라가기를 멈춘다(target = 0 이면 follow 가 아무 것도 안 한다).
+    //   처음 보일 때만 그 화면 가운데에 보통 크기로 놓는다 — 이미 떠 있으면 사용자가 옮긴 자리 그대로.
+    //   folder = 질문 범위 폴더 / s = 설정(패널 너비)
+    //------------------------------------------------------------------
+    pub fn show_window(&mut self, folder: &str, s: &Settings) {
+        let was_docked = self.visible && self.target != 0;
+        if was_docked {
+            self.give_back();
+        }
+        self.target = 0;
+        self.folder = Some(folder.to_string());
+        self.call("setFolder", json!(folder));
+        if !self.visible || was_docked {
+            // 탐색기 띠 크기(세로로 길쭉함) 대신 보통 창 크기 — 화면 작업 영역 안, 가운데
+            let work = win::work_area(self.hwnd());
+            let scale = win::dpi_scale(self.hwnd());
+            // 탐색기 띠 너비가 아니라 읽기 편한 보통 창 — 답 · 근거 카드가 넉넉하게 들어가는 폭
+            let w = ((s.win_width.max(820) as f64 * scale) as i32).min(work.2 - work.0);
+            let h = ((860.0 * scale) as i32).min(work.3 - work.1);
+            let rect = (work.0 + (work.2 - work.0 - w) / 2, work.1 + (work.3 - work.1 - h) / 2, w, h);
+            win::set_rect(self.hwnd(), rect);
+        }
+        win::bring_to_front(self.hwnd());
+        self.visible = true;
+        self.js("rsb.focusInput && rsb.focusInput()".into());
+        crate::info!("panel", "패널을 일반 창으로 표시: {}", folder);
+    }
+
+    //------------------------------------------------------------------
+    // 탐색기에서 떼기 — 따라가기만 멈추고 패널은 지금 자리에 그대로 보인다
+    //=> 붙어 있던 탐색기 창이 닫혔을 때. 물렸던 탐색기는(살아 있으면) 돌려준다.
+    //   다음에 검색 폴더를 연 탐색기 창이 생기면 show_for 가 그 옆에 다시 붙인다
+    //------------------------------------------------------------------
+    pub fn detach(&mut self) {
+        if self.target == 0 {
+            return;
+        }
+        self.give_back();
+        self.target = 0;
+        if self.visible && !win::is_visible(self.hwnd()) {
+            // 탐색기를 최소화한 채 닫혀 감춰져 있었으면 다시 보인다
+            win::show_no_activate(self.hwnd());
+        }
+        crate::info!("panel", "탐색기 창이 닫혀 패널을 따로 남겼다");
+    }
+
+    // 탐색기 옆에 붙어 떠 있나
+    pub fn docked(&self) -> bool {
+        self.visible && self.target != 0
+    }
+
+    //------------------------------------------------------------------
     // 숨기기 — 탐색기 자리를 돌려준다
     //------------------------------------------------------------------
     pub fn hide(&mut self, give_back: bool) {
@@ -153,8 +211,9 @@ impl Panel {
         }
         let (alive, minimized, _) = win::target_state(self.target);
         if !alive {
+            // 탐색기를 닫아도 패널은 닫지 않는다 — 그 자리에 따로 남긴다(다시 검색 폴더를 열면 그 옆에 붙는다)
             self.saved = None;
-            self.hide(false);
+            self.detach();
             return;
         }
         if minimized {

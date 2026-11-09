@@ -200,7 +200,11 @@ pub fn place_above_target(panel: isize, target: isize, rect: (i32, i32, i32, i32
     unsafe {
         let above = GetWindow(h(target), GW_HWNDPREV).map(hv).unwrap_or(0);
         let mut flags = SWP_NOACTIVATE;
-        let after = if above == panel {
+        // 항상 위(📌)면 겹침 순서는 건드리지 않는다 — 보통 창 뒤에 끼우면 '항상 위' 가 풀린다
+        let after = if is_topmost(panel) {
+            flags |= SWP_NOZORDER;
+            HWND::default()
+        } else if above == panel {
             flags |= SWP_NOZORDER;
             HWND::default()
         } else if above != 0 {
@@ -209,6 +213,33 @@ pub fn place_above_target(panel: isize, target: isize, rect: (i32, i32, i32, i32
             HWND_TOP
         };
         let _ = SetWindowPos(h(panel), after, x, y, w, ht, flags);
+    }
+}
+
+//------------------------------------------------------------------
+// 항상 위에 두기 · 풀기 — 자리 · 크기 · 보이기는 그대로
+//=> tao 의 set_always_on_top 은 창 스타일을 tao 가 기억하는 값으로 다시 써서, tao 를 거치지 않고 띄운 창
+//   (패널 — ShowWindow 로 직접 띄움)을 숨겨 버린다. 그래서 겹침 순서만 바꾸는 SetWindowPos 로 직접 한다.
+//------------------------------------------------------------------
+pub fn set_topmost(w: isize, on: bool) {
+    unsafe {
+        let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        let _ = SetWindowPos(h(w), after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+// 항상 위(WS_EX_TOPMOST) 창인가
+pub fn is_topmost(w: isize) -> bool {
+    unsafe { (GetWindowLongPtrW(h(w), GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0) != 0 }
+}
+
+//------------------------------------------------------------------
+// 창 자리 · 크기 바꾸기(물리 픽셀, 겹침 순서는 그대로) — 패널을 일반 창으로 띄울 때
+//------------------------------------------------------------------
+pub fn set_rect(w: isize, rect: (i32, i32, i32, i32)) {
+    let (x, y, cw, ch) = rect;
+    unsafe {
+        let _ = SetWindowPos(h(w), HWND::default(), x, y, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }
 

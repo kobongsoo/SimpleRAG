@@ -325,6 +325,8 @@
   /* ── 좁은 패널 배치 ── */
   body.panel .addr { flex-wrap: wrap; }
   body.panel .phead { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); }
+  body.panel .phead .f { text-align: left; border: 0; background: none; cursor: pointer; padding: 3px 6px; border-radius: 6px; }
+  body.panel .phead .f:hover { background: var(--hover); color: var(--ink); }
   body.panel .phead .f { flex: 1; min-width: 0; color: var(--muted); font-size: calc(var(--fs) * .82); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.panel .psearch { padding: 8px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); }
   body.panel .cards { flex: 1; overflow-y: auto; background: var(--surface); }
@@ -345,6 +347,17 @@
   .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; flex: none; font-size: calc(var(--fs) * .82); }
   .seg button { padding: 2px 8px; }
   .seg button.on { background: var(--brand); color: #fff; font-weight: bold; }
+  /* [나란히 보기] — 켜져 있으면 브랜드색 */
+  .ibtn.on, .cmd .ai.on { color: var(--brand); }
+  .cmd .ai.on { border-color: var(--brand); background: var(--brand-soft); }
+  .ibtn svg { width: 15px; height: 15px; }
+  /* 📌 항상 위 — 창은 주소줄 맨 오른쪽, 좁은 패널은 머리 ✕ 앞. 켜지면 브랜드색 */
+  #wtop { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--ink2); flex: none; margin-left: 4px; }
+  #wtop:hover { background: var(--hover); color: var(--ink); }
+  #wtop svg { width: 16px; height: 16px; }
+  #wtop.on, #ptop.on { color: var(--brand); }
+  #todock { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  #todock svg { width: 14px; height: 14px; flex: none; }
 </style>
 </head>
 <body>
@@ -430,6 +443,7 @@
     <div class="crumb" id="crumb"></div>
     <div class="search"><span>🔍</span><input id="q" placeholder="예: 작년 내가 작성한 AI 제안서 찾아줘." autocomplete="off" spellcheck="false">
       <span class="hint">Enter 찾기</span><button class="go" id="go">찾기</button><button class="clr" id="clr">초기화</button></div>
+    <button id="wtop" title="항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg></button>
   </div>
   <div class="cmd">
     <span>선택</span>
@@ -440,7 +454,8 @@
     <button class="b tog on" id="pvtoggle" title="미리 보기 창 (Alt+P)">◫ 미리 보기 창</button>
     <button class="b tog" id="aitoggle" title="AI 답변창 — 찾은 문서를 정리해 줍니다 (Alt+A)">✦ AI 답변창</button>
     <span class="sp"></span>
-    <button class="ai" id="toai" title="채팅 모드로 바꾸기 — 탐색기 옆 대화 패널에서 AI 가 문서를 근거로 답합니다">💬 채팅 모드</button>
+    <button class="ai" id="todock" title="나란히 보기 켬 — 탐색기와 나란히 띄웁니다 (누르면 따로 창으로)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4Z" fill="currentColor" stroke="none"/></svg> 나란히 보기</button>
+    <button class="ai" id="toai" title="채팅 모드로 바꾸기 — AI 가 문서를 근거로 답합니다">💬 채팅 모드</button>
     <button class="ai" id="toset" title="설정 — 검색 폴더 · 인덱싱 · AI 모델 · 화면">⚙ 설정</button>
     <button class="ai" id="tohelp" title="도움말 — 사용 안내 다시 보기 · 사용 설명서 · 단축키">?</button>
   </div>
@@ -478,16 +493,17 @@
 <div id="pnl" class="hidden" style="display:contents">
   <div class="phead">
     <div class="brand"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div>
-    <span class="f" id="pfolder"></span>
+    <button class="f" id="pfolder" title="찾을 검색 폴더 고르기"></button>
     <span class="seg"><button class="on">탐색기</button><button id="torag" title="이 패널을 채팅 모드로">채팅</button></span>
-    <button class="ibtn" id="big" title="크게 보기 — MoAI 탐색기 창">⤢</button>
+    <button class="ibtn" id="pdock" title="나란히 보기 켬 — 탐색기와 나란히 띄웁니다 (누르면 따로 창으로)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4Z" fill="currentColor" stroke="none"/></svg></button>
+    <button class="ibtn" id="ptop" title="항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg></button>
     <button class="ibtn" id="pclose" title="닫기 (Esc)">✕</button>
   </div>
   <div class="psearch"><div class="search"><span>🔍</span><input id="pq" placeholder="예: 작년 내가 작성한 AI 제안서" autocomplete="off" spellcheck="false"><button class="go" id="pgo">찾기</button><button class="clr" id="pclr">초기화</button></div></div>
   <div class="chips hidden" id="pchips"></div>
   <div class="cards" id="cards"></div>
   <div class="aip hidden" id="paip"></div>
-  <div class="st"><span id="pst1">이 폴더(하위 포함)에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)" title="찾은 문서를 정리해 줍니다">✦ AI 답변창</button></div>
+  <div class="st"><span id="pst1">모든 검색 폴더에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)" title="찾은 문서를 정리해 줍니다">✦ AI 답변창</button></div>
 </div>
 
 <div id="menu" class="hidden"></div>
@@ -627,7 +643,7 @@ function resetFind() {
     $("pvopen").textContent = "문서 열기 ↗"; $("pvopen").disabled = true; $("pvreveal").disabled = true;
     $("pvtext").classList.add("hidden"); $("pvempty").classList.remove("hidden");
   } else {
-    setStatus("이 폴더(하위 포함)에서 찾습니다");
+    setStatus(scope ? `'${pickName()}' 폴더에서 찾습니다` : "모든 검색 폴더에서 찾습니다");
   }
   inp.focus();
 }
@@ -1116,6 +1132,39 @@ function popMenu(x, y, items) {
   m.style.top = Math.min(y, innerHeight - 150) + "px";
 }
 function hideMenu() { $("menu").classList.add("hidden"); }
+
+// ── 탐색기 옆 패널: 찾을 검색 폴더 고르기 (채팅 화면의 📁 단추와 같다) ──
+//   scope = null 이면 모든 검색 폴더, 아니면 고른 검색 폴더 경로
+let pExpl = null;      // 지금 탐색기가 보는 폴더
+let pAutoRoot = null;  // 탐색기를 따라 마지막으로 자동으로 고른 검색 폴더
+function followRoot() {
+  const r = rootOf(pExpl);
+  if (!r || r.path === pAutoRoot) return drawPick();
+  pAutoRoot = r.path;
+  pickRoot(r.path);
+}
+function pickRoot(p) {
+  const changed = (p || null) !== scope;
+  scope = p || null;
+  drawPick();
+  if (changed && lastQ) runFind(lastQ, false);
+  // 검색 전 빈 화면 글도 고른 폴더로
+  else if (changed && !lastQ && !busy) renderCards();
+}
+const pickName = () => (scope ? (roots.find((r) => r.path === scope) || {}).name || base(scope) : "모든 검색 폴더");
+function drawPick() {
+  if (LAYOUT !== "panel") return;
+  const b = $("pfolder");
+  b.textContent = "📁 " + pickName() + " ▾";
+  b.title = (scope || "모든 검색 폴더") + " — 눌러서 찾을 검색 폴더 고르기";
+  if (!lastQ && !busy) $("pst1").textContent = scope ? `'${pickName()}' 폴더에서 찾습니다` : "모든 검색 폴더에서 찾습니다";
+}
+function showPickMenu(x, y) {
+  const sum = roots.reduce((a, r) => a + (r.count || 0), 0);
+  const items = [[`${scope ? "○" : "●"} 모든 검색 폴더  (${fmtN(sum)})`, () => pickRoot(null)]];
+  for (const r of roots) items.push([`${scope === r.path ? "●" : "○"} ${r.name}  ${cntText(r)}`, () => pickRoot(r.path)]);
+  popMenu(x, y, items);
+}
 function copy(t) {
   const a = document.createElement("textarea");
   a.value = t; document.body.appendChild(a); a.select();
@@ -1533,7 +1582,7 @@ function renderCards() {
   const C = $("cards");
   if (!docs.length) {
     showMessage(lastQ ? noResultMsg(lastQ, "") :
-      `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>이 폴더에서 찾기</b><br>문장으로 쓰면 그 내용이 있는<br>문서 · 쪽 · 해당 부분을 찾아 줍니다.`);
+      `<img src="data:image/png;base64,__MOAI__" alt=""><br><b>${esc(scope ? `'${pickName()}' 폴더에서 찾기` : "모든 검색 폴더에서 찾기")}</b><br>문장으로 쓰면 그 내용이 있는<br>문서 · 쪽 · 해당 부분을 찾아 줍니다.`);
     return;
   }
   let h = "";
@@ -1845,6 +1894,12 @@ const api = {
       if (!lastQ) drawCrumb();
     }
     drawNav();
+    if (LAYOUT === "panel") {
+      // 고른 검색 폴더를 뺐으면 모든 검색 폴더로
+      if (scope && !roots.some((r) => r.path === scope)) { scope = null; if (lastQ) runFind(lastQ, false); }
+      followRoot();
+      drawPick();
+    }
   },
   // 인덱싱 진행 — 숫자만 고친다(0.5초마다 오므로 탐색 창을 다시 그리면 누르던 것이 끊긴다)
   setRootCounts(v) {
@@ -1912,13 +1967,11 @@ const api = {
     if (cur && JSON.stringify(cur.ids || []) === key) showPreview(rows[selIdx]);
   },
   // 탐색기 옆 패널 — 지금 탐색기가 보는 폴더가 찾는 범위
+  //   다른 검색 폴더로 옮겨 갔을 때만 그 검색 폴더를 고른다 — 같은 검색 폴더 안에서는 📁 단추로 고른 값을 지킨다
   setFolder(f) {
     if (LAYOUT !== "panel") return;
-    const changed = (f || null) !== scope;
-    scope = f || null;
-    $("pfolder").textContent = scope ? "📁 " + scope : "";
-    $("pfolder").title = scope || "";
-    if (changed && lastQ) runFind(lastQ, false);
+    pExpl = f || null;
+    followRoot();
   },
   results(r) { onResults(r); },
   // 크게 보기 — 다른 화면에서 넘어온 검색
@@ -1979,6 +2032,33 @@ const api = {
   },
 };
 // 이 화면이 모르는 함수(대화 패널 전용 — setHistory · uploadDone …)는 조용히 넘긴다
+// [나란히 보기] — 창은 명령 모음 단추, 좁은 패널은 머리 아이콘. 누르면 반대로 바꿔 달라고 보낸다
+let dockOn = true;
+const DOCK_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4Z" fill="currentColor" stroke="none"/></svg>';
+const DOCK_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18"/></svg>';
+api.setDock = (on) => {
+  dockOn = !!on;
+  for (const id of ["todock", "pdock"]) {
+    const b = $(id); if (!b) continue;
+    b.classList.toggle("on", dockOn);
+    // 켜면 오른쪽 칸이 칠해진 창, 끄면 칸 없는 창(명령 모음 단추는 글자 '나란히 보기' 를 그대로 둔다)
+    b.innerHTML = (dockOn ? DOCK_ON_SVG : DOCK_OFF_SVG) + (id === "todock" ? " 나란히 보기" : "");
+    b.title = dockOn ? "나란히 보기 켬 — 탐색기와 나란히 띄웁니다 (누르면 따로 창으로)" : "나란히 보기 끔 — 따로 창으로 띄웁니다 (누르면 탐색기와 나란히)";
+  }
+};
+for (const id of ["todock", "pdock"]) { const b = $(id); if (b) b.onclick = () => send({ type: "dock", on: !dockOn, folder: scope || "" }); }
+// 📌 항상 위 — 창(#wtop) · 좁은 패널(#ptop). 반대로 바꿔 달라고 보내고 setOnTop 으로 되돌려 받는다
+let topOn = true;
+api.setOnTop = (on) => {
+  topOn = !!on;
+  for (const id of ["wtop", "ptop"]) {
+    const b = $(id); if (!b) continue;
+    b.classList.toggle("on", topOn);
+    b.innerHTML = topOn ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7" fill="none" stroke-width="2" stroke-linecap="round"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg>';
+    b.title = topOn ? "항상 위에 표시 켬 — 다른 창에 가리지 않습니다 (누르면 끔)" : "항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다";
+  }
+};
+for (const id of ["wtop", "ptop"]) { const b = $(id); if (b) b.onclick = () => send({ type: "ontop", on: !topOn }); }
 window.rsb = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => {}) });
 
 // ── 시작 ─────────────────────────────────────────────────
@@ -2035,7 +2115,8 @@ if (LAYOUT === "window") {
     if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); runFind($("pq").value); }
   });
   $("pask").onclick = toggleAi;
-  $("big").onclick = () => send({ type: "big", q: lastQ, folder: scope });
+  // 검색 폴더 고르기 — 머리의 📁 단추
+  $("pfolder").onclick = (e) => { e.stopPropagation(); const r = $("pfolder").getBoundingClientRect(); showPickMenu(r.left, r.bottom + 4); };
   $("torag").onclick = () => send({ type: "mode", mode: "rag" });
   $("pclose").onclick = () => send({ type: "close" });
   renderCards();

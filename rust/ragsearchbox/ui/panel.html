@@ -42,10 +42,19 @@
   .icon:hover { background: var(--hover); color: var(--ink); }
   .icon svg { width: 18px; height: 18px; }
   /* [탐색기 모드] — 글자가 있는 버튼(아이콘 + 이름) */
+  /* [탐색기 | 채팅] 바꾸기 칸 — 탐색기 팝업(browse.html .seg)과 같은 모양 */
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; flex: none; font-size: calc(var(--fs) * .82); }
+  .seg button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 2px 8px; }
+  .seg button:not(.on):hover { background: var(--brand-soft); color: var(--brand); }
+  .seg button.on { background: var(--brand); color: #fff; font-weight: bold; cursor: default; }
   .icon.wide { width: auto; display: flex; gap: 5px; padding: 0 10px; border: 1px solid var(--rule); border-radius: 999px;
     height: 30px; font-size: calc(var(--fs) * 0.85); white-space: nowrap; }
   .icon.wide:hover { border-color: var(--brand); color: var(--brand); background: none; }
   .icon.wide svg { width: 15px; height: 15px; }
+  /* [나란히 보기] — 켜져 있으면 브랜드색 */
+  #btnDock.on { color: var(--brand); }
+  /* 📌 항상 위 — 켜지면 브랜드색 꽂힌 핀 */
+  #btnTop.on { color: var(--brand); }
   .icon[data-tip]:hover::after { content: attr(data-tip); position: absolute; top: 112%; right: 0; white-space: nowrap;
     background: var(--ink); color: #fff; font-size: calc(var(--fs) * 0.78); padding: 3px 8px; border-radius: 6px; z-index: 20; }
 
@@ -130,6 +139,9 @@
   #scopebtn { color: var(--ink2); cursor: pointer; padding: 4px 8px; border-radius: 8px; user-select: none; position: relative;
     border: 1px solid var(--rule); }
   #scopebtn:hover { background: var(--hover); }
+  /* [+] 옆 검색 폴더 — 고른 폴더 이름이 길면 줄인다 */
+  #scopebtn { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .menu .cnt { color: var(--muted); margin-left: 6px; }
   #state { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #send { background: var(--brand); color: #fff; border: 0; border-radius: 50%; width: 34px; height: 34px;
     cursor: pointer; display: grid; place-items: center; box-shadow: 0 3px 10px rgba(229, 22, 63, .3); transition: transform .1s, background .15s; }
@@ -189,8 +201,12 @@
   <div class="titles"><div id="title">새 대화</div><div id="folder"></div></div>
   <span class="icon" id="btnHist" data-tip="대화 기록"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></span>
   <span class="icon" id="btnNew" data-tip="새 대화"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
-  <!-- [탐색기 모드] — 화면 모드를 탐색기 모드로 바꿔 저장하고 MoAI 탐색기 창을 연다 -->
-  <span class="icon wide" id="btnExplorer" data-tip="탐색기 모드로 바꾸기 — 문서 · 쪽 · 내용을 목록으로 찾습니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><circle cx="12.5" cy="13" r="2.5"/><path d="m14.5 15 2 2"/></svg>탐색기 모드</span>
+  <!-- [탐색기 | 채팅] — 탐색기 팝업과 같은 모양 · 자리. 탐색기를 누르면 탐색기 모드로 바꿔 저장한다 -->
+  <span class="seg"><button id="btnExplorer" title="탐색기 모드로 바꾸기 — 문서 · 쪽 · 내용을 목록으로 찾습니다">탐색기</button><button class="on" title="지금 채팅 모드">채팅</button></span>
+  <!-- [나란히 보기] — 켜면 탐색기 오른쪽에 나란히 뜨고, 끄면 따로 창으로 뜬다(설정 창과 같은 값) -->
+  <span class="icon" id="btnDock" data-tip="나란히 보기 켬 — 탐색기와 나란히 띄웁니다 (누르면 따로 창으로)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4Z" fill="currentColor" stroke="none"/></svg></span>
+  <!-- 📌 항상 위에 표시 — 다른 창에 가리지 않게(이 창만, 다음 실행에도 기억) -->
+  <span class="icon" id="btnTop" data-tip="항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg></span>
 </header>
 <div id="body">
   <div id="hint">
@@ -213,7 +229,7 @@
     <textarea id="input" placeholder="무엇이든 물어보세요 (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
     <div class="bar">
       <span id="plus" data-tip="문서 올리기 — 올린 문서에서만 찾아 답합니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
-      <span id="scopebtn">이 폴더 ▾</span>
+      <span id="scopebtn" title="질문할 검색 폴더 고르기">📁 모든 검색 폴더 ▾</span>
       <span id="state"></span>
       <button id="send" title="보내기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></button>
     </div>
@@ -226,6 +242,15 @@
 "use strict";
 const MAX_TURNS = 20;
 const SCOPE_LABELS = { folder: "이 폴더", root: "지정 폴더 전체" };
+// [+] 옆 검색 폴더 목록 — Rust 가 setFolders 로 준다. sel = 고른 폴더 경로(null 이면 모든 검색 폴더)
+let folders = [], foldersAll = null, folderSel = null;
+const ALL_LABEL = "모든 검색 폴더";
+function folderName(p) { const f = folders.find((x) => x.path === p); return f ? f.name : (p || ALL_LABEL); }
+function drawFolderBtn() {
+  const name = folderSel ? folderName(folderSel) : ALL_LABEL;
+  $("scopebtn").textContent = "📁 " + name + " ▾";
+  $("scopebtn").title = "질문할 검색 폴더 — " + (folderSel || ALL_LABEL);
+}
 const $ = (id) => document.getElementById(id);
 const send = (obj) => window.ipc.postMessage(JSON.stringify(obj));
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -331,8 +356,10 @@ function drawUps() {
     box.appendChild(c);
   }
   const n = ups.filter((u) => u.state === "done").length;
+  // 범위 칩은 올린 문서가 있을 때만 — 검색 폴더는 [+] 옆 단추가 보여 준다
   $("chip").classList.toggle("on", n > 0);
-  $("chip").textContent = n > 0 ? "📎 업로드 문서 " + n + "/" + UP_MAX + "건에서 찾기" : (scopeDesc ? "📁 " + scopeDesc.replace("범위: ", "") : "📁 범위 모름");
+  $("chip").parentElement.style.display = n > 0 ? "" : "none";
+  $("chip").textContent = "📎 업로드 문서 " + n + "/" + UP_MAX + "건에서 찾기";
   // 한도 안내 — 칩이 하나라도 있으면 남은 자리를, 꽉 차면 [+] 를 흐리게
   const left = upLeft();
   $("uphint").textContent = ups.length ? (left > 0 ? "남은 자리 " + left + "개 · 파일당 " + UP_MB + "MB 이하"
@@ -345,7 +372,7 @@ function drawUps() {
                                  : "무엇이든 물어보세요 (Enter 전송 · Shift+Enter 줄바꿈)";
   // 빈 화면 안내도 지금 찾는 곳에 맞춘다
   $("hint").querySelector(".sub").textContent = n > 0 ? "올린 문서 " + n + "건에서만 찾아 근거와 함께 답해 드립니다."
-                                                      : "이 폴더의 문서에서 찾아 근거와 함께 답해 드립니다.";
+                                                      : (folderSel ? "'" + folderName(folderSel) + "' 폴더" : ALL_LABEL) + "의 문서에서 찾아 근거와 함께 답해 드립니다.";
 }
 function removeUpload(u) {
   if (busy || uploading()) { setState("답변·업로드가 끝난 뒤에 뺄 수 있습니다"); return; }
@@ -560,12 +587,37 @@ $("btnHist").onclick = (e) => {
 };
 $("btnNew").onclick = newChat;
 $("btnExplorer").onclick = () => send({ type: "switch_mode", mode: "explorer" });
+// [나란히 보기] — 지금 값의 반대로 바꿔 달라고 보낸다(Rust 가 저장하고 setDock 으로 되돌려 준다)
+let dockOn = true;
+const DOCK_ON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4Z" fill="currentColor" stroke="none"/></svg>';
+const DOCK_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18"/></svg>';
+function drawDock() {
+  $("btnDock").classList.toggle("on", dockOn);
+  // 켜면 오른쪽 칸이 칠해진 창, 끄면 칸 없는 창 — 글자를 읽지 않아도 상태가 보이게
+  $("btnDock").innerHTML = dockOn ? DOCK_ON_SVG : DOCK_OFF_SVG;
+  $("btnDock").dataset.tip = dockOn ? "나란히 보기 켬 — 탐색기와 나란히 띄웁니다 (누르면 따로 창으로)" : "나란히 보기 끔 — 따로 창으로 띄웁니다 (누르면 탐색기와 나란히)";
+}
+$("btnDock").onclick = () => send({ type: "dock", on: !dockOn });
+// 📌 항상 위 — 반대로 바꿔 달라고 보내고, Rust 가 창에 적용한 뒤 setOnTop 으로 되돌려 준다
+let topOn = true;
+$("btnTop").onclick = () => send({ type: "ontop", on: !topOn });
 // 빈 화면 예시 질문 — 누르면 그 질문으로 바로 묻는다(시연용)
 for (const c of $("chips").children) c.onclick = () => { $("input").value = c.textContent; doSend(); };
 $("scopebtn").onclick = (e) => {
   e.stopPropagation();
-  menu($("scopebtn"), Object.entries(SCOPE_LABELS).map(([k, v]) => ({ label: (k === scopeMode ? "● " : "○ ") + v, fn: () => chooseScope(k) })), false);
+  if (hasUploads()) { setState("올린 문서가 있으면 그 문서에서만 찾습니다"); return; }
+  const cnt = (n) => (n == null ? "" : "  " + n + "건");
+  const items = [{ label: (folderSel ? "○  " : "●  ") + ALL_LABEL + cnt(foldersAll), fn: () => pickFolder(null) }];
+  if (folders.length) items.push("-");
+  for (const f of folders) items.push({ label: (folderSel === f.path ? "●  " : "○  ") + f.name + cnt(f.n), fn: () => pickFolder(f.path) });
+  menu($("scopebtn"), items, false);
 };
+// 검색 폴더 고르기 — Rust 가 저장하고 setFolders · setScope 로 되돌려 준다
+function pickFolder(p) {
+  if (p === folderSel) return;
+  folderSel = p; drawFolderBtn(); drawUps();
+  send({ type: "pick_folder", path: p || "" });
+}
 function chooseScope(k) {
   $("scopebtn").textContent = SCOPE_LABELS[k] + " ▾";
   if (k === scopeMode) return;
@@ -587,6 +639,10 @@ document.addEventListener("keydown", (e) => {
 window.rsb = {
   setFolder(f) { folder = f || ""; $("folder").textContent = folder; },
   setScope(desc) { scopeDesc = desc || ""; drawUps(); },
+  setFolders(v) {
+    folders = (v && v.items) || []; foldersAll = v ? v.all_n : null; folderSel = (v && v.sel) || null;
+    drawFolderBtn(); drawUps();
+  },
   // [+] 로 고른 파일들 — ok 면 올리는 중 칩, 아니면 실패 칩
   uploadQueued(list) {
     setState("");
@@ -616,7 +672,8 @@ window.rsb = {
     syncConvUploads(); saveConv(); drawUps();
     if (!uploading()) flash(hasUploads() ? "문서를 올렸습니다 — 이제 질문은 올린 문서에서만 찾습니다" : "문서를 올리지 못했습니다");
   },
-  setScopeMode(k) { scopeMode = k; $("scopebtn").textContent = (SCOPE_LABELS[k] || SCOPE_LABELS.folder) + " ▾"; },
+  // 옛 범위 방식(이 폴더 · 지정 폴더 전체) — 이제 [+] 옆 검색 폴더 단추가 대신한다. 값만 받아 둔다
+  setScopeMode(k) { scopeMode = k; },
   setHistory(list) { history = list || []; },
   setState(t) { setState(t); },
   notice(t) { setState(t); },
@@ -659,6 +716,14 @@ window.rsb = {
     if (t) { t.record.error = msg; drawError(t, msg); saveConv(); scrollBottom(); }
   },
   focusInput() { $("input").focus(); },
+  setDock(on) { dockOn = !!on; drawDock(); },
+  setOnTop(on) {
+    topOn = !!on;
+    const b = $("btnTop");
+    b.classList.toggle("on", topOn);
+    b.innerHTML = topOn ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7" fill="none" stroke-width="2" stroke-linecap="round"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg>';
+    b.dataset.tip = topOn ? "항상 위에 표시 켬 — 다른 창에 가리지 않습니다 (누르면 끔)" : "항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다";
+  },
   isBusy() { return busy; },
 };
 send({ type: "ready" });
