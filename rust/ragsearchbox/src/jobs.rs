@@ -95,6 +95,8 @@ pub struct IndexJobs {
     vec_pending: Option<usize>,
     // 이번에 채우기 시작할 때의 대기 수(진행 표시 "12,345 / 186,919" 의 분모)
     vec_total: usize,
+    // 이름이 바뀌어 쉬는 동안 제목을 다시 만들 문서 수(워커 /embed-pending 이 한 건씩 처리)
+    retitle_pending: usize,
     // 폴더별 인덱싱 진행 — 폴더 → (끝낸 수, 전체). 탐색 창에 "Desktop (10/311)" 로 보이고, 끝나면 뺀다
     prog: HashMap<String, (usize, usize)>,
     // 진행 · 대기가 바뀔 때마다 늘어난다 — 메인이 보고 탐색 창 숫자를 고친다
@@ -131,7 +133,7 @@ impl IndexJobs {
             queued: HashSet::new(), inflight: None, handlers: HashMap::new(), next_id: 1, bm25_needed: false, bm25_mid_docs: 0, bm25_mid_at: Instant::now(), bm25_mid_cost: Duration::ZERO, retry_at: None,
             last_avail: None, outside_needed: true, approve_outside: false, waiting_new: HashMap::new(), waiting_delete: HashMap::new(),
             round: Round { done: 0, total: 0, changed: vec![], failed: vec![] },
-            vec_pending: None, vec_total: 0, prog: HashMap::new(), prog_ver: 0, running_approved: HashSet::new(),
+            vec_pending: None, vec_total: 0, retitle_pending: 0, prog: HashMap::new(), prog_ver: 0, running_approved: HashSet::new(),
         }
     }
 
@@ -390,7 +392,7 @@ impl IndexJobs {
         }
         // 벡터 대기 청크 채우기 — 질문을 처리하지 않을 때만, 64개씩(질문이 오면 1초 안에 비켜 준다)
         let idle = self.worker.as_ref().map(|w| w.is_idle() && w.seconds_since_ask() >= PENDING_IDLE_S).unwrap_or(false);
-        if idle && self.vec_pending.map(|n| n > 0).unwrap_or(true) {
+        if idle && (self.vec_pending.map(|n| n > 0).unwrap_or(true) || self.retitle_pending > 0) {
             let line = format!("/embed-pending {}", crate::worker::ascii_json(&json!({"max": PENDING_STEP})));
             self.send(line, Handler::Pending, "벡터 채우기");
         }
@@ -557,7 +559,8 @@ impl IndexJobs {
         }
         self.round.done += 1;
         // 벡터를 미룬 문서 — 차례가 끝나면 /embed-pending 으로 채운다
-        if res["deferred"].as_u64().unwrap_or(0) > 0 {
+        //   이름이 바뀐 큰 문서도 — 쉬는 동안 제목을 다시 만든다(같은 명령이 처리)
+        if res["deferred"].as_u64().unwrap_or(0) > 0 || Self::b(res, "retitle_later") {
             self.vec_pending = None;
         }
         // 폴더별 진행 — 다 끝난 폴더는 빼서 문서 수만 보이게 한다
@@ -575,11 +578,12 @@ impl IndexJobs {
             self.round.changed.push(name.clone());
             crate::info!("autoindex", "반영 이동: {} → {}", res["from"].as_str().unwrap_or("?"), path);
             (self.notify)("doc", &format!("방금 반영(이동): {}", name));
-        } else if Self::b(res, "ok") && ["added", "modified", "copied", "removed"].contains(&result) {
+        } else if Self::b(res, "ok") && ["added", "modified", "copied", "removed", "retitled"].contains(&result) {
             self.bm25_needed = true;
             self.bm25_mid_docs += 1;
             self.round.changed.push(name.clone());
-            let label = match result { "added" => "추가", "modified" => "수정", "copied" => "복사", _ => "삭제" };
+            // retitled = 이름이 바뀐 문서를 옮기고 새 제목으로 다시 청킹했다
+            let label = match result { "added" => "추가", "modified" => "수정", "copied" => "복사", "retitled" => "이름 바꿈", _ => "삭제" };
             crate::info!("autoindex", "반영 {}: {} ({}청크, {}ms)", label, path, res.get("chunks").or(res.get("removed")).cloned().unwrap_or(json!("")), res["ms"]);
             (self.notify)("doc", &format!("방금 반영({}): {}", label, name));
         } else if !Self::b(res, "ok") {
@@ -600,6 +604,12 @@ impl IndexJobs {
             crate::warn!("autoindex", "벡터 채우기 실패: {}", res["why"]);
             self.vec_pending = Some(0);
             return;
+        }
+        // 제목 갱신 — 남은 수를 기억하고, 이번에 한 건 했으면 키워드 색인도 다시(청크 글이 바뀜)
+        self.retitle_pending = res["retitle"].as_u64().unwrap_or(0) as usize;
+        if res["retitled"].as_u64().unwrap_or(0) > 0 {
+            crate::info!("autoindex", "제목 갱신 1건 — 남은 {}건", self.retitle_pending);
+            self.bm25_needed = true;
         }
         let left = res["pending"].as_u64().unwrap_or(0) as usize;
         let was = self.vec_pending.unwrap_or(0);

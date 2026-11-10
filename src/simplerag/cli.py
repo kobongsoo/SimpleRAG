@@ -147,10 +147,12 @@ def cmd_index(args):
             op="index", ok=True, failed=len(summary.get("failed") or [])),
             prefix="@index-summary "))
         # 이동(하위 폴더로 옮김)은 경로만 바꾸고, 복사(붙여 넣은 같은 파일)는 원본 벡터를 베낀 건수다
-        print("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 이동 {}건 · 복사 {}건 · 삭제 {}건"
+        # 이름 바꿈 = 옮기거나 복사한 뒤 새 제목으로 다시 청킹한 문서(이동 · 복사 수에는 들어가지 않는다)
+        renamed = " · 이름 바꿈 {}건".format(summary["retitled"]) if summary.get("retitled") else ""
+        print("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 이동 {}건 · 복사 {}건{} · 삭제 {}건"
               " / 청크 {:,}개 / {:.1f}s"
               .format(summary["files"], summary["added"], summary["modified"], summary["same"],
-                      summary.get("moved", 0), summary.get("copied", 0), summary["removed"],
+                      summary.get("moved", 0), summary.get("copied", 0), renamed, summary["removed"],
                       summary["chunks"], summary["sec"]))
         if summary.get("failed"):
             print("실패 {}건 (실패한 문서는 옛 버전이 그대로 남아 있습니다)".format(

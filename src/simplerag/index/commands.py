@@ -205,7 +205,7 @@ class IndexCommands:
     #
     # -in: path = 문서 경로
     #
-    # -out: {ok, result("added"|"modified"|"same"|"moved"|"copied"|"unchanged"|"failed_before"),
+    # -out: {ok, result("added"|"modified"|"same"|"moved"|"copied"|"retitled"|"unchanged"|"failed_before"),
     #        chunks, deferred(벡터를 미룬 청크 수), why, from(옮긴 문서의 옛 경로 · 복사본의 원본 경로)}
     # -out: error = 저장소 쓰기 실패는 예외(run 이 받는다)
     #--------------------------------------------------------------
@@ -242,7 +242,10 @@ class IndexCommands:
             self._matrix_update(r["from"], None)
             rng = state["docs"].get(path, {}).get("ids") or [0, 0]
             self._matrix_update(path, list(range(rng[0], rng[1])))
-        if r["ok"] and r["op"] in ("added", "modified", "copied"):
+        if r["ok"] and r["op"] == "retitled" and r.get("from"):
+            # 이름 바꿈 — 옮긴 뒤 새 제목으로 다시 청킹했다. 옛 경로 행은 뺀다(새 경로 행은 아래에서 단다)
+            self._matrix_update(r["from"], None)
+        if r["ok"] and r["op"] in ("added", "modified", "copied", "retitled"):
             # 폴더 한정 검색용 벡터 한 벌에도 반영한다 — 옛 행은 지우고 새 청크를 덧붙인다
             rng = state["docs"].get(path, {}).get("ids") or [0, 0]
             self._matrix_update(path, list(range(rng[0], rng[1])))

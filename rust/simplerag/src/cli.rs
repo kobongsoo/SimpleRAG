@@ -138,11 +138,13 @@ pub fn cmd_index(a: &Args) -> i32 {
                 "same": s.c("same"), "moved": s.c("moved"), "copied": s.c("copied"), "removed": s.removed,
                 "delete_blocked": s.delete_blocked, "held_new": s.held_new, "chunks": s.chunks,
                 "sec": s.sec, "op": "index", "ok": true, "failed": s.failed.len(),
-                "pending": s.pending, "reused": s.reused, "embedded": s.embedded,
+                "pending": s.pending, "reused": s.reused, "embedded": s.embedded, "retitled": s.c("retitled"),
             }));
             outln(&commands::format_result(&res, "@index-summary "));
-            outln(&format!("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 이동 {}건 · 복사 {}건 · 삭제 {}건 / 청크 {}개 / {:.1}s",
-                s.files, s.c("added"), s.c("modified"), s.c("same"), s.c("moved"), s.c("copied"), s.removed,
+            // 이름 바꿈 = 옮기거나 복사한 뒤 새 제목으로 다시 청킹한 문서(이동 · 복사 수에는 들어가지 않는다)
+            let renamed = if s.c("retitled") > 0 { format!(" · 이름 바꿈 {}건", s.c("retitled")) } else { String::new() };
+            outln(&format!("\n문서 {}건 / 추가 {}건 · 수정 {}건 · 내용 같음 {}건 · 이동 {}건 · 복사 {}건{} · 삭제 {}건 / 청크 {}개 / {:.1}s",
+                s.files, s.c("added"), s.c("modified"), s.c("same"), s.c("moved"), s.c("copied"), renamed, s.removed,
                 pyutil::comma(s.chunks), s.sec));
             if !s.failed.is_empty() {
                 outln(&format!("실패 {}건 (실패한 문서는 옛 버전이 그대로 남아 있습니다)", s.failed.len()));

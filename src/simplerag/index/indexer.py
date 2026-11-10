@@ -450,7 +450,7 @@ def _reuse_vectors(store, old_ids, hashes):
 # -in: fresh    = 이번 실행에서 이미 새로 임베딩하거나 미룬 청크 수(기본 0)
 # -in: prepared = 준비 스레드 결과 {chash, parsed?}(None 이면 그 자리에서 해시 · 추출 · 청킹)
 #
-# -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"), chunks, why, kept_old, n_rows, from,
+# -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"|"retitled"), chunks, why, kept_old, n_rows, from,
 #               reused(옛 벡터를 다시 쓴 청크 수), embedded(새로 임베딩한 수), deferred(벡터 대기로 둔 수)}
 # -out: error = 추출·임베딩 실패는 ok=False 로 돌려준다. 저장소 쓰기 실패는 예외 전파
 #------------------------------------------------------------------
@@ -472,26 +472,40 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
         return {"ok": False, "op": op, "chunks": 0, "kept_old": bool(prev),
                 "why": "읽기 실패 {}: {}".format(type(e).__name__, str(e)[:70])}
     if prev and prev.get("content_hash") == chash:
-        prev["fingerprint"] = fp
-        prev["mtime"] = int(os.stat(path).st_mtime)
-        state.get("failed", {}).pop(key, None)
-        save_state(state)
-        # 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
-        meta_hook.synced(key, chash)
-        return {"ok": True, "op": "same", "chunks": prev.get("chunks", 0)}
+        # 내용은 같은데 청크 제목이 지금 파일 이름과 다르면(이름 바꿈) 아래에서 청크를 다시 만든다.
+        #   Python 판은 벡터를 미루지 않으므로 크기와 상관없이 바로 한다(파일 이름 바꿈 설계서 §4)
+        if not needs_retitle(prev, path):
+            prev["fingerprint"] = fp
+            prev["mtime"] = int(os.stat(path).st_mtime)
+            state.get("failed", {}).pop(key, None)
+            save_state(state)
+            # 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
+            meta_hook.synced(key, chash)
+            return {"ok": True, "op": "same", "chunks": prev.get("chunks", 0)}
+        op = "retitled"
     # 처음 보는 경로인데 같은 파일이 다른 자리에서 사라졌다 — 옮긴 것이다(경로만 바꾼다)
     if not prev:
+        carried = None
         old = moved_from(state, path, chash)
         if old:
             log("  [이동] {} → {}".format(old, key))
-            return move_doc(old, path, fp, state, store)
-        # 원본이 그대로 있는 같은 파일 — 붙여 넣은 복사본이다(원본 벡터를 베낀다)
-        src = copied_from(state, path, chash)
-        if src:
-            r = copy_doc(src, path, fp, state, store)
-            if r:
-                log("  [복사] {} → {}".format(src, key))
-                return r
+            carried = move_doc(old, path, fp, state, store)
+        else:
+            # 원본이 그대로 있는 같은 파일 — 붙여 넣은 복사본이다(원본 벡터를 베낀다)
+            src = copied_from(state, path, chash)
+            if src:
+                carried = copy_doc(src, path, fp, state, store)
+                if carried:
+                    log("  [복사] {} → {}".format(src, key))
+        if carried:
+            # 이름까지 바뀌었으면 같은 경로로 한 번 더 — 이제 prev 가 있고 내용이 같아 제목 갱신으로 간다
+            if not needs_retitle(state["docs"][key], path):
+                return carried
+            again = sync_doc(path, fp, state, embedder, store, ext, log, fresh=fresh)
+            if again.get("op") == "retitled":
+                again["from"] = carried.get("from")
+                return again
+            return carried
 
     # ── 2) 새 버전 만들기 (인덱스는 아직 그대로) ──────
     # 문서 1건의 실패가 전체 실행을 죽이면 안 된다. 추출뿐 아니라 청킹·임베딩까지
@@ -512,7 +526,8 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
         # 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 자리 표시 벡터로 둔다
         need = [c for c, r in zip(chunks, reused) if r is None]
         # 이번 실행에서 새로 임베딩할 청크가 문턱을 넘으면 벡터는 미룬다(큰 문서가 명령 시간 한도를 넘지 않게)
-        defer = defer_over is not None and fresh + len(need) > defer_over
+        #   제목 갱신은 미루지 않는다 — 다 만든 뒤 바꿔 끼우므로 그동안 옛 벡터로 계속 검색된다
+        defer = op != "retitled" and defer_over is not None and fresh + len(need) > defer_over
         if defer:
             new_vecs = [store_mod.pending_vector(store.dim)] * len(need)
         else:
@@ -573,9 +588,11 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
     store.delete_doc_except(key, ids)
 
     # ── 6) 상태 파일을 새 버전으로 ────────────────────
+    # chunk_title = 청크 접두에 쓴 제목(이름 바꿈 판정) · size = 이동 짝짓기 때 해시 전에 거르는 크기
     state["docs"][key] = {"fingerprint": fp, "content_hash": chash,
                           "chunks": len(chunks), "ids": [start_id, start_id + len(chunks)],
-                          "name": name, "folder": folder, "mtime": mtime}
+                          "name": name, "folder": folder, "mtime": mtime,
+                          "chunk_title": title_of(name), "size": _file_size(path)}
     state.get("failed", {}).pop(key, None)
     mark_changed(state)
     save_state(state)
@@ -583,6 +600,84 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
     n_new = len(chunks) - n_reused
     return {"ok": True, "op": op, "chunks": len(chunks), "n_rows": n_rows, "reused": n_reused,
             "embedded": 0 if defer else n_new, "deferred": n_new if defer else 0}
+
+
+#------------------------------------------------------------------
+# 확장자 뺀 파일 이름 (청크 접두 제목)
+#=> parse_doc 이 청크 앞 접두 "[제목 > 절]" 에 넣는 제목과 같은 규칙. 파일 이름이 바뀌었는지
+#   (= 청크를 다시 만들어야 하는지) 견줄 때 쓴다(파일 이름 바꿈 설계서 §3-2).
+#
+# -in: path = 파일 경로 또는 이름
+#
+# -out: 제목 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def title_of(path):
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+#------------------------------------------------------------------
+# 문서 항목이 청킹에 쓴 제목
+#=> chunk_title 이 있으면 그것, 없으면(옛 인덱스 · Rust 판 이전 상태) name 의 확장자 뺀 값.
+#   옮기거나 복사하면 청크 글은 그대로이므로 chunk_title 도 옛 제목 그대로 남는다.
+#
+# -in: entry = 상태 파일의 문서 항목 dict
+#
+# -out: 제목 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def chunk_title_of(entry):
+    t = entry.get("chunk_title")
+    return t if t is not None else title_of(entry.get("name", ""))
+
+
+#------------------------------------------------------------------
+# 이름이 바뀌어 청크를 다시 만들어야 하나
+#=> 청크 제목과 지금 파일 이름(확장자 뺀)을 견준다. 대소문자만 다르면 같은 이름으로 본다
+#   (이동 판정의 이름 비교와 같은 기준).
+#
+# -in: entry = 문서 항목 dict
+# -in: path  = 지금 파일 경로
+#
+# -out: True = 다시 청킹해야 함
+# -out: error = 없음
+#------------------------------------------------------------------
+def needs_retitle(entry, path):
+    return chunk_title_of(entry).lower() != title_of(path).lower()
+
+
+#------------------------------------------------------------------
+# 파일 크기 (이동 짝짓기용)
+#=> 이름까지 바뀐 문서를 찾을 때 내용 해시를 구하기 전에 크기로 먼저 거른다.
+#
+# -in: path = 파일 경로
+#
+# -out: 바이트 수 또는 None(읽지 못함)
+# -out: error = 없음 (OSError 는 None)
+#------------------------------------------------------------------
+def _file_size(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+#------------------------------------------------------------------
+# 이동 · 복사 후보 순위
+#=> 같은 내용 문서가 여럿일 때 고르는 순서 — 0 같은 이름, 1 같은 폴더, 2 그 밖.
+#
+# -in: key  = 후보(옛) 문서 키
+# -in: path = 새 경로
+#
+# -out: 0 · 1 · 2
+# -out: error = 없음
+#------------------------------------------------------------------
+def _candidate_rank(key, path):
+    if os.path.basename(key).lower() == os.path.basename(path).lower():
+        return 0
+    if norm_path(os.path.dirname(key)) == norm_path(os.path.dirname(path)):
+        return 1
+    return 2
 
 
 #------------------------------------------------------------------
@@ -792,7 +887,9 @@ def plan_changes(doc_dir, state, recursive=True, allow_delete=False, rebuild=Fal
 #    1) 사라진 문서의 (내용 해시, 파일 이름) 을 모은다 — 내용 해시는 파일 바이트의 sha1
 #    2) 지금 폴더의 파일 가운데 이름이 같은 것만 내용 해시를 구해 견준다(읽는 양을 줄인다)
 #    3) 맞으면 이동. 새 경로가 이미 인덱스에 있으면(예전 버그로 두 벌이 됨) 옛 경로는 중복
-#   이름까지 같아야 이동으로 본다 — 이름을 바꾸면 청크 앞에 붙은 제목이 달라져 다시 만든다.
+#    4) 남은 사라진 문서는 이름이 바뀐 것일 수 있다 — 아직 인덱스에 없는 새 파일 가운데 크기가 맞는 것만
+#       내용 해시를 구해 견준다(같은 폴더 우선). 이름이 바뀐 문서는 옮긴 뒤 sync_doc 이 제목만 새로 청킹한다
+#       (파일 이름 바꿈 설계서 §3-1).
 #
 # -in: state   = 상태 dict
 # -in: missing = 사라진 문서 키 목록(find_removed 결과)
@@ -828,12 +925,48 @@ def find_moves(state, missing, files):
             dup.append(old)
         else:
             moved[old] = path
+    # ── 2단계: 이름까지 바뀐 문서 — 내용 해시만 같으면 이동
+    taken = set(moved) | set(dup)
+    left = [k for k in missing if k not in taken]
+    by_hash, sizes, size_unknown = {}, set(), False
+    for key in left:
+        d = state["docs"].get(key) or {}
+        h = d.get("content_hash")
+        if not h:
+            continue
+        by_hash.setdefault(h, []).append(key)
+        if d.get("size") is None:
+            size_unknown = True
+        else:
+            sizes.add(d["size"])
+    if not by_hash:
+        return moved, dup
+    moved_to = {norm_path(p) for p in moved.values()}
+    for path in files:
+        np_ = norm_path(path)
+        if np_ in indexed or np_ in moved_to:
+            continue
+        # 크기를 아는 옛 문서뿐이면 크기가 다른 파일은 읽지 않는다
+        if not size_unknown and _file_size(path) not in sizes:
+            continue
+        try:
+            h = content_hash(path)
+        except OSError:
+            continue
+        olds = by_hash.get(h)
+        if not olds:
+            continue
+        # 같은 폴더에서 이름만 바꾼 것을 먼저 짝짓는다
+        d = norm_path(os.path.dirname(path))
+        i = next((j for j, o in enumerate(olds) if norm_path(os.path.dirname(o)) == d), 0)
+        moved[olds.pop(i)] = path
     return moved, dup
 
 
 #------------------------------------------------------------------
 # 이 파일이 어디서 옮겨 왔는가 (sync_doc 이 새 문서를 넣기 전에 본다)
-#=> 상태 파일에 있으나 지금은 없는 문서 가운데 내용 해시와 파일 이름이 같은 것.
+#=> 상태 파일에 있으나 지금은 없는 문서 가운데 내용 해시가 같은 것. 이름이 달라도(이름 바꿈) 이동이다.
+#   여럿이면 같은 이름 → 같은 폴더 순으로 고른다.
 #
 # -in: state = 상태 dict
 # -in: path  = 새 경로
@@ -843,18 +976,16 @@ def find_moves(state, missing, files):
 # -out: error = 없음
 #------------------------------------------------------------------
 def moved_from(state, path, chash):
-    name = os.path.basename(path).lower()
     me = norm_path(path)
-    for key, d in state["docs"].items():
-        if (d.get("content_hash") == chash and os.path.basename(key).lower() == name
-                and norm_path(key) != me and not os.path.exists(key)):
-            return key
-    return None
+    cands = [key for key, d in state["docs"].items()
+             if d.get("content_hash") == chash and norm_path(key) != me and not os.path.exists(key)]
+    return min(cands, key=lambda k: (_candidate_rank(k, path), k)) if cands else None
 
 
 #------------------------------------------------------------------
 # 이 파일이 어느 문서의 복사본인가 (sync_doc 이 새 문서를 넣기 전에 본다)
-#=> 상태 파일에 있고 지금도 파일이 있는 문서 가운데 내용 해시와 파일 이름이 같은 것.
+#=> 상태 파일에 있고 지금도 파일이 있는 문서 가운데 내용 해시가 같은 것. 이름이 달라도 복사본이다
+#   (벡터를 베낀 뒤 sync_doc 이 제목만 새로 청킹). 여럿이면 같은 이름 → 같은 폴더 순.
 #   (원본이 사라졌으면 복사가 아니라 이동이다 — moved_from 이 먼저 본다)
 #
 # -in: state = 상태 dict
@@ -865,13 +996,11 @@ def moved_from(state, path, chash):
 # -out: error = 없음
 #------------------------------------------------------------------
 def copied_from(state, path, chash):
-    name = os.path.basename(path).lower()
     me = norm_path(path)
-    for key, d in state["docs"].items():
-        if (d.get("content_hash") == chash and os.path.basename(key).lower() == name
-                and norm_path(key) != me and os.path.exists(key) and d.get("ids")):
-            return key
-    return None
+    cands = [key for key, d in state["docs"].items()
+             if d.get("content_hash") == chash and norm_path(key) != me
+             and os.path.exists(key) and d.get("ids")]
+    return min(cands, key=lambda k: (_candidate_rank(k, path), k)) if cands else None
 
 
 #------------------------------------------------------------------
@@ -923,8 +1052,9 @@ def copy_doc(src_key, path, fp, state, store):
     store.delete_doc_except(key, ids)
 
     entry = dict(src)
+    # 청크 글은 원본 그대로 — 원본이 청킹에 쓴 제목을 남긴다(이름이 다르면 sync_doc 이 이어서 제목 갱신)
     entry.update(fingerprint=fp, ids=[start_id, start_id + len(payloads)], name=name,
-                 folder=folder, mtime=mtime)
+                 folder=folder, mtime=mtime, chunk_title=chunk_title_of(src), size=_file_size(path))
     state["docs"][key] = entry
     state.get("failed", {}).pop(key, None)
     mark_changed(state)
@@ -958,6 +1088,9 @@ def move_doc(old_key, path, fp, state, store):
     folder = os.path.basename(os.path.dirname(path))
     mtime = int(os.stat(path).st_mtime)
     entry = dict(state["docs"][old_key])
+    # 청크 글은 그대로 — 청킹에 쓴 옛 제목을 name 을 바꾸기 전에 남겨 둔다
+    entry["chunk_title"] = chunk_title_of(entry)
+    entry["size"] = _file_size(path)
     rng = entry.get("ids") or [0, 0]
     store.set_payload_ids(list(range(rng[0], rng[1])),
                           {"doc_path": key, "doc_name": name, "folder": folder,
@@ -993,7 +1126,7 @@ def move_doc(old_key, path, fp, state, store):
 #                     None 이면 제한 없음. 자동 인덱싱이 처음 켠 폴더를 묻지 않고 통째로
 #                     인덱싱하지 않게 한다(설계서 §8 — 371건에 19분 걸렸다)
 #
-# -out: dict = 처리 요약 {files, changed, added, modified, same, moved, copied, removed,
+# -out: dict = 처리 요약 {files, changed, added, modified, same, moved, copied, retitled(이름 바꿈 후 제목 갱신), removed,
 #                         delete_blocked, held_new, chunks, failed, sec,
 #                         pending(벡터 대기로 남은 청크 수), reused, embedded}
 # -out: error = 폴더 없음·청킹 설정 불일치는 RuntimeError
@@ -1048,7 +1181,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     t_start = time.perf_counter()
     prog = Progress(max(1, len(todo)))
-    counts = {"added": 0, "modified": 0, "same": 0, "moved": 0, "copied": 0}
+    counts = {"added": 0, "modified": 0, "same": 0, "moved": 0, "copied": 0, "retitled": 0}
     total_chunks = 0
     n_reused = n_embedded = 0
     failed = []
@@ -1089,7 +1222,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
             n_embedded += r.get("embedded", 0)
             fresh_chunks += r.get("embedded", 0) + r.get("deferred", 0)
             rate, eta = prog.update(n)
-            label = {"added": "추가", "copied": "복사"}.get(r["op"], "수정")
+            label = {"added": "추가", "copied": "복사", "retitled": "제목 갱신"}.get(r["op"], "수정")
             note = "  표{}행".format(r["n_rows"]) if r.get("n_rows") else ""
             if r.get("reused"):
                 note += "  벡터 재사용 {}/{}".format(r["reused"], r["chunks"])
@@ -1105,7 +1238,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     # 바뀐 청크만 고친다(덧붙임 · 지움 — §4). 지난번에 벡터만 바꾸고 BM25 를 못 만든 채 끝났으면
     # (bm25_stale), 또는 옛 형식(v2) · 깨진 캐시면 이번에 바뀐 게 없어도 반영한다.
     bm25_missing = bool(state["docs"]) and bm25.ensure_loaded() < 0
-    if (counts["added"] or counts["modified"] or counts["copied"] or n_removed or rebuild
+    if (counts["added"] or counts["modified"] or counts["copied"] or counts["retitled"] or n_removed or rebuild
             or bm25_stale(state) or bm25_missing):
         log("BM25 인덱스 반영 중...")
         rep = refresh_bm25(store, bm25, state, embedder.tokenizer, full=rebuild, log=log)
@@ -1128,7 +1261,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
 
     return {"files": len(files), "changed": len(todo) + n_removed,
             "added": counts["added"], "modified": counts["modified"], "same": counts["same"],
-            "moved": counts["moved"], "copied": counts["copied"],
+            "moved": counts["moved"], "copied": counts["copied"], "retitled": counts["retitled"],
             "removed": n_removed, "delete_blocked": delete_blocked, "held_new": held_new,
             "chunks": total_chunks, "failed": failed,
             "pending": pending, "reused": n_reused, "embedded": n_embedded,

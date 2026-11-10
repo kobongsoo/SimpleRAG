@@ -495,6 +495,8 @@ pub struct SyncResult {
     pub embedded: usize,
     pub reused: usize,
     pub deferred: usize,
+    // 이름이 바뀌어 제목 갱신이 필요한데 문서가 커서 쉬는 동안으로 미뤘다(title_stale)
+    pub retitle_later: bool,
 }
 
 // 문서 하나를 추출·청킹한 결과 — (전체 글자, 표 행 수, 청크 글, 청크 메타)
@@ -522,6 +524,46 @@ pub struct SyncOpts {
     pub defer_over: Option<usize>,
     pub fresh: usize,
     pub prepared: Option<Prepared>,
+    // 제목 갱신을 문서 크기와 상관없이 지금 한다(쉬는 동안 처리 · CLI 마무리)
+    pub retitle_force: bool,
+}
+
+//------------------------------------------------------------------
+// 파일 이름 바꿈 — 청크 접두 제목 (파일 이름 바꿈 설계서 §3-2)
+//=> 청크 앞 접두 "[제목 > 절]" 의 제목은 확장자 뺀 파일 이름이다(parse_doc). 이름이 바뀌면 그 문서의 청크를
+//   다시 만들어야 채팅 검색이 새 이름을 안다. 문서 항목의 chunk_title = 청킹에 실제로 쓴 제목.
+//------------------------------------------------------------------
+// 확장자 뺀 파일 이름 — parse_doc 이 접두에 쓰는 제목과 같은 규칙
+pub fn title_of(path: &str) -> String {
+    pyutil::splitext(pyutil::basename(path)).0.to_string()
+}
+
+// 문서 항목이 청킹에 쓴 제목 — chunk_title, 없으면(옛 인덱스 · Python 판) name 의 확장자 뺀 값
+pub fn chunk_title_of(entry: &Value) -> String {
+    match entry.get("chunk_title").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => title_of(entry.get("name").and_then(|v| v.as_str()).unwrap_or("")),
+    }
+}
+
+// 지금 파일 이름과 청크 제목이 다른가(대소문자만 다르면 같은 이름으로 본다 — 이동 판정과 같은 기준)
+pub fn needs_retitle(entry: &Value, path: &str) -> bool {
+    chunk_title_of(entry).to_lowercase() != title_of(path).to_lowercase()
+}
+
+// 바로 다시 만들 문서 크기 상한(청크) — 넘으면 이동만 하고 쉬는 동안 갱신. SIMPLERAG_RETITLE_NOW_MAX 로 바꾼다
+pub fn retitle_now_max() -> i64 {
+    std::env::var("SIMPLERAG_RETITLE_NOW_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(300)
+}
+
+// 쉬는 동안 제목 갱신을 기다리는 문서 수
+pub fn title_stale_count(state: &State) -> usize {
+    docs(state).values().filter(|d| d.get("title_stale").and_then(|v| v.as_bool()).unwrap_or(false)).count()
+}
+
+// 파일 크기(바이트) — 이동 짝짓기 때 내용 해시 전에 거른다. 못 읽으면 None
+fn file_size(path: &str) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
 }
 
 //------------------------------------------------------------------
@@ -680,7 +722,8 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
     let key = pyutil::abspath(path);
     let name = pyutil::basename(path).to_string();
     let prev = docs(state).get(&key).cloned();
-    let op = if prev.is_some() { "modified" } else { "added" };
+    let mut op = if prev.is_some() { "modified" } else { "added" };
+    let retitle_force = opts.retitle_force;
     let (pre_hash, mut pre_parsed) = match opts.prepared {
         Some(p) => (Some(p.chash), p.parsed),
         None => (None, None),
@@ -695,26 +738,54 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
     };
     if let Some(p) = &prev {
         if p.get("content_hash").and_then(|v| v.as_str()) == Some(chash.as_str()) {
-            let m = docs_mut(state).get_mut(&key).unwrap().as_object_mut().unwrap();
-            m.insert("fingerprint".into(), json!(fp));
-            m.insert("mtime".into(), json!(pyutil::mtime_int(path).unwrap_or(0)));
-            failed_pop(state, &key);
-            save_state(state)?;
-            // 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
-            crate::meta::hook::synced(&key, Some(&chash));
-            return Ok(SyncResult { ok: true, op: "same".into(), chunks: p.get("chunks").and_then(|v| v.as_i64()).unwrap_or(0), ..Default::default() });
+            let n_chunks = p.get("chunks").and_then(|v| v.as_i64()).unwrap_or(0);
+            // 내용은 같은데 청크 제목이 지금 파일 이름과 다르면(이름 바꿈) 청크를 다시 만든다 — 큰 문서는 쉬는 동안으로
+            let retitle = needs_retitle(p, path);
+            if !retitle || (!retitle_force && n_chunks > retitle_now_max()) {
+                let m = docs_mut(state).get_mut(&key).unwrap().as_object_mut().unwrap();
+                m.insert("fingerprint".into(), json!(fp));
+                m.insert("mtime".into(), json!(pyutil::mtime_int(path).unwrap_or(0)));
+                if retitle {
+                    m.insert("title_stale".into(), json!(true));
+                }
+                failed_pop(state, &key);
+                save_state(state)?;
+                // 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
+                crate::meta::hook::synced(&key, Some(&chash));
+                if retitle {
+                    log(&format!("  [제목 갱신 미룸] {} {}청크 — 쉬는 동안 다시 만든다", name, n_chunks));
+                }
+                return Ok(SyncResult { ok: true, op: "same".into(), chunks: n_chunks, retitle_later: retitle, ..Default::default() });
+            }
+            op = "retitled";
         }
     }
     if prev.is_none() {
-        if let Some(old) = moved_from(state, path, &chash) {
+        // 옮긴 · 복사한 문서 — 벡터를 그대로 쓰고, 이름까지 바뀌었으면 이어서 제목만 새로 청킹한다
+        let carried = if let Some(old) = moved_from(state, path, &chash) {
             log(&format!("  [이동] {} → {}", old, key));
-            return move_doc(&old, path, fp, state, store);
-        }
-        if let Some(src) = copied_from(state, path, &chash) {
-            if let Some(r) = copy_doc(&src, path, fp, state, store)? {
+            Some(move_doc(&old, path, fp, state, store)?)
+        } else if let Some(src) = copied_from(state, path, &chash) {
+            let r = copy_doc(&src, path, fp, state, store)?;
+            if r.is_some() {
                 log(&format!("  [복사] {} → {}", src, key));
+            }
+            r
+        } else {
+            None
+        };
+        if let Some(r) = carried {
+            let stale = docs(state).get(&key).map(|e| needs_retitle(e, path)).unwrap_or(false);
+            if !r.ok || !stale {
                 return Ok(r);
             }
+            // 같은 경로로 한 번 더 — 이제 prev 가 있고 내용이 같으므로 위의 제목 갱신 분기로 간다
+            let again = sync_doc_with(path, fp, state, embedder, store, log,
+                                      SyncOpts { retitle_force, fresh: opts.fresh, ..Default::default() })?;
+            if again.op == "retitled" {
+                return Ok(SyncResult { from: r.from.clone(), ..again });
+            }
+            return Ok(SyncResult { retitle_later: again.retitle_later, ..r });
         }
     }
     // ── 2) 새 버전 만들기(인덱스는 아직 그대로)
@@ -734,7 +805,8 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
         // 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 빈 벡터로 둔다
         let need: Vec<String> = chunks.iter().zip(&reused).filter(|(_, r)| r.is_none()).map(|(c, _)| c.clone()).collect();
         // 이번 실행에서 새로 임베딩할 청크가 문턱을 넘으면 벡터는 미룬다(큰 문서가 명령 시간 한도를 넘지 않게)
-        let defer = defer_over.map(|o| fresh_before + need.len() > o).unwrap_or(false);
+        //   제목 갱신은 미루지 않는다 — 다 만든 뒤 바꿔 끼우므로 그동안 옛 벡터로 계속 검색된다(설계서 §3-3)
+        let defer = op != "retitled" && defer_over.map(|o| fresh_before + need.len() > o).unwrap_or(false);
         let fresh = if defer { vec![vec![]; need.len()] } else { embedder.embed_passages(&need)? };
         let mut fresh = fresh.into_iter();
         let vecs: Vec<Vec<f32>> = reused.into_iter().map(|r| r.unwrap_or_else(|| fresh.next().unwrap_or_default())).collect();
@@ -810,9 +882,11 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
     // ── 5) 방금 넣은 것 말고 이 문서의 청크를 모두 지운다
     store.delete_doc_except(&key, &ids)?;
     // ── 6) 상태 파일을 새 버전으로
+    // chunk_title = 청크 접두에 쓴 제목(이름 바꿈 판정) · size = 이동 짝짓기 때 해시 전에 거르는 크기
     docs_mut(state).insert(key.clone(), json!({
         "fingerprint": fp, "content_hash": chash, "chunks": chunks.len(),
         "ids": [start, start + chunks.len() as i64], "name": name, "folder": folder, "mtime": mtime,
+        "chunk_title": title_of(&name), "size": file_size(path),
     }));
     failed_pop(state, &key);
     mark_changed(state);
@@ -1010,25 +1084,89 @@ pub fn find_moves(state: &State, missing: &[String], files: &[String]) -> (Vec<(
             moved.push((old, path.clone()));
         }
     }
+    // ── 2단계: 이름까지 바뀐 문서 — 내용 해시만 같으면 이동(파일 이름 바꿈 설계서 §3-1)
+    //   남은 사라진 문서가 있을 때만, 아직 인덱스에 없는 새 파일의 해시를 구한다(크기가 맞는 것만)
+    let taken: HashSet<String> = moved.iter().map(|(o, _)| o.clone()).chain(dup.iter().cloned()).collect();
+    let left: Vec<&String> = missing.iter().filter(|k| !taken.contains(*k)).collect();
+    if left.is_empty() {
+        return (moved, dup);
+    }
+    let mut by_hash: HashMap<String, Vec<String>> = HashMap::new();
+    let mut sizes: HashSet<u64> = HashSet::new();
+    let mut size_unknown = false;
+    for key in &left {
+        let d = match docs(state).get(*key) {
+            Some(d) => d,
+            None => continue,
+        };
+        if let Some(h) = d.get("content_hash").and_then(|v| v.as_str()) {
+            by_hash.entry(h.to_string()).or_default().push((*key).clone());
+            match d.get("size").and_then(|v| v.as_u64()) {
+                Some(s) => {
+                    sizes.insert(s);
+                }
+                None => size_unknown = true,
+            }
+        }
+    }
+    if by_hash.is_empty() {
+        return (moved, dup);
+    }
+    let moved_to: HashSet<String> = moved.iter().map(|(_, p)| norm_path(p)).collect();
+    for path in files {
+        let np = norm_path(path);
+        if indexed.contains(&np) || moved_to.contains(&np) {
+            continue;
+        }
+        // 크기를 아는 옛 문서뿐이면 크기가 다른 파일은 읽지 않는다
+        if !size_unknown && !file_size(path).map(|s| sizes.contains(&s)).unwrap_or(false) {
+            continue;
+        }
+        let h = match content_hash(path) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+        let olds = match by_hash.get_mut(&h) {
+            Some(o) if !o.is_empty() => o,
+            _ => continue,
+        };
+        // 같은 폴더에서 이름만 바꾼 것을 먼저 짝짓는다
+        let dir = norm_path(&pyutil::dirname(path));
+        let i = olds.iter().position(|o| norm_path(&pyutil::dirname(o)) == dir).unwrap_or(0);
+        moved.push((olds.remove(i), path.clone()));
+    }
     (moved, dup)
 }
 
+// 이동 · 복사 후보 순위 — 0 같은 이름, 1 같은 폴더, 2 그 밖(같은 내용 문서가 여럿일 때 고르는 순서)
+fn candidate_rank(key: &str, path: &str) -> u8 {
+    if pyutil::basename(key).to_lowercase() == pyutil::basename(path).to_lowercase() {
+        0
+    } else if norm_path(&pyutil::dirname(key)) == norm_path(&pyutil::dirname(path)) {
+        1
+    } else {
+        2
+    }
+}
+
 // 이 파일이 어디서 옮겨 왔는가(옛 자리는 이제 없음)
+//   이름이 달라도 내용이 같으면 이동(이름 바꿈) — 여럿이면 같은 이름 → 같은 폴더 순
 pub fn moved_from(state: &State, path: &str, chash: &str) -> Option<String> {
-    let name = pyutil::basename(path).to_lowercase();
     let me = norm_path(path);
-    docs(state).iter().find(|(k, d)| d.get("content_hash").and_then(|v| v.as_str()) == Some(chash)
-        && pyutil::basename(k).to_lowercase() == name && norm_path(k) != me && !std::path::Path::new(k.as_str()).exists())
+    docs(state).iter().filter(|(k, d)| d.get("content_hash").and_then(|v| v.as_str()) == Some(chash)
+        && norm_path(k) != me && !std::path::Path::new(k.as_str()).exists())
+        .min_by_key(|(k, _)| (candidate_rank(k, path), (*k).clone()))
         .map(|(k, _)| k.clone())
 }
 
 // 이 파일이 어느 문서의 복사본인가(원본이 그대로 있음)
+//   이름이 달라도 내용이 같으면 복사본(벡터를 베낀 뒤 제목만 새로 청킹) — 여럿이면 같은 이름 → 같은 폴더 순
 pub fn copied_from(state: &State, path: &str, chash: &str) -> Option<String> {
-    let name = pyutil::basename(path).to_lowercase();
     let me = norm_path(path);
-    docs(state).iter().find(|(k, d)| d.get("content_hash").and_then(|v| v.as_str()) == Some(chash)
-        && pyutil::basename(k).to_lowercase() == name && norm_path(k) != me
+    docs(state).iter().filter(|(k, d)| d.get("content_hash").and_then(|v| v.as_str()) == Some(chash)
+        && norm_path(k) != me
         && std::path::Path::new(k.as_str()).exists() && d.get("ids").map(|v| !v.is_null()).unwrap_or(false))
+        .min_by_key(|(k, _)| (candidate_rank(k, path), (*k).clone()))
         .map(|(k, _)| k.clone())
 }
 
@@ -1066,6 +1204,10 @@ pub fn copy_doc(src_key: &str, path: &str, fp: &str, state: &mut State, store: &
     store.put_tf(&dst, &blobs)?;
     store.delete_doc_except(&key, &ids)?;
     let mut entry = src.as_object().cloned().unwrap_or_default();
+    // 청크 글은 원본 그대로 — 원본이 청킹에 쓴 제목을 남겨 둔다(이름이 다르면 이어서 제목 갱신)
+    entry.insert("chunk_title".into(), json!(chunk_title_of(&src)));
+    entry.insert("size".into(), json!(file_size(path)));
+    entry.remove("title_stale");
     entry.insert("fingerprint".into(), json!(fp));
     entry.insert("ids".into(), json!([start, start + n]));
     entry.insert("name".into(), json!(name));
@@ -1089,6 +1231,10 @@ pub fn move_doc(old_key: &str, path: &str, fp: &str, state: &mut State, store: &
     let folder = pyutil::basename(&pyutil::dirname(path)).to_string();
     let mtime = pyutil::mtime_int(path).unwrap_or(0);
     let mut entry = docs(state).get(old_key).and_then(|v| v.as_object()).cloned().unwrap_or_default();
+    // 청크 글은 그대로 — 청킹에 쓴 옛 제목을 남겨 둔다(name 을 새 이름으로 바꾸기 전에)
+    let old_title = chunk_title_of(&Value::Object(entry.clone()));
+    entry.insert("chunk_title".into(), json!(old_title));
+    entry.insert("size".into(), json!(file_size(path)));
     let (a, b) = id_range(&Value::Object(entry.clone())).unwrap_or((0, 0));
     let mut pl = Map::new();
     pl.insert("doc_path".into(), json!(key));
@@ -1223,7 +1369,7 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
             let name = pyutil::basename(path).to_string();
             let prepared = rx.as_ref().and_then(|r| r.recv().ok());
             let r = sync_doc_with(path, fp, &mut state, embedder, store, log,
-                                  SyncOpts { defer_over: defer_limit, fresh: fresh_chunks, prepared })?;
+                                  SyncOpts { defer_over: defer_limit, fresh: fresh_chunks, prepared, retitle_force: false })?;
             if !r.ok {
                 sum.failed.push((name, format!("{}{}", r.why, if r.kept_old { " (옛 버전 유지)" } else { "" })));
                 continue;
@@ -1237,12 +1383,15 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
                 log(&format!("  [{}/{}] [이동] {:<44} 경로만 바꿈 — 다시 임베딩하지 않음", n, total, pyutil::head(&name, 42)));
                 continue;
             }
+            if r.op == "same" && r.retitle_later {
+                continue;
+            }
             sum.chunks += r.chunks;
             sum.reused += r.reused;
             sum.embedded += r.embedded;
             fresh_chunks += r.embedded + r.deferred;
             let (rate, eta) = prog.update(n);
-            let label = match r.op.as_str() { "added" => "추가", "copied" => "복사", _ => "수정" };
+            let label = match r.op.as_str() { "added" => "추가", "copied" => "복사", "retitled" => "제목 갱신", _ => "수정" };
             let mut note = if r.n_rows > 0 { format!("  표{}행", r.n_rows) } else { String::new() };
             if r.reused > 0 {
                 note += &format!("  벡터 재사용 {}/{}", r.reused, r.chunks);
@@ -1255,9 +1404,14 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
         }
         Ok(())
     })?;
+    // 크기 때문에 미룬 제목 갱신 — 폴더 인덱싱(CLI)은 기다려도 되므로 이 실행에서 마저 한다
+    let (n_retitled, _) = retitle_stale(&mut state, embedder, store, None, log)?;
+    if n_retitled > 0 {
+        *sum.counts.entry("retitled".into()).or_default() += n_retitled;
+    }
     // 옛 형식(v2) · 깨진 BM25 파일은 바뀐 게 없어도 한 번 새로 만든다
     let bm25_missing = !docs(&state).is_empty() && bm25.ensure_loaded() < 0.0;
-    if sum.c("added") > 0 || sum.c("modified") > 0 || sum.c("copied") > 0 || n_removed > 0 || rebuild || bm25_stale(&state) || bm25_missing {
+    if sum.c("added") > 0 || sum.c("modified") > 0 || sum.c("copied") > 0 || sum.c("retitled") > 0 || n_removed > 0 || rebuild || bm25_stale(&state) || bm25_missing {
         log("BM25 인덱스 반영 중...");
         let r = refresh_bm25(store, bm25, Some(&state), &tok, rebuild, log)?;
         if r.orphans > 0 {
@@ -1471,6 +1625,50 @@ pub fn append_bm25(store: &VectorStore, bm25: &Bm25Index, tok: &crate::tok::Tok,
 // -out: (채운 수, 남은 수)
 // -out: error = 임베딩 · 저장 실패면 Err
 //------------------------------------------------------------------
+//------------------------------------------------------------------
+// 미뤄 둔 제목 갱신 처리 (파일 이름 바꿈 설계서 §3-3)
+//=> 이름이 바뀌었지만 커서 이동만 해 둔 문서(title_stale)를 새 제목으로 다시 청킹 · 임베딩한다.
+//   다 만든 뒤 바꿔 끼우므로 그동안 옛 벡터로 계속 검색된다. 앱은 쉬는 동안 한 건씩, CLI 는 끝에 모두.
+//
+// -in: state · embedder · store = 상태 · 임베더 · 저장소 / max = Some(n) 이면 n 건까지, None 이면 모두 / log = 진행 글
+//
+// -out: (처리한 문서 수, 남은 수)
+// -out: error = 저장소 · 상태 파일 쓰기 실패면 Err
+//------------------------------------------------------------------
+pub fn retitle_stale(state: &mut State, embedder: &Embedder, store: &VectorStore, max: Option<usize>,
+                     log: &mut dyn FnMut(&str)) -> Result<(usize, usize), String> {
+    let keys: Vec<String> = docs(state).iter()
+        .filter(|(_, d)| d.get("title_stale").and_then(|v| v.as_bool()).unwrap_or(false))
+        .map(|(k, _)| k.clone()).collect();
+    let mut done = 0;
+    for key in &keys {
+        if max.map(|m| done >= m).unwrap_or(false) {
+            break;
+        }
+        // 그사이 파일이 사라졌으면 표시만 지운다 — 다음 대조가 알아서 처리한다
+        let fp = match file_fingerprint(key) {
+            Ok(f) => f,
+            Err(_) => {
+                if let Some(m) = docs_mut(state).get_mut(key).and_then(|v| v.as_object_mut()) {
+                    m.remove("title_stale");
+                }
+                save_state(state)?;
+                continue;
+            }
+        };
+        let r = sync_doc_with(key, &fp, state, embedder, store, log, SyncOpts { retitle_force: true, ..Default::default() })?;
+        if r.op == "retitled" {
+            log(&format!("  [제목 갱신] {} {}청크 (다시 씀 {})", pyutil::basename(key), r.chunks, r.reused));
+        } else if let Some(m) = docs_mut(state).get_mut(key).and_then(|v| v.as_object_mut()) {
+            // 내용이 바뀌어 새로 인덱싱됐거나 실패 — 어느 쪽이든 표시는 지운다
+            m.remove("title_stale");
+            save_state(state)?;
+        }
+        done += 1;
+    }
+    Ok((done, title_stale_count(state)))
+}
+
 pub fn fill_pending(embedder: &Embedder, store: &VectorStore, max: Option<usize>,
                     on_progress: &mut dyn FnMut(usize, usize)) -> Result<(usize, usize), String> {
     const STEP: usize = 64;

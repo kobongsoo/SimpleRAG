@@ -139,6 +139,10 @@ fn index_doc(app: &App, path: &str) -> Result<Map<String, Value>, String> {
     let opts = indexer::SyncOpts { defer_over: indexer::worker_defer_over(), ..Default::default() };
     let r = indexer::sync_doc_with(&path, &fp, &mut st, &app.embedder, &app.store, &mut |_| {}, opts)?;
     let mut out = obj(json!({"ok": r.ok, "path": path, "result": r.op, "chunks": r.chunks, "deferred": r.deferred}));
+    // 이름이 바뀐 큰 문서 — 이동만 했고 제목 갱신은 쉬는 동안(/embed-pending) 한다
+    if r.retitle_later {
+        out.insert("retitle_later".into(), json!(true));
+    }
     if let Some(f) = &r.from {
         out.insert("from".into(), json!(f));
     }
@@ -215,14 +219,22 @@ fn rebuild_bm25(app: &App, merge: bool) -> Result<Map<String, Value>, String> {
 // -out: {ok, filled, pending(남은 수)}
 // -out: error = 임베딩 · 저장 실패면 Err
 //------------------------------------------------------------------
+//   벡터를 다 채웠으면 미뤄 둔 제목 갱신(이름이 바뀐 큰 문서)을 한 건 한다 — retitle = 남은 수, retitled = 이번에 한 수
 fn embed_pending(app: &App, max: usize) -> Result<Map<String, Value>, String> {
     app.store.ensure_loaded()?;
-    if max == 0 || app.store.pending_count()? == 0 {
-        return Ok(obj(json!({"ok": true, "filled": 0, "pending": app.store.pending_count()?})));
+    let pending = app.store.pending_count()?;
+    let mut st = state()?;
+    let stale = indexer::title_stale_count(&st);
+    if max == 0 || (pending == 0 && stale == 0) {
+        return Ok(obj(json!({"ok": true, "filled": 0, "pending": pending, "retitle": stale})));
     }
     app.embedder.ensure_loaded()?;
-    let (filled, left) = indexer::fill_pending(&app.embedder, &app.store, Some(max), &mut |_, _| {})?;
-    Ok(obj(json!({"ok": true, "filled": filled, "pending": left})))
+    if pending > 0 {
+        let (filled, left) = indexer::fill_pending(&app.embedder, &app.store, Some(max), &mut |_, _| {})?;
+        return Ok(obj(json!({"ok": true, "filled": filled, "pending": left, "retitle": stale})));
+    }
+    let (done, left) = indexer::retitle_stale(&mut st, &app.embedder, &app.store, Some(1), &mut |_| {})?;
+    Ok(obj(json!({"ok": true, "filled": 0, "pending": 0, "retitle": left, "retitled": done})))
 }
 
 //------------------------------------------------------------------

@@ -229,8 +229,13 @@ def main():
         os.rename(C, C2)
         s = run(root, emb, store, bm25)
         by = points_by_doc(store)
-        check("삭제 1 + 추가 1", s["removed"] == 1 and s["added"] == 1, s)
+        # 파일 이름 바꿈 설계서 — 지우고 새로 넣지 않고 옮긴 뒤 새 제목으로 다시 청킹한다
+        check("삭제 0 · 추가 0 · 이름 바꿈 1", s["removed"] == 0 and s["added"] == 0 and s["retitled"] == 1, s)
         check("새 이름으로만 남았다", os.path.abspath(C2) in by and os.path.abspath(C) not in by)
+        ent = indexer.load_state()["docs"].get(os.path.abspath(C2), {})
+        check("청크 제목이 새 이름", ent.get("chunk_title") == "c2", ent)
+        s = run(root, emb, store, bm25)
+        check("다시 돌리면 바뀐 것 없음", s["changed"] == 0, s)
 
         # ── 6. 추출 실패 — 옛 버전 유지 ─────────────────
         print("\n[6. 새 버전이 망가짐]")

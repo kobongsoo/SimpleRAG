@@ -536,12 +536,14 @@ class IndexJobs:
             r["changed"].append(name)
             self.log.info("반영 이동: %s → %s", res.get("from", "?"), path)
             self.notify("doc", "방금 반영(이동): {}".format(name))
-        elif res.get("ok") and result in ("added", "modified", "copied", "removed"):
+        elif res.get("ok") and result in ("added", "modified", "copied", "removed", "retitled"):
             # 복사본(copied)은 원본 벡터를 베껴 새 점이 생겼다 — 키워드 색인은 다시 만든다
+            # retitled = 이름이 바뀐 문서를 옮기고 새 제목으로 다시 청킹했다(청크 글이 바뀜)
             self._bm25_needed = True
             self._bm25_mid_docs += 1
             r["changed"].append(name)
-            label = {"added": "추가", "modified": "수정", "copied": "복사", "removed": "삭제"}[result]
+            label = {"added": "추가", "modified": "수정", "copied": "복사", "removed": "삭제",
+                     "retitled": "이름 바꿈"}[result]
             self.log.info("반영 %s: %s (%s청크, %sms)", label, path, res.get("chunks", res.get("removed", "")),
                           res.get("ms"))
             self.notify("doc", "방금 반영({}): {}".format(label, name))
