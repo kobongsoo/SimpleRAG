@@ -12,7 +12,7 @@ use fancy_regex::Regex as FRegex;
 use once_cell::sync::Lazy;
 
 use crate::config::cfg;
-use crate::docmodel::assemble::{build_sections, make_prefix, section_units, Section};
+use crate::docmodel::assemble::{build_sections, make_prefix, section_units, Section, Unit};
 use crate::docmodel::blocks::Document;
 use crate::pyutil;
 use crate::structure;
@@ -32,6 +32,44 @@ pub struct ChunkMeta {
     pub page_from: Option<i64>,
     pub page_to: Option<i64>,
     pub page: Option<i64>,
+}
+
+//------------------------------------------------------------------
+// 진단용 청크 JSON 저장 (extract --blocks --dump)
+//=> blocks.json 옆에 <파일명>.chunks.json 을 쓴다. 블록이 청크로 어떻게 묶이고 잘렸는지,
+//   청크마다 토큰 수 · 절 번호 · 제목 경로 · 쪽을 눈으로 확인하는 용도다(Python chunk.dump_chunks 와 같은 모양).
+//   text 는 접두 "[문서 > 절]" 을 포함한 글 — 임베딩·검색·LLM 에 실제로 들어가는 글 그대로다.
+// -in: chunks = split_blocks 결과 · tok = 토큰 수 세기 · out_dir = 저장 폴더(없으면 만든다)
+//      name = 파일 이름 바탕(원본 파일명) · format = 추출 경로("docx"·"legacy" …)
+// -out: 저장한 경로 / 쓰기 실패는 io::Error
+//------------------------------------------------------------------
+pub fn dump_chunks(chunks: &[ChunkMeta], tok: &Tok, out_dir: &str, name: &str, format: &str) -> std::io::Result<String> {
+    std::fs::create_dir_all(out_dir)?;
+    let path = pyutil::join(out_dir, &format!("{}.chunks.json", name));
+    let c = cfg();
+    let items: Vec<serde_json::Value> = chunks.iter().enumerate().map(|(i, m)| serde_json::json!({
+        "no": i,
+        "tokens": tok.tlen(&m.text),
+        "section_id": m.section_id,
+        "path": m.path,
+        "source": m.source,
+        "page": m.page,
+        "page_from": m.page_from,
+        "page_to": m.page_to,
+        "text": m.text,
+    })).collect();
+    let doc = serde_json::json!({
+        "file": name,
+        "format": format,
+        // 이 청크를 만든 설정 — 크기를 바꿔 가며 비교할 때 어느 값으로 자른 결과인지 남긴다
+        "chunk_tokens": c.chunk_tokens,
+        "chunk_overlap": c.chunk_overlap,
+        "chunk_mode": c.chunk_mode,
+        "count": items.len(),
+        "chunks": items,
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap_or_default())?;
+    Ok(path)
 }
 
 //------------------------------------------------------------------
@@ -192,8 +230,12 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
     let mut buf_n = 0;
     let mut buf_secs: Vec<Section> = vec![];
     let title_opt = if title.is_empty() { None } else { Some(title.as_str()) };
+    // 작은 표 통째(chunk.table_whole) — 표 글 토큰이 기준 이하면 행으로 나누지 않는다
+    let whole_max = c.chunk_table_whole;
+    let keep = |t: &str| tok.tlen(t) as i64 <= whole_max;
+    let keep_whole: Option<&dyn Fn(&str) -> bool> = if whole_max != 0 { Some(&keep) } else { None };
     for sec in build_sections(doc) {
-        let units = section_units(&sec);
+        let units = section_units(&sec, keep_whole);
         if units.is_empty() {
             continue;
         }
@@ -202,26 +244,37 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
         let n = tok.tlen(&whole);
         if n <= size {
             if buf_n + n > size {
+                // 모아 둔 것 끝의 '제목만 든 절'은 앞 청크에 매달지 않고 이 절과 함께 새 묶음으로 넘긴다
+                let tail = peel_heading_only(&mut buf, &mut buf_secs, &sec);
                 if !buf.is_empty() {
                     out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs, &mut pf));
                     buf.clear();
                     buf_secs.clear();
                 }
                 buf_n = 0;
+                for (w, s) in tail {
+                    buf_n += tok.tlen(&w);
+                    buf.push(w);
+                    buf_secs.push(s);
+                }
             }
             buf.push(whole);
             buf_secs.push(sec);
             buf_n += n;
             continue;
         }
+        // 모아 둔 것 끝의 '제목만 든 절'은 홀로 내보내지 않고 이 절 첫 조각 앞에 제목 줄로 붙인다
+        let tail = peel_heading_only(&mut buf, &mut buf_secs, &sec);
         if !buf.is_empty() {
             out.push(chunk_meta(pyutil::strip(&buf.join("\n\n")).to_string(), &buf_secs, &mut pf));
             buf.clear();
             buf_secs.clear();
         }
         buf_n = 0;
+        let lead_lines: Vec<String> = tail.iter().map(|(_, s)| section_units(s, None)[0].0.clone()).collect();
+        let lead = if lead_lines.is_empty() { None } else { Some(lead_lines.join("\n")) };
         let budget = std::cmp::max(c.min_chunk_tokens as usize, size.saturating_sub(tok.tlen(&prefix)));
-        for piece in pack_units(&units, tok, budget, overlap) {
+        for piece in pack_units(&units, tok, budget, overlap, has_heading(&sec), lead) {
             if !pyutil::strip(&piece).is_empty() {
                 out.push(chunk_meta(pyutil::strip(&format!("{}{}", prefix, piece)).to_string(), std::slice::from_ref(&sec), &mut pf));
             }
@@ -232,6 +285,32 @@ pub fn split_blocks(doc: &mut Document, tok: &Tok, title: Option<&str>) -> Vec<C
     }
     let out = enforce_hard_max(out, tok, overlap);
     out.into_iter().filter(|m| tok.tlen(&m.text) as i64 >= c.min_chunk_tokens).collect()
+}
+
+// 절 제목이 단위로 들어가는 절인가 — section_units 와 같은 조건(합성 아님 · 글자 있음)
+fn has_heading(sec: &Section) -> bool {
+    sec.heading.as_ref().map(|h| !h.synthetic && !pyutil::strip(&h.text).is_empty()).unwrap_or(false)
+}
+
+// 제목만 든 절인가 — 제목 바로 뒤에 하위 제목이 와서 본문 단위가 하나도 없는 절
+fn heading_only(sec: &Section) -> bool {
+    has_heading(sec) && section_units(sec, None).len() == 1
+}
+
+// 상위 절인가 — 위 절 경로가 아래 절 경로의 앞부분이고 아래 절이 더 깊다
+fn is_ancestor(upper: &Section, lower: &Section) -> bool {
+    let k = upper.path.len();
+    lower.path.len() > k && lower.path[..k] == upper.path[..]
+}
+
+// 모아 둔 절 끝에서 '들어오는 절(nxt)의 상위 제목뿐인 절'들을 떼어 낸다 — (whole, 절) 목록, 순서 유지
+//   상위 제목인지 꼭 본다 — 번호 조항 문서는 제목 줄이 곧 내용인 절이 줄줄이 이어진다(Python peel 과 같다)
+fn peel_heading_only(buf: &mut Vec<String>, secs: &mut Vec<Section>, nxt: &Section) -> Vec<(String, Section)> {
+    let mut k = secs.len();
+    while k > 0 && heading_only(&secs[k - 1]) && is_ancestor(&secs[k - 1], nxt) {
+        k -= 1;
+    }
+    buf.split_off(k).into_iter().zip(secs.split_off(k)).collect()
 }
 
 // 청크 출처 정보 — 첫 절 기준. 쪽은 청크가 절 글의 어디에 있는지로 찾는다(탐색기 모드 설계서 §13)
@@ -359,49 +438,85 @@ fn unit_pages(sec: &Section) -> Vec<(String, Option<i64>)> {
 // 절 단위들을 예산 안에서 묶기
 //=> 표 머리글 단위가 조각 끝에 홀로 남지 않게 미리 끊고, 값 행 조각이 새로 시작하면 머리글을 붙인다.
 //   예산을 넘는 단위는 약한 초과(α) 안이면 통째로, 아니면 줄·토큰으로 나눈다.
+//   제목 줄만 든 조각은 끊지 않는다 — 지금 조각에 절 제목(과 넘겨받은 상위 제목, 그 뒤의 표 머리글)만
+//   들었으면 '머리 상태'로 보고 다음 단위가 예산을 넘겨도 함께 담는다. 다음 단위가 혼자 예산을 넘어
+//   쪼개질 때는 머리 줄을 그 첫 조각 맨 앞에 붙인다(Python chunk._pack_units 와 같다).
+//   head = units[0] 이 절 제목인가 · lead = 첫 조각 맨 앞에 둘 제목 줄(앞의 '제목만 든 상위 절')
 //------------------------------------------------------------------
-fn pack_units(units: &[(String, Option<String>)], tok: &Tok, budget: usize, overlap: usize) -> Vec<String> {
+fn pack_units(units: &[Unit], tok: &Tok, budget: usize, overlap: usize, head: bool, lead: Option<String>) -> Vec<String> {
     let c = cfg();
     let mut pieces: Vec<String> = vec![];
     let mut cur: Vec<String> = vec![];
     let mut cur_n = 0usize;
+    // 지금 조각이 제목(·표 머리글) 줄뿐인가
+    let mut head_only = false;
+    if let Some(l) = lead {
+        cur_n = tok.tlen(&l);
+        cur.push(l);
+        head_only = true;
+    }
     let soft = budget as f64 * c.chunk_overflow_ratio.max(1.0);
-    let emit = |cur: &mut Vec<String>, pieces: &mut Vec<String>| {
+    // 지금 조각을 끊어 낸다
+    fn emit(cur: &mut Vec<String>, pieces: &mut Vec<String>, cur_n: &mut usize, head_only: &mut bool) {
         if !cur.is_empty() {
             pieces.push(cur.join("\n"));
             cur.clear();
         }
-    };
-    for (i, (text, header)) in units.iter().enumerate() {
+        *cur_n = 0;
+        *head_only = false;
+    }
+    for (i, (text, header, whole)) in units.iter().enumerate() {
         let n = tok.tlen(text);
         let hdr = header.as_ref().filter(|h| tok.tlen(h) as i64 <= c.table_header_max_tokens).cloned();
         let nxt = units.get(i + 1);
-        if !cur.is_empty() {
-            if let Some((nt, nh)) = nxt {
-                if nh.as_deref() == Some(text.as_str()) && cur_n + n + tok.tlen(nt) > budget {
-                    emit(&mut cur, &mut pieces);
-                    cur_n = 0;
+        let is_hdr_unit = nxt.map(|(_, nh, _)| nh.as_deref() == Some(text.as_str())).unwrap_or(false);
+        // 표 머리글이 첫 행과 함께 들어갈 자리가 없으면 먼저 끊는다 — 단 지금 조각이 제목뿐이면 끊지 않는다
+        if !cur.is_empty() && !head_only && is_hdr_unit {
+            if let Some((nt, _, _)) = nxt {
+                if cur_n + n + tok.tlen(nt) > budget {
+                    emit(&mut cur, &mut pieces, &mut cur_n, &mut head_only);
                 }
             }
         }
         if n > budget {
-            emit(&mut cur, &mut pieces);
-            cur_n = 0;
-            if n as f64 <= soft && n as i64 <= c.chunk_hard_max {
-                pieces.push(match &hdr { Some(h) => format!("{}\n{}", h, text), None => text.clone() });
+            // 제목 줄뿐인 조각은 따로 내지 않고 이 단위 첫 조각 앞에 붙인다
+            let mut pre: Vec<String> = vec![];
+            if head_only {
+                pre = std::mem::take(&mut cur);
+                // 끝이 이 행의 표 머리글이면 아래에서 다시 붙으므로 뺀다(두 번 들어가지 않게)
+                if let (Some(h), Some(last)) = (&hdr, pre.last()) {
+                    if last == h {
+                        pre.pop();
+                    }
+                }
+                cur_n = 0;
+                head_only = false;
+            } else {
+                emit(&mut cur, &mut pieces, &mut cur_n, &mut head_only);
+            }
+            // 통째 표는 약한 초과(α)를 넘어도 hard_max 안이면 쪼개지 않는다
+            let mut subs = if (n as f64 <= soft || *whole) && n as i64 <= c.chunk_hard_max {
+                vec![match &hdr { Some(h) => format!("{}\n{}", h, text), None => text.clone() }]
             } else {
                 let mut subs = split_unit(text, tok, budget, overlap);
                 if let (Some(h), Some(first)) = (&hdr, subs.first_mut()) {
                     *first = format!("{}\n{}", h, first);
                 }
-                pieces.extend(subs);
+                subs
+            };
+            if !pre.is_empty() {
+                match subs.first_mut() {
+                    Some(first) => *first = format!("{}\n{}", pre.join("\n"), first),
+                    None => pieces.push(pre.join("\n")),
+                }
             }
+            pieces.extend(subs);
             continue;
         }
-        if cur_n + n > budget {
-            emit(&mut cur, &mut pieces);
-            cur_n = 0;
+        if cur_n + n > budget && !head_only {
+            emit(&mut cur, &mut pieces, &mut cur_n, &mut head_only);
         }
+        let was_head_only = head_only && !cur.is_empty();
         if cur.is_empty() {
             if let Some(h) = &hdr {
                 cur.push(h.clone());
@@ -409,8 +524,10 @@ fn pack_units(units: &[(String, Option<String>)], tok: &Tok, budget: usize, over
         }
         cur.push(text.clone());
         cur_n += n;
+        // 머리 상태가 이어지는 경우: 절 제목(첫 단위)이거나, 머리 상태에 표 머리글 단위가 더해질 때
+        head_only = (head && i == 0) || (was_head_only && is_hdr_unit);
     }
-    emit(&mut cur, &mut pieces);
+    emit(&mut cur, &mut pieces, &mut cur_n, &mut head_only);
     pieces
 }
 

@@ -386,6 +386,13 @@ pub fn chunk_params() -> Value {
         if c.pdf_infer_headings {
             p.insert("pdf_headings".into(), json!(true));
         }
+        // 표 검출 · 작은 표 통째도 켤 때만 키를 더한다(Python indexer.chunk_params 와 같은 기록)
+        if c.pdf_tables {
+            p.insert("pdf_tables".into(), json!(true));
+        }
+        if c.chunk_table_whole != 0 {
+            p.insert("table_whole".into(), json!(c.chunk_table_whole));
+        }
     }
     Value::Object(p)
 }

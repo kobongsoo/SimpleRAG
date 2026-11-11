@@ -865,7 +865,7 @@ fn pdf_pages(path: &str) -> Option<Arc<Vec<String>>> {
             return Some(v);
         }
     }
-    let (raw, _) = crate::pdfium::read_pages(path, false, |_, _| true).ok()?;
+    let (raw, _) = crate::pdfium::read_pages(path, false, false, |_, _| true).ok()?;
     let v = Arc::new(raw.into_iter().map(|pt| squash(&pt.text)).collect::<Vec<_>>());
     let mut c = PAGES.lock().unwrap();
     c.push((path.to_string(), v.clone()));

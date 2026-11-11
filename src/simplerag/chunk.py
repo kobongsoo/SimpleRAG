@@ -216,6 +216,11 @@ _SENT_END = re.compile(r"(?<=[.!?。])\s+")
 #    5) 표 행으로 시작하는 조각에는 그 표의 머리글 행을 다시 붙인다(파일이 알려 준 머리글,
 #       길이 상한 TABLE_HEADER_MAX_TOKENS 는 기존과 같다)
 #    6) 어떤 청크도 chunk.hard_max(e5 입력 한계)를 넘지 않게 마지막에 자른다
+#    7) 제목만 든 청크를 만들지 않는다 — 제목 줄만 남는 조각은 내보내지 않고 다음 조각 맨 앞에
+#       붙인다. 절 안(큰 문단 앞에서 제목이 홀로 떨어지는 경우)과 절 사이(본문 없는 상위 제목 절이
+#       큰 하위 절 앞에서 홀로 내보내지는 경우) 둘 다다. 제목만 든 청크는 근거로 뽑혀도 답할
+#       재료가 없고, 제목 글자는 이미 같은 절 청크마다 접두에 들어 있다.
+#    8) (chunk.table_whole > 0 일 때만) 그 토큰 이하의 표는 행으로 나누지 않고 통째로 한 단위로 둔다
 #
 # -in: doc     = docmodel.Document
 # -in: tok     = tokenizers.Tokenizer (절단 해제 상태)
@@ -250,8 +255,26 @@ def split_blocks(doc, tok, title=None, size=None, overlap=None):
             buf.clear()
             buf_secs.clear()
 
+    # 모아 둔 절 끝에서 '들어오는 절의 상위 제목뿐인 절'들을 떼어 낸다 — 앞 청크 끝에 매달거나
+    # 홀로 내보내지 않고 들어오는 절과 함께 보낸다. [(whole, sec), …]
+    # 🔴 상위 제목인지 꼭 본다 — 번호 조항 문서는 "3.2 '회원'이라 함은 …" 처럼 제목 줄이 곧
+    #    내용인 절이 줄줄이 이어진다. 이것까지 떼면 묶음이 끝없이 커진다(동호회규정에서 실측).
+    def peel(nxt):
+        k = len(buf_secs)
+        while k and _heading_only(buf_secs[k - 1]) and _is_ancestor(buf_secs[k - 1], nxt):
+            k -= 1
+        tail = list(zip(buf[k:], buf_secs[k:]))
+        del buf[k:]
+        del buf_secs[k:]
+        return tail
+
+    # 작은 표 통째로(chunk.table_whole 토큰 이하, 기본 0 = 끔) — 끄면 표는 늘 행 단위
+    keep_whole = None
+    if config.CHUNK_TABLE_WHOLE:
+        keep_whole = lambda t: _tlen(tok, t) <= config.CHUNK_TABLE_WHOLE  # noqa: E731
+
     for sec in build_sections(doc):
-        units = section_units(sec)
+        units = section_units(sec, keep_whole)
         if not units:
             continue
         prefix = make_prefix(title, sec.path)
@@ -261,18 +284,28 @@ def split_blocks(doc, tok, title=None, size=None, overlap=None):
         # (A) 절이 통째로 예산에 들어간다 — 앞의 절들과 묶을 수 있으면 묶는다
         if n <= size:
             if buf_n + n > size:
+                tail = peel(sec)
                 flush()
                 buf_n = 0
+                # 떼어 낸 제목 절은 새로 모으는 묶음 맨 앞에 다시 넣는다(이 절과 함께 나간다)
+                for w, s in tail:
+                    buf.append(w)
+                    buf_secs.append(s)
+                    buf_n += _tlen(tok, w)
             buf.append(whole)
             buf_secs.append(sec)
             buf_n += n
             continue
 
         # (B) 절 하나가 예산을 넘는다 — 모아 둔 것을 먼저 내보내고 단위 경계에서 쪼갠다
+        tail = peel(sec)
         flush()
         buf_n = 0
+        # 떼어 낸 제목 절들의 제목 줄은 이 절 첫 조각 맨 앞에 붙인다
+        lead = "\n".join(section_units(s)[0][0] for _, s in tail) or None
+        head = _has_heading(sec)
         budget = max(config.MIN_CHUNK_TOKENS, size - _tlen(tok, prefix))
-        for piece in _pack_units(units, tok, budget, overlap):
+        for piece in _pack_units(units, tok, budget, overlap, head=head, lead=lead):
             if piece.strip():
                 out.append(_chunk_meta((prefix + piece).strip(), [sec], pf))
     flush()
@@ -428,20 +461,80 @@ def _unit_pages(sec):
 
 
 #------------------------------------------------------------------
+# 절 제목이 단위로 들어가는 절인가
+#=> section_units 는 합성 제목이 아니고 글자가 있는 제목만 첫 단위로 넣는다. 같은 조건이다.
+#
+# -in: sec = assemble.Section
+#
+# -out: bool = True 면 section_units(sec)[0] 이 절 제목이다
+# -out: error = 없음
+#------------------------------------------------------------------
+def _has_heading(sec):
+    h = sec.heading
+    return h is not None and not h.synthetic and bool(h.text.strip())
+
+
+#------------------------------------------------------------------
+# 제목만 든 절인가
+#=> 제목 바로 뒤에 하위 제목이 와서 본문 단위가 하나도 없는 절(예: "4. 지급기준" 다음에
+#   곧장 "4.1 …"). 이런 절을 홀로 청크로 내면 제목 한 줄짜리 청크가 된다.
+#
+# -in: sec = assemble.Section
+#
+# -out: bool
+# -out: error = 없음
+#------------------------------------------------------------------
+def _heading_only(sec):
+    from .docmodel.assemble import section_units
+    return _has_heading(sec) and len(section_units(sec)) == 1
+
+
+#------------------------------------------------------------------
+# 상위 절인가
+#=> 제목 경로로 본다. 위 절의 경로가 아래 절 경로의 앞부분이고 아래 절이 더 깊으면 상위다.
+#   (예: ["4. 지급기준"] 은 ["4. 지급기준", "4.1."] 의 상위, ["3.2 …"] 는 ["3.3"] 의 상위가 아니다)
+#
+# -in: upper = 위쪽 절(assemble.Section)
+# -in: lower = 아래쪽 절
+#
+# -out: bool
+# -out: error = 없음
+#------------------------------------------------------------------
+def _is_ancestor(upper, lower):
+    k = len(upper.path)
+    return len(lower.path) > k and lower.path[:k] == upper.path
+
+
+#------------------------------------------------------------------
 # 단위 묶기 — 큰 절을 블록·표 행 경계에서 자른다
 #=> 단위를 차례로 담다가 예산을 넘으면 조각을 끊는다. 표 행으로 새 조각이 시작되면
 #   그 표의 머리글을 앞에 붙인다(머리글 토큰은 예산에 세지 않는다 — 기존 규칙과 같다).
+#   WholeTable 단위(chunk.table_whole 이하의 작은 표)는 예산을 넘어도 hard_max 안이면 쪼개지 않는다.
+#   제목 줄만 든 조각은 끊지 않는다 — 지금 조각에 절 제목(과 넘겨받은 상위 제목, 그 뒤의 표
+#   머리글)만 들었으면 '머리 상태'로 보고, 다음 단위가 예산을 넘겨도 끊지 않고 함께 담는다.
+#   다음 단위가 혼자 예산을 넘어 쪼개질 때는 머리 줄을 그 첫 조각 맨 앞에 붙인다. 그래서 그
+#   조각은 머리 줄 토큰만큼 예산을 조금 넘을 수 있다(절대 상한은 _enforce_hard_max 가 지킨다).
 #
 # -in: units   = [(글자, 머리글 또는 None), …] (assemble.section_units)
 # -in: tok     = 토크나이저
 # -in: budget  = 조각 하나의 토큰 예산(접두 제외)
 # -in: overlap = 단위 내부 분할 때의 겹침 토큰 수
+# -in: head    = True 면 units[0] 이 절 제목이다(기본 False)
+# -in: lead    = 첫 조각 맨 앞에 둘 제목 줄(앞의 '제목만 든 상위 절'에서 넘겨받음). 없으면 None
 #
 # -out: [조각 글자, …]
 # -out: error = 없음
 #------------------------------------------------------------------
-def _pack_units(units, tok, budget, overlap):
-    pieces, cur, cur_n = [], [], 0
+def _pack_units(units, tok, budget, overlap, head=False, lead=None):
+    from .docmodel.assemble import WholeTable
+
+    pieces, cur = [], []
+    # n = 지금 조각 토큰 수 · head_only = 지금 조각이 제목(·표 머리글) 줄뿐인가
+    state = {"n": 0, "head_only": False}
+    if lead:
+        cur.append(lead)
+        state["n"] = _tlen(tok, lead)
+        state["head_only"] = True
     soft = budget * max(1.0, float(config.CHUNK_OVERFLOW_RATIO))
 
     # 지금 조각을 끊어 낸다
@@ -449,37 +542,56 @@ def _pack_units(units, tok, budget, overlap):
         if cur:
             pieces.append("\n".join(cur))
             cur.clear()
+        state["n"] = 0
+        state["head_only"] = False
 
     for i, (text, header) in enumerate(units):
         n = _tlen(tok, text)
         hdr = header if (header and _tlen(tok, header) <= config.TABLE_HEADER_MAX_TOKENS) else None
         # 표 머리글 단위(다음 단위가 이 글을 머리글로 갖는다) — 첫 행과 함께 들어갈 자리가 없으면
         # 지금 조각을 먼저 끊는다. 머리글만 조각 끝에 홀로 남으면 다음 조각에 또 붙어 두 번 들어간다.
+        # 단 지금 조각이 제목뿐이면 끊지 않는다(제목이 홀로 남는다).
         nxt = units[i + 1] if i + 1 < len(units) else None
-        if cur and nxt is not None and nxt[1] == text \
-                and cur_n + n + _tlen(tok, nxt[0]) > budget:
+        is_hdr_unit = nxt is not None and nxt[1] == text
+        if cur and not state["head_only"] and is_hdr_unit \
+                and state["n"] + n + _tlen(tok, nxt[0]) > budget:
             emit()
-            cur_n = 0
         if n > budget:
-            emit()
-            cur_n = 0
-            if n <= soft and n <= config.CHUNK_HARD_MAX:
-                # 약한 초과 허용 — 단위를 쪼개지 않고 통째로 한 조각
-                pieces.append((hdr + "\n" + text) if hdr else text)
+            # 제목 줄뿐인 조각은 따로 내지 않고 이 단위 첫 조각 앞에 붙인다
+            pre = []
+            if state["head_only"]:
+                pre = list(cur)
+                # 끝이 이 행의 표 머리글이면 아래에서 다시 붙으므로 뺀다(두 번 들어가지 않게)
+                if hdr and pre and pre[-1] == hdr:
+                    pre.pop()
+                cur.clear()
+                state["n"] = 0
+                state["head_only"] = False
+            else:
+                emit()
+            if (n <= soft or isinstance(text, WholeTable)) and n <= config.CHUNK_HARD_MAX:
+                # 약한 초과 허용 · 통째로 둘 작은 표 — 단위를 쪼개지 않고 한 조각
+                subs = [(hdr + "\n" + text) if hdr else text]
             else:
                 subs = _split_unit(text, tok, budget, overlap)
                 if hdr and subs:
                     subs[0] = hdr + "\n" + subs[0]
-                pieces.extend(subs)
+            if pre and subs:
+                subs[0] = "\n".join(pre) + "\n" + subs[0]
+            elif pre:
+                pieces.append("\n".join(pre))
+            pieces.extend(subs)
             continue
-        if cur_n + n > budget:
+        if state["n"] + n > budget and not state["head_only"]:
             emit()
-            cur_n = 0
+        was_head_only = state["head_only"] and bool(cur)
         if not cur and hdr:
             # 표 행으로 조각이 시작된다 — 머리글이 없으면 '5 가 일수인지 금액인지' 알 수 없다
             cur.append(hdr)
         cur.append(text)
-        cur_n += n
+        state["n"] += n
+        # 머리 상태가 이어지는 경우: 절 제목(첫 단위)이거나, 머리 상태에 표 머리글 단위가 더해질 때
+        state["head_only"] = (head and i == 0) or (was_head_only and is_hdr_unit)
     emit()
     return pieces
 

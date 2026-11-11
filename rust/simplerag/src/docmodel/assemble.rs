@@ -100,33 +100,46 @@ pub fn build_sections(doc: &mut Document) -> Vec<Section> {
 // 절 본문의 단위 목록 — (글자, 머리글)
 //=> 표는 행 하나가 단위(값 행에는 머리글을 함께 적는다), 그 밖은 블록 하나가 단위.
 //------------------------------------------------------------------
-pub fn section_units(sec: &Section) -> Vec<(String, Option<String>)> {
+pub fn section_units(sec: &Section, keep_whole: Option<&dyn Fn(&str) -> bool>) -> Vec<Unit> {
     let mut units = vec![];
     if let Some(h) = &sec.heading {
         if !h.synthetic && !pyutil::strip(&h.text).is_empty() {
-            units.push((pyutil::strip(&h.text).to_string(), None));
+            units.push((pyutil::strip(&h.text).to_string(), None, false));
         }
     }
     for b in &sec.blocks {
-        if b.kind == B::TABLE && b.rows.as_ref().map(|r| !r.is_empty()).unwrap_or(false) {
+        let is_table = b.kind == B::TABLE && b.rows.as_ref().map(|r| !r.is_empty()).unwrap_or(false);
+        // 작은 표 — 머리글과 모든 행을 한 단위로(청킹기가 예산을 넘어도 쪼개지 않는다)
+        if is_table && keep_whole.map(|f| f(&b.text)).unwrap_or(false) {
+            units.push((b.text.clone(), None, true));
+            continue;
+        }
+        if is_table {
             let lines: Vec<&str> = b.text.split('\n').collect();
             let nh = b.header_rows;
             let header = if nh > 0 { Some(lines[..nh.min(lines.len())].join("\n")) } else { None };
             let header = header.filter(|h| !h.is_empty());
             if let Some(h) = &header {
-                units.push((h.clone(), None));
+                units.push((h.clone(), None, false));
             }
             for ln in lines.iter().skip(nh) {
-                units.push((ln.to_string(), header.clone()));
+                units.push((ln.to_string(), header.clone(), false));
             }
             continue;
         }
         if !pyutil::strip(&b.text).is_empty() {
-            units.push((strip_blank_lines(&b.text), None));
+            units.push((strip_blank_lines(&b.text), None, false));
         }
     }
     units
 }
+
+//------------------------------------------------------------------
+// 청킹 단위 — (글자, 머리글, 통째 표인가)
+//=> 세 번째 값이 true 면 chunk.table_whole 이하의 작은 표 하나 전체다. 청킹기(pack_units)는
+//   예산을 넘어도 hard_max 안이면 쪼개지 않는다(Python assemble.WholeTable 표시와 같은 뜻).
+//------------------------------------------------------------------
+pub type Unit = (String, Option<String>, bool);
 
 // 앞뒤 공백·빈 줄 걷기
 fn strip_blank_lines(s: &str) -> String {

@@ -202,7 +202,8 @@ def save_state(state, path=None):
 # -in: 없음
 #
 # -out: dict = {tokens, overlap, mode, min_tokens, table_header_max_tokens, chunker_version}
-#       (+ blocks 엔진이면 extract_engine · overflow_ratio · sentence_split · hard_max · blocks_version)
+#       (+ blocks 엔진이면 extract_engine · overflow_ratio · sentence_split · hard_max · blocks_version,
+#        켰을 때만 pdf_headings · pdf_tables · table_whole)
 # -out: error = 없음
 #------------------------------------------------------------------
 def chunk_params():
@@ -220,6 +221,11 @@ def chunk_params():
                        "blocks_version": BLOCKS_VERSION})
         if config.PDF_INFER_HEADINGS:
             params["pdf_headings"] = True
+        # 표 검출도 켤 때만 키를 더한다 — 꺼 둔 기존 인덱스가 재구축을 요구하지 않게
+        if config.PDF_TABLES:
+            params["pdf_tables"] = True
+        if config.CHUNK_TABLE_WHOLE:
+            params["table_whole"] = config.CHUNK_TABLE_WHOLE
     return params
 
 
@@ -355,6 +361,23 @@ _PARSE_LOCK = threading.Lock()
 
 
 #------------------------------------------------------------------
+# 메타데이터 갱신 (파서 잠금 안에서)
+#=> 메타 추출(meta.extract.pdf_meta 등)도 pdfium 같은 파서를 쓴다. pdfium 은 스레드 안전하지
+#   않아서, 본 스레드가 메타를 읽는 동안 준비 스레드가 다음 PDF 를 파싱하면 프로세스가 죽을 수
+#   있다(2026-11-11 표 검출을 켠 인덱싱에서 0x80000003 으로 재현). 같은 잠금으로 줄 세운다.
+#
+# -in: key   = 문서 절대 경로
+# -in: chash = 내용 해시
+#
+# -out: 없음
+# -out: error = 없음 (meta_hook.synced 가 예외를 경고로 바꾼다)
+#------------------------------------------------------------------
+def _meta_synced(key, chash):
+    with _PARSE_LOCK:
+        meta_hook.synced(key, chash)
+
+
+#------------------------------------------------------------------
 # 문서 하나 추출·청킹 (sync_doc 2단계의 앞부분 — 준비 스레드도 이것을 부른다)
 #=> blocks 엔진이면 블록 추출 → split_blocks, 아니면 글자 추출 → 구조/고정 청킹.
 #
@@ -480,7 +503,7 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
             state.get("failed", {}).pop(key, None)
             save_state(state)
             # 내용은 같아도 파일 시스템 날짜는 바뀌었다 — 메타는 다시 읽는다(수십 ms)
-            meta_hook.synced(key, chash)
+            _meta_synced(key, chash)
             return {"ok": True, "op": "same", "chunks": prev.get("chunks", 0)}
         op = "retitled"
     # 처음 보는 경로인데 같은 파일이 다른 자리에서 사라졌다 — 옮긴 것이다(경로만 바꾼다)
@@ -542,7 +565,7 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
         state.setdefault("failed", {})[key] = {"fingerprint": fp, "why": why, "name": name}
         save_state(state)
         # 본문을 못 뽑은 문서(스캔 PDF 등)도 이름 · 날짜 · 사람으로는 찾을 수 있게 메타는 남긴다
-        meta_hook.synced(key, chash)
+        _meta_synced(key, chash)
         return {"ok": False, "op": op, "chunks": 0, "why": why, "kept_old": bool(prev)}
 
     # 회귀 감지(결정12): 문자 수 대비 청크가 비정상적으로 적으면 경고한다.
@@ -596,7 +619,7 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
     state.get("failed", {}).pop(key, None)
     mark_changed(state)
     save_state(state)
-    meta_hook.synced(key, chash)
+    _meta_synced(key, chash)
     n_new = len(chunks) - n_reused
     return {"ok": True, "op": op, "chunks": len(chunks), "n_rows": n_rows, "reused": n_reused,
             "embedded": 0 if defer else n_new, "deferred": n_new if defer else 0}
@@ -1060,7 +1083,8 @@ def copy_doc(src_key, path, fp, state, store):
     mark_changed(state)
     save_state(state)
     # 메타도 원본을 베끼고 경로 · 파일 시스템 정보만 새로 읽는다
-    meta_hook.copied(src_key, key, entry.get("content_hash"))
+    with _PARSE_LOCK:
+        meta_hook.copied(src_key, key, entry.get("content_hash"))
     return {"ok": True, "op": "copied", "chunks": len(payloads), "from": src_key}
 
 

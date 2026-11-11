@@ -205,11 +205,13 @@ SCHEMA = {
         "overflow_ratio": _num(1, 4),              # 약한 초과 허용 α (1.0 = 끔)
         "sentence_split": _bool,                   # 큰 단위를 문장 경계로도 나눔
         "hard_max": _int(16, 510),                 # 청크 절대 상한(e5 입력 한계)
+        "table_whole": _int(0, 510),               # 이 토큰 이하 표는 통째로 한 청크(0 = 끔, 기본 384)
     },
     "extract": {
         "engine": _choice("legacy", "blocks"),     # 추출 엔진(바꾸면 전체 재인덱싱)
         "dump_blocks": _bool,                      # 문서별 블록 JSON 저장(진단용)
         "pdf_headings": _bool,                     # PDF 글자 크기로 제목 추정(P-2, 기본 끔)
+        "pdf_tables": _bool,                       # PDF 테두리 표 검출(기본 켬)
     },
     "retrieval": {
         "dense_top_k": _int(1, 1000),

@@ -212,7 +212,7 @@ fn pdf_text(path: &str) -> Result<String, String> {
     let t0 = std::time::Instant::now();
     let max_pages = max_pdf_pages();
     let limit = parser_timeout();
-    let (pages, _) = crate::pdfium::read_pages(path, false, |i, _| {
+    let (pages, _) = crate::pdfium::read_pages(path, false, false, |i, _| {
         !(max_pages > 0 && i >= max_pages) && !(limit > 0 && t0.elapsed().as_secs() >= limit)
     })
     .map_err(|e| if e.contains("적재") { e } else { format!("PDF 열기 실패: {}", e) })?;

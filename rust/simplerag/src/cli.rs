@@ -929,6 +929,13 @@ fn extract_blocks_preview(path: &str, chars: usize, dump: Option<&str>) -> i32 {
     } else {
         outln(&format!("청크    : {}개 (토큰 최소 {} · 중앙 {} · 최대 {}, 예산 {})", chunks.len(), lens[0], lens[lens.len() / 2], lens[lens.len() - 1], cfg().chunk_tokens));
     }
+    // --dump 면 청크도 JSON 으로 남긴다(blocks.json 옆 <파일명>.chunks.json)
+    if let Some(d) = dump {
+        match crate::chunk::dump_chunks(&chunks, &tok, d, pyutil::basename(path), &doc.format) {
+            Ok(p) => outln(&format!("청크JSON: {}", p)),
+            Err(e) => log(&format!("청크 JSON 저장 실패: {}", e)),
+        }
+    }
     outln(&"-".repeat(66));
     let mut shown = 0;
     for (i, c) in chunks.iter().enumerate() {

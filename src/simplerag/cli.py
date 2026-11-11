@@ -831,12 +831,50 @@ def cmd_extract(args):
 
 
 #------------------------------------------------------------------
+# 진단용 청크 JSON 저장 (extract --blocks --dump)
+#=> blocks.json 옆에 <파일명>.chunks.json 을 쓴다. 블록이 청크로 어떻게 묶이고 잘렸는지,
+#   청크마다 토큰 수 · 절 번호 · 제목 경로 · 쪽을 눈으로 확인하는 용도다(Rust chunk::dump_chunks 와 같은 모양).
+#    1) 청크마다 번호 · 토큰 수 · 메타 · 글(접두 "[문서 > 절]" 포함 — 임베딩·LLM 에 들어가는 글 그대로)
+#    2) 맨 위에 이 청크를 만든 설정(chunk.tokens · overlap · mode)을 함께 적는다
+#
+# -in: chunks  = split_blocks 결과 [dict, …]
+# -in: tok     = 토크나이저(토큰 수 세기)
+# -in: out_dir = 저장 폴더(없으면 만든다)
+# -in: name    = 파일 이름 바탕(원본 파일명)
+# -in: fmt     = 추출 경로("docx" · "legacy" …)
+#
+# -out: str = 저장한 경로
+# -out: error = 쓰기 실패 시 OSError 전파
+#------------------------------------------------------------------
+def _dump_chunks(chunks, tok, out_dir, name, fmt):
+    import json
+
+    from simplerag.chunk import _tlen
+
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, name + ".chunks.json")
+    items = [{"no": i, "tokens": _tlen(tok, c["text"]),
+              "section_id": c.get("section_id"), "path": c.get("path") or [],
+              "source": c.get("source"), "page": c.get("page"),
+              "page_from": c.get("page_from"), "page_to": c.get("page_to"),
+              "text": c["text"]} for i, c in enumerate(chunks)]
+    # 크기를 바꿔 가며 비교할 때 어느 설정으로 자른 결과인지 남긴다
+    out = {"file": name, "format": fmt, "chunk_tokens": config.CHUNK_TOKENS,
+           "chunk_overlap": config.CHUNK_OVERLAP, "chunk_mode": config.CHUNK_MODE,
+           "count": len(items), "chunks": items}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    return path
+
+
+#------------------------------------------------------------------
 # 구조화 추출 미리보기 (extract --blocks)
 #=> blocks 엔진이 문서를 어떻게 나눴는지 본다 — 블록 종류별 개수, 제목 경로(절),
 #   그리고 실제 청크 몇 개. 설정의 extract.engine 과 상관없이 blocks 엔진으로 돌린다.
 #    1) docmodel 로 블록을 만든다(파서가 없으면 기존 추출기로 폴백 — 그렇다고 표시)
 #    2) 블록 통계와 절 목록(경로 · 쪽 · 블록 수)을 찍는다
 #    3) split_blocks 로 청크를 만들어 개수·길이 분포와 앞부분을 보여 준다
+#    4) --dump 면 블록(<파일명>.blocks.json)과 청크(<파일명>.chunks.json)를 그 폴더에 저장한다
 #
 # -in: args = argparse 결과 (path, chars, dump)
 #
@@ -888,6 +926,13 @@ def _extract_blocks_preview(args):
             len(chunks), lens[0], lens[len(lens) // 2], lens[-1], config.CHUNK_TOKENS))
     else:
         print("청크    : 없음")
+    # --dump 면 청크도 JSON 으로 남긴다(blocks.json 옆 <파일명>.chunks.json)
+    if args.dump:
+        try:
+            print("청크JSON: " + _dump_chunks(chunks, emb.tokenizer, args.dump,
+                                             os.path.basename(args.path), doc.format))
+        except OSError as e:
+            print("청크 JSON 저장 실패: {}".format(e), file=sys.stderr)
     print("-" * 66)
     shown = 0
     for i, c in enumerate(chunks):

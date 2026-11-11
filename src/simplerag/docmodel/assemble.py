@@ -115,23 +115,42 @@ def build_sections(doc):
 
 
 #------------------------------------------------------------------
+# 통째로 둘 표 (단위 표시)
+#=> 단위는 (글자, 머리글) 짝이라 모양을 바꾸면 청킹기 여러 곳이 흔들린다. 그래서 '이 단위는
+#   작은 표 하나 전체이니 예산을 넘어도 쪼개지 말라'는 표시를 글자 자체(str 하위 클래스)에 단다.
+#   청킹기(_pack_units)는 isinstance 로만 확인하고, 그 밖에서는 보통 문자열과 똑같이 쓰인다.
+#
+# -필드: (없음 — str 그대로)
+#------------------------------------------------------------------
+class WholeTable(str):
+    pass
+
+
+#------------------------------------------------------------------
 # 절 본문의 '단위' 목록 — 청킹기가 자르는 최소 단위
 #=> 블록 하나가 단위 하나다. 단 표는 **행 하나가 단위**다 — 큰 표를 행 경계에서
 #   끊고 조각마다 머리글 행을 다시 붙여야 하기 때문이다.
 #    · 제목 블록  → 단위 1개 (합성 제목이면 본문에 넣지 않으므로 생략)
 #    · 표        → 머리글 행 묶음 1개 + 값 행마다 1개 (값 행 단위에는 머리글을 함께 적는다)
+#                  단 keep_whole(표 글자)가 True 면 표 전체를 WholeTable 단위 1개로 둔다
+#                  (작은 표가 행마다 청크로 흩어져 검색 상위를 같은 표 행들이 독차지하지 않게)
 #    · 그 외      → 블록 글자 1개
 #
-# -in: sec = Section
+# -in: sec        = Section
+# -in: keep_whole = 표 글자를 받아 통째로 둘지 정하는 함수. None 이면 늘 행 단위(기존과 같음)
 #
 # -out: [(글자, 머리글 또는 None), …]
 # -out: error = 없음
 #------------------------------------------------------------------
-def section_units(sec):
+def section_units(sec, keep_whole=None):
     units = []
     if sec.heading is not None and not sec.heading.synthetic and sec.heading.text.strip():
         units.append((sec.heading.text.strip(), None))
     for b in sec.blocks:
+        if b.type == B.TABLE and b.rows and keep_whole is not None and keep_whole(b.text):
+            # 작은 표 — 머리글과 모든 행을 한 단위로(청킹기가 예산을 넘어도 쪼개지 않는다)
+            units.append((WholeTable(b.text), None))
+            continue
         if b.type == B.TABLE and b.rows:
             lines = b.text.split("\n")
             nh = b.header_rows or 0

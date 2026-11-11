@@ -106,6 +106,8 @@ pub struct Config {
     pub chunk_mode: String,
     pub extract_engine: String,
     pub pdf_infer_headings: bool,
+    pub pdf_tables: bool,
+    pub chunk_table_whole: i64,
     pub extract_dump: bool,
     pub chunk_overflow_ratio: f64,
     pub chunk_sentence_split: bool,
@@ -283,6 +285,15 @@ fn build() -> Result<Config, ConfigError> {
         Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
         None => pick_bool(&y, "extract.pdf_headings", false),
     };
+    // PDF 테두리 표 검출(docmodel::pdftable) — 기본 켬. 2026-11-11 답변 실측에서 표 질문 정답 0.39→0.44,
+    //   다른 질문 손해 없음(report/PDF파서_비교_OpenDataLoader §7-6). 바꾸면 재인덱싱이 필요하다
+    let pdf_tables = match env("SIMPLERAG_PDF_TABLES") {
+        Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
+        None => pick_bool(&y, "extract.pdf_tables", true),
+    };
+    // 작은 표 통째로 — 표 전체가 이 토큰 이하면 행으로 나누지 않고 한 청크에 둔다(0 = 끔, 기본 384).
+    //   행마다 청크가 되면 같은 표의 형제 행들이 검색 상위를 독차지한다. 바꾸면 재인덱싱이 필요하다
+    let chunk_table_whole = pick_int(&y, "chunk.table_whole", 384, Some("SIMPLERAG_CHUNK_TABLE_WHOLE"))?;
     let extract_dump = pick_bool(&y, "extract.dump_blocks", false);
     let chunk_overflow_ratio = pick_num(&y, "chunk.overflow_ratio", 1.0, Some("SIMPLERAG_CHUNK_OVERFLOW"))?;
     let chunk_sentence_split = pick_bool(&y, "chunk.sentence_split", false);
@@ -425,6 +436,8 @@ fn build() -> Result<Config, ConfigError> {
         chunk_mode,
         extract_engine,
         pdf_infer_headings,
+        pdf_tables,
+        chunk_table_whole,
         extract_dump,
         chunk_overflow_ratio,
         chunk_sentence_split,
@@ -593,11 +606,13 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("overflow_ratio", Check::Num(1.0, 4.0, false)),
             ("sentence_split", Check::Bool),
             ("hard_max", Check::Int(16, 510)),
+            ("table_whole", Check::Int(0, 510)),
         ]),
         ("extract", vec![
             ("engine", Check::Choice(&["legacy", "blocks"])),
             ("dump_blocks", Check::Bool),
             ("pdf_headings", Check::Bool),
+            ("pdf_tables", Check::Bool),
         ]),
         ("retrieval", vec![
             ("dense_top_k", Check::Int(1, 1000)),

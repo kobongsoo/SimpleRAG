@@ -4,6 +4,8 @@
 //    · 머리말·꼬리말 — 쪽 맨 위·아래 2줄 가운데 3쪽 이상에서 되풀이되는 줄(숫자는 '#')
 //    · 쪽번호 — "12" · "- 12 -" · "3 / 30" · "Page 3" 꼴
 //    · 제목(P-2, 설정으로 켤 때만) — 본문보다 확연히 큰 짧은 줄
+//    · 표(extract.pdf_tables, 기본 켬) — 테두리 선으로 표를 찾아(pdftable) TABLE 블록으로 두고
+//      그 글자는 본문 줄에서 뺀다. 표 블록은 표가 시작된 줄 자리에 들어간다
 //   한 줄이 블록 하나다. 텍스트층이 사실상 없으면 오류 → 기존 추출로 폴백.
 //------------------------------------------------------------------
 
@@ -69,8 +71,9 @@ pub fn extract(path: &str, title: &str) -> Result<Document, String> {
     let mut doc = Document::new("pdf", title);
     let t0 = std::time::Instant::now();
     let infer = crate::config::cfg().pdf_infer_headings;
+    let want_tables = crate::config::cfg().pdf_tables;
     let mut stop_note: Option<(usize, usize)> = None;
-    let (raw_pages, _n) = crate::pdfium::read_pages(path, infer, |i, n| {
+    let (raw_pages, _n) = crate::pdfium::read_pages(path, infer, want_tables, |i, n| {
         if i >= MAX_PAGES || t0.elapsed().as_secs() > MAX_SECONDS {
             stop_note = Some((i, n));
             return false;
@@ -82,22 +85,35 @@ pub fn extract(path: &str, title: &str) -> Result<Document, String> {
     }
     let mut pages: Vec<Vec<String>> = vec![];
     let mut sizes: Vec<Vec<Option<f64>>> = vec![];
+    let mut anchors: Vec<BTreeMap<usize, Vec<Vec<Vec<String>>>>> = vec![];
     for p in &raw_pages {
-        let lines: Vec<String> = split_lines(&p.text).into_iter().map(|l| pyutil::rstrip(&l).to_string()).collect();
+        // 표가 있으면 표 글자를 뺀 글로 줄을 만든다(줄 수는 원문과 같다)
+        let (body, at) = if p.tables.is_empty() { (p.text.clone(), BTreeMap::new()) } else { strip_tables(&p.text, &p.tables) };
+        let lines: Vec<String> = split_lines(&body).into_iter().map(|l| pyutil::rstrip(&l).to_string()).collect();
+        // 글자 크기는 원문 글(p.text)로 잰다 — 줄바꿈을 그대로 두었으므로 줄 번호가 같다
         let sz = if infer { line_sizes(p, lines.len()) } else { vec![None; lines.len()] };
         pages.push(lines);
         sizes.push(sz);
+        anchors.push(at);
     }
     doc.pages = Some(pages.len() as i64);
+    let n_tables: usize = anchors.iter().map(|at| at.values().map(|v| v.len()).sum::<usize>()).sum();
     let total: usize = pages.iter().map(|p| p.iter().map(|l| l.chars().filter(|c| !pyutil::is_space(*c)).count()).sum::<usize>()).sum();
-    if total < MIN_TEXT_CHARS {
+    // 글이 전부 표 안에 있는 쪽들도 텍스트층은 있는 것이다
+    if total < MIN_TEXT_CHARS && n_tables == 0 {
         return Err("PDF 텍스트층 없음(스캔 PDF)".into());
     }
     let edge = edge_kinds(&pages);
     let heads = if infer { infer_headings(&pages, &sizes, &edge) } else { HashMap::new() };
-    for (pi, lines) in pages.iter().enumerate() {
+    for (pi, (lines, at)) in pages.iter().zip(&anchors).enumerate() {
         let no = pi as i64 + 1;
         for (j, ln) in lines.iter().enumerate() {
+            // 이 줄에서 시작한 표를 먼저 — 표 앞 글(표 제목·단위)은 앞 줄에 이미 나왔다
+            if let Some(tabs) = at.get(&j) {
+                for rows in tabs {
+                    doc.blocks.push(Block::table(rows.clone(), 0).pg(Some(no)));
+                }
+            }
             let t = pyutil::strip(ln);
             if t.is_empty() {
                 continue;
@@ -111,6 +127,49 @@ pub fn extract(path: &str, title: &str) -> Result<Document, String> {
         }
     }
     Ok(doc)
+}
+
+//------------------------------------------------------------------
+// 쪽 글에서 표 글자 빼기 (Python pdf._strip_tables)
+//=> 표 셀에 들어간 글자를 쪽 글에서 지운다(같은 글이 본문 줄과 표에 두 번 들어가지 않게).
+//   줄바꿈은 그대로 두어 줄 번호가 원문과 같게 유지한다 — 글자 크기(line_sizes)와 맞추기 위해.
+//   표마다 '첫 글자가 있던 줄'을 기록해 그 자리에 표 블록을 끼운다.
+// -in: txt = 쪽 글 / tables = pdftable 결과
+// -out: (표 글자를 뺀 글, {줄 번호: [표 행렬, …]})
+//------------------------------------------------------------------
+fn strip_tables(txt: &str, tables: &[super::pdftable::Table]) -> (String, BTreeMap<usize, Vec<Vec<Vec<String>>>>) {
+    // 첫 글자 위치 → 표 (같은 위치면 뒤의 표가 이긴다 — 파이썬 dict 와 같다)
+    let mut first: HashMap<usize, &Vec<Vec<String>>> = HashMap::new();
+    let mut drop: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for t in tables {
+        if let Some(&m) = t.used.iter().next() {
+            first.insert(m, &t.rows);
+        }
+        drop.extend(t.used.iter().copied());
+    }
+    let chars: Vec<char> = txt.chars().collect();
+    let mut out = String::with_capacity(txt.len());
+    let mut at: BTreeMap<usize, Vec<Vec<Vec<String>>>> = BTreeMap::new();
+    let (mut line, mut i) = (0usize, 0usize);
+    while i < chars.len() {
+        let ch = chars[i];
+        if let Some(rows) = first.get(&i) {
+            at.entry(line).or_default().push((*rows).clone());
+        }
+        if ch == '\r' || ch == '\n' {
+            out.push(ch);
+            // \r\n 은 줄바꿈 하나 — split_lines 와 같은 규칙
+            if ch == '\r' && i + 1 < chars.len() && chars[i + 1] == '\n' {
+                out.push('\n');
+                i += 1;
+            }
+            line += 1;
+        } else if !drop.contains(&i) {
+            out.push(ch);
+        }
+        i += 1;
+    }
+    (out, at)
 }
 
 // 줄마다 글꼴 크기 중앙값(P-2). 글자 수와 글 길이가 다르면 그 쪽은 모름

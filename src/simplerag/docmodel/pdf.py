@@ -8,6 +8,8 @@
 #    · 목차 — 점선 리더 줄은 공통 후처리(postprocess._mark_toc)가 toc 로 표시
 #    · 제목(P-2) — 본문보다 확연히 큰 짧은 줄을 제목으로 추정(source=inferred, 크기 순위 = 수준).
 #                 추정 제목이 3개 이상이면 후처리가 정규식 제목(조문·번호절)을 그 아래 수준으로 겹친다
+#    · 표(설정 extract.pdf_tables, 기본 끔) — 테두리 선으로 표를 찾아(pdftable) TABLE 블록으로 두고,
+#                 그 글자는 본문 줄에서 뺀다. 표 블록은 표가 시작된 줄 자리에 들어간다
 #   한 줄을 블록 하나로 둔다 — 기존 청킹이 큰 절을 줄 단위로 나누던 것과 같은 단위다.
 #   텍스트층이 사실상 없으면(스캔 PDF) ValueError → 기존 추출(사이냅 폴백 포함)로 보낸다.
 #------------------------------------------------------------------
@@ -17,6 +19,7 @@ import statistics
 import time
 
 from . import blocks as B
+from . import pdftable
 
 try:
     import pypdfium2 as pdfium
@@ -48,6 +51,10 @@ _TOC_TAIL = re.compile(r"(?:\.{3,}|·{3,}|…{2,}|-{4,})\s*\d{1,4}\s*$")
 
 #------------------------------------------------------------------
 # PDF 추출 (진입점)
+#=> 쪽마다 텍스트층을 줄로 나눠 블록으로 만든다.
+#    1) 쪽 글(get_text_range)을 읽는다. 표 검출을 켰으면 테두리 표를 찾아 그 글자를 줄에서 뺀다
+#    2) 머리말·꼬리말·쪽번호를 표시하고, (켰으면) 글자 크기 제목을 추정한다
+#    3) 줄마다 블록을 만들고, 표는 표가 시작된 줄 자리에 TABLE 블록으로 끼운다
 #
 # -in: path  = .pdf 경로
 # -in: title = 문서 제목
@@ -58,12 +65,13 @@ _TOC_TAIL = re.compile(r"(?:\.{3,}|·{3,}|…{2,}|-{4,})\s*\d{1,4}\s*$")
 def extract(path, title=""):
     if pdfium is None:
         raise ValueError("pypdfium2 미설치")
+    from .. import config
     try:
         pdf = pdfium.PdfDocument(path)
     except Exception as e:      # noqa: BLE001 — 손상·암호화 PDF 는 폴백
         raise ValueError("PDF 열기 실패: {}".format(type(e).__name__))
     doc = B.Document(format="pdf", title=title)
-    pages, sizes = [], []
+    pages, sizes, anchors = [], [], []
     t0 = time.monotonic()
     try:
         n = len(pdf)
@@ -75,23 +83,34 @@ def extract(path, title=""):
             try:
                 tp = page.get_textpage()
                 txt = tp.get_text_range()
-                lines = [ln.rstrip() for ln in _LINE_SPLIT.split(txt or "")]
+                body, at = txt, {}
+                # 글자 번호와 글 위치를 맞출 수 없는 쪽은 pdftable 이 빈 목록을 돌려준다
+                if config.PDF_TABLES and txt:
+                    found = pdftable.find_tables(page, tp, txt)
+                    if found:
+                        body, at = _strip_tables(txt, found)
+                lines = [ln.rstrip() for ln in _LINE_SPLIT.split(body or "")]
                 pages.append(lines)
+                anchors.append(at)
+                # 줄바꿈은 그대로 두므로 원문 txt 로 잰 줄 수와 같다
                 sizes.append(_line_sizes(tp, txt, len(lines)))
             finally:
                 page.close()
     finally:
         pdf.close()
     doc.pages = len(pages)
-    if sum(len(re.sub(r"\s+", "", "".join(p))) for p in pages) < MIN_TEXT_CHARS:
+    tables = sum(len(rs) for at in anchors for rs in at.values())
+    if sum(len(re.sub(r"\s+", "", "".join(p))) for p in pages) < MIN_TEXT_CHARS and not tables:
         raise ValueError("PDF 텍스트층 없음(스캔 PDF)")
 
     edge = _edge_kinds(pages)
     # 글자 크기 제목 추정은 설정으로 켤 때만(기본 끔 — config.PDF_INFER_HEADINGS 주석의 측정 결과)
-    from .. import config
     heads = _infer_headings(pages, sizes, edge) if config.PDF_INFER_HEADINGS else {}
-    for no, lines in enumerate(pages, 1):
+    for no, (lines, at) in enumerate(zip(pages, anchors), 1):
         for j, ln in enumerate(lines):
+            # 이 줄에서 시작한 표를 먼저 — 표 앞 글(표 제목·단위)은 앞 줄에 이미 나왔다
+            for rows in at.get(j, ()):
+                doc.blocks.append(B.Block(B.TABLE, "", rows=rows, page=no))
             if not ln.strip():
                 continue
             if (no, j) in heads:
@@ -101,6 +120,40 @@ def extract(path, title=""):
             kind = edge.get((no, j), B.PARAGRAPH)
             doc.blocks.append(B.Block(kind, ln.strip(), page=no))
     return doc
+
+
+#------------------------------------------------------------------
+# 쪽 글에서 표 글자 빼기
+#=> 표 셀에 들어간 글자를 쪽 글에서 지운다(같은 글이 본문 줄과 표에 두 번 들어가지 않게).
+#   줄바꿈은 그대로 두어 줄 번호가 원문과 같게 유지한다 — 글자 크기(_line_sizes)와 맞춰 보기 위해.
+#   표마다 '첫 글자가 있던 줄'을 기록해 그 자리에 표 블록을 끼운다.
+#
+# -in: txt   = 쪽 글(get_text_range)
+# -in: found = pdftable.find_tables 결과 [(rows, bbox, used)]
+#
+# -out: (body, at) — body = 표 글자를 뺀 쪽 글, at = {줄 번호: [rows, …]}
+# -out: error = 없음
+#------------------------------------------------------------------
+def _strip_tables(txt, found):
+    first = {min(used): rows for rows, _bbox, used in found}
+    drop = set().union(*(used for _r, _b, used in found))
+    out, at, line = [], {}, 0
+    i = 0
+    while i < len(txt):
+        ch = txt[i]
+        if i in first:
+            at.setdefault(line, []).append(first[i])
+        if ch in "\r\n":
+            out.append(ch)
+            # \r\n 은 줄바꿈 하나 — _LINE_SPLIT 과 같은 규칙
+            if ch == "\r" and i + 1 < len(txt) and txt[i + 1] == "\n":
+                out.append("\n")
+                i += 1
+            line += 1
+        elif i not in drop:
+            out.append(ch)
+        i += 1
+    return "".join(out), at
 
 
 #------------------------------------------------------------------

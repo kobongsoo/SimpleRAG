@@ -314,11 +314,21 @@ if EXTRACT_ENGINE not in ("legacy", "blocks"):
 #   켜면 청크가 바뀌므로 전체 재인덱싱이 필요하다(청킹 설정 기록에 들어간다).
 PDF_INFER_HEADINGS = bool(_setting("extract.pdf_headings", False, "SIMPLERAG_PDF_HEADINGS",
                                    lambda s: s.strip() not in ("0", "false", "no", "")))
+# PDF 테두리 표 검출(docmodel/pdftable.py). 기본 켬 — 2026-11-11 답변 실측에서 표 질문 정답 0.39→0.44,
+#   다른 질문 손해 없음(report/PDF파서_비교_OpenDataLoader §7-6).
+#   켜면 선으로 그린 표를 TABLE 블록(행 단위)으로 두고 그 글자는 본문 줄에서 뺀다.
+#   켜면 청크가 바뀌므로 전체 재인덱싱이 필요하다(청킹 설정 기록에 들어간다).
+PDF_TABLES = bool(_setting("extract.pdf_tables", True, "SIMPLERAG_PDF_TABLES",
+                           lambda s: s.strip() not in ("0", "false", "no", "")))
 # 문서별 블록 JSON 을 <데이터 루트>/blocks_dump 에 남긴다(진단용, 기본 끔)
 EXTRACT_DUMP = bool(_setting("extract.dump_blocks", False))
 # 약한 초과 허용 α — 단위(블록·표 행) 하나가 예산 × α 이하면 쪼개지 않고 통째로 둔다.
 #   1.0 = 끔(현행). 실험 후보 1.5. blocks 엔진에서만 쓴다(재설계서 §11 분할 규칙).
 CHUNK_OVERFLOW_RATIO = _setting("chunk.overflow_ratio", 1.0, "SIMPLERAG_CHUNK_OVERFLOW", float)
+# 작은 표 통째로 — 표 전체가 이 토큰 이하면 행으로 나누지 않고 한 청크에 둔다(0 = 끔, 기본 384).
+#   행마다 청크가 되면 같은 표의 형제 행들이 검색 상위를 독차지해 필요한 다른 근거가 밀린다
+#   (2026-11-11 PDF 표 검출 실측, 답변 비교에서 384 가 가장 나음). blocks 엔진에서만 쓴다. 바꾸면 재인덱싱이 필요하다.
+CHUNK_TABLE_WHOLE = _setting("chunk.table_whole", 384, "SIMPLERAG_CHUNK_TABLE_WHOLE", int)
 # 예산을 넘는 단위를 쪼갤 때 줄과 토큰 사이에 문장 경계를 끼운다. blocks 엔진에서만 쓴다.
 CHUNK_SENTENCE_SPLIT = bool(_setting("chunk.sentence_split", False))
 # 청크 절대 상한(토큰) — e5 최대 입력 512 − 특수토큰 2. 넘는 뒷부분은 벡터에 반영되지 않는다.

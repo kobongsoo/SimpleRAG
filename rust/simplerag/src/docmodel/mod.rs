@@ -14,6 +14,7 @@ pub mod html_md;
 pub mod hwpx;
 pub mod ooxml;
 pub mod pdf;
+pub mod pdftable;
 pub mod postprocess;
 pub mod pptx;
 pub mod tables;
