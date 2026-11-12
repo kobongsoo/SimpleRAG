@@ -89,6 +89,9 @@
   .pill.on { background: var(--ink); color: #fff; border-color: var(--ink); }
   .pills .sp { flex: 1; }
   .pills button { margin: 0; }
+  /* WebView2 에서 fieldset 최소 폭(min-content) 때문에 가로 스크롤바가 생겨 막는다 */
+  #tab_log fieldset { min-width: 0; }
+  #tab_log { overflow-x: hidden; }
   table.lg { table-layout: fixed; }
   table.lg th { background: var(--bg); padding: 3px 6px; width: auto; }
   table.lg td { padding: 4px 6px; border-bottom: 1px solid #eceef2; word-break: break-all; }
@@ -96,8 +99,9 @@
   table.lg tr.row1:hover td { background: #f9fafb; }
   table.lg .nm { font-weight: bold; }
   table.lg .sub { color: var(--sub); font-size: calc(var(--fs) - 1px); }
-  table.lg .acts { white-space: nowrap; text-align: right; }
-  table.lg .acts button { padding: 0 7px; margin: 0 0 0 3px; font-size: calc(var(--fs) - 1px); }
+  /* 단추는 문서 칸 아래 줄에 — 설정 창이 좁아(약 710px) 단추 칸을 따로 두면 문서 이름이 짓눌린다 */
+  table.lg .acts { white-space: nowrap; margin-top: 3px; }
+  table.lg .acts button { padding: 0 7px; margin: 0 3px 0 0; font-size: calc(var(--fs) - 1px); }
   table.lg tr.det td { background: #f9fafb; color: var(--sub); font-family: Consolas, "D2Coding", monospace; font-size: calc(var(--fs) - 1px); white-space: pre-wrap; }
   .lv-w { color: #b45309; white-space: nowrap; }
   .lv-e { color: #b91c1c; font-weight: bold; white-space: nowrap; }
@@ -447,7 +451,7 @@ function drawFail() {
     $("lg_fail_more").classList.add("hidden");
     return;
   }
-  let h = '<colgroup><col><col style="width:9.5em"><col style="width:6.5em"><col style="width:13em"></colgroup><tr><th>문서</th><th>원인</th><th>때</th><th></th></tr>';
+  let h = '<colgroup><col><col style="width:9em"><col style="width:7.2em"></colgroup><tr><th>문서</th><th>원인</th><th>때</th></tr>';
   rows.slice(0, lgLimit).forEach((f, i) => {
     const gone = f.exists === false;
     const done = lgRetried.has(f.path);
@@ -457,10 +461,10 @@ function drawFail() {
       : '<button data-a="log_open" data-i="' + i + '">열기</button><button data-a="log_reveal" data-i="' + i + '">폴더</button>'
         + '<button data-a="retry" data-i="' + i + '"' + (done ? " disabled" : "") + (f.retry ? "" : ' title="원인이 그대로면 다시 해도 같을 수 있습니다"') + ">"
         + (done ? "넣음" : "다시 시도") + "</button>";
-    h += '<tr class="row1" data-i="' + i + '"><td><div class="nm' + (gone ? " gone" : "") + '">' + esc(f.name) + '</div><div class="sub">' + esc(f.dir) + "</div></td>"
+    h += '<tr class="row1" data-i="' + i + '"><td><div class="nm' + (gone ? " gone" : "") + '">' + esc(f.name) + '</div><div class="sub">' + esc(f.dir) + '</div><div class="acts">' + acts + "</div></td>"
       + '<td><div class="t-warn" title="' + esc(f.hint) + '">' + esc(f.title) + "</div>" + (sub ? '<div class="sub">' + sub + "</div>" : "") + "</td>"
-      + '<td class="sub">' + shortTs(f.at) + '</td><td class="acts">' + acts + "</td></tr>";
-    if (lgOpen.has(f.path)) h += '<tr class="det"><td colspan="4">' + esc(f.hint) + "\n원래 사유: " + esc(f.why) + "\n" + esc(f.path) + "</td></tr>";
+      + '<td class="sub">' + shortTs(f.at) + "</td></tr>";
+    if (lgOpen.has(f.path)) h += '<tr class="det"><td colspan="3">' + esc(f.hint) + "\n원래 사유: " + esc(f.why) + "\n" + esc(f.path) + "</td></tr>";
   });
   t.innerHTML = h;
   $("lg_fail_more").classList.toggle("hidden", rows.length <= lgLimit);
