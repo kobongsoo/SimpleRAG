@@ -606,9 +606,36 @@ pub fn extract_chunks(path: &str, name: &str, tok: &crate::tok::Tok) -> Result<V
     Ok(chunks.into_iter().filter(|c| !c.is_empty()).map(|c| (c, None)).collect())
 }
 
+//------------------------------------------------------------------
+// 파일 하나를 청크 메타로 (extract_chunks 와 같은 추출 · 청킹, 쪽 · 절 경로까지)
+//=> 비슷한 문서 찾기의 바깥 문서(similar.rs)가 쓴다 — 문단 짝에 기준 문서 쪽을 보이려면 쪽 정보가 필요하다.
+//   blocks 엔진이 아니면 쪽 정보가 없어 None 으로 채운다.
+//
+// -in: path = 파일 경로 / name = 파일 이름(청크 접두의 제목) / tok = 토크나이저
+//
+// -out: 글이 있는 청크 메타 목록
+// -out: error = 추출 실패 문자열
+//------------------------------------------------------------------
+pub fn extract_metas(path: &str, name: &str, tok: &crate::tok::Tok, keep: Option<&dyn Fn(usize, usize) -> bool>)
+                     -> Result<Vec<crate::chunk::ChunkMeta>, String> {
+    if cfg().extract_engine == "blocks" {
+        let (_text, _rows, metas) = extract_blocks_keep(path, name, tok, keep)?;
+        return Ok(metas.into_iter().filter(|m| !m.text.is_empty()).collect());
+    }
+    // 옛 엔진 — extract_chunks 와 같은 글, 쪽 정보 없음
+    Ok(extract_chunks(path, name, tok)?.into_iter().map(|(text, section_id)| crate::chunk::ChunkMeta {
+        text, section_id, path: vec![], source: String::new(), page_from: None, page_to: None, page: None }).collect())
+}
+
 fn extract_blocks(path: &str, name: &str, tok: &crate::tok::Tok) -> Result<(String, usize, Vec<crate::chunk::ChunkMeta>), String> {
+    extract_blocks_keep(path, name, tok, None)
+}
+
+// extract_blocks — PDF 는 keep 이 고른 쪽만 읽는다(비슷한 문서 찾기)
+fn extract_blocks_keep(path: &str, name: &str, tok: &crate::tok::Tok, keep: Option<&dyn Fn(usize, usize) -> bool>)
+                       -> Result<(String, usize, Vec<crate::chunk::ChunkMeta>), String> {
     let title = pyutil::splitext(name).0.to_string();
-    let mut doc = crate::docmodel::extract_document(path, Some(&title))?;
+    let mut doc = crate::docmodel::extract_document_keep(path, Some(&title), keep)?;
     if cfg().extract_dump {
         let _ = crate::docmodel::dump_json(&doc, &pyutil::join(&cfg().root, "blocks_dump"), name);
     }
@@ -833,7 +860,9 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
         Ok(x) => x,
         Err(e) => {
             let why = why_of(&e);
-            failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name}));
+            // at · kept_old 는 설정 > 로그 판이 보인다(로그 보기 설계서 §4-2) — 키를 더하기만 해 Python 판과 모양이 맞는다
+            let at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name, "at": at, "kept_old": prev.is_some()}));
             save_state(state)?;
             // 본문을 못 뽑은 문서(스캔 PDF 등)도 이름 · 날짜 · 사람으로는 찾을 수 있게 메타는 남긴다
             crate::meta::hook::synced(&key, Some(&chash));

@@ -26,6 +26,7 @@ pub mod pdfium;
 pub mod pickle;
 pub mod pyutil;
 pub mod retrieve;
+pub mod similar;
 pub mod store;
 pub mod structure;
 pub mod synonym_suggest;

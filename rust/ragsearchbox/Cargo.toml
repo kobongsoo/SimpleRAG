@@ -1,6 +1,6 @@
 [package]
 name = "ragsearchbox"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "RAGSearchBox 의 Rust 판 — 트레이 상주, 탐색기 옆 WebView2 패널, simplerag-rs chat 워커"
 build = "build.rs"

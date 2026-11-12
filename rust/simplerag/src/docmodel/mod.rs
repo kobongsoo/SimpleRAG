@@ -101,6 +101,29 @@ pub fn extract_document(path: &str, title: Option<&str>) -> Result<Document, Str
 }
 
 //------------------------------------------------------------------
+// 문서 추출 — PDF 는 고른 쪽만 (비슷한 문서 찾기의 큰 바깥 PDF)
+//=> PDF 가 아니거나 keep 이 None 이면 extract_document 와 같다. PDF 구조 추출이 실패하면 오류를 그대로 돌려준다
+//   (기존 추출로 폴백하면 전체 쪽을 다시 읽어 고른 쪽만 읽는 뜻이 없어진다).
+//
+// -in: path · title = extract_document 와 같음 / keep = 쪽 번호(0부터), 전체 쪽 수 → 읽을지
+//
+// -out: Ok(Document)
+// -out: error = 추출 실패 문자열
+//------------------------------------------------------------------
+pub fn extract_document_keep(path: &str, title: Option<&str>, keep: Option<&dyn Fn(usize, usize) -> bool>) -> Result<Document, String> {
+    let keep = match keep {
+        Some(k) if pyutil::ext_lower(path) == ".pdf" => k,
+        _ => return extract_document(path, title),
+    };
+    let title = title.map(|t| t.to_string()).unwrap_or_else(|| pyutil::splitext(pyutil::basename(path)).0.to_string());
+    // 파서 안의 패닉도 실패로 — 워커가 멈추지 않게
+    let mut doc = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pdf::extract_keep(path, &title, Some(keep))))
+        .map_err(|_| "PDF 추출 중 내부 오류".to_string())??;
+    postprocess::finalize(&mut doc);
+    Ok(doc)
+}
+
+//------------------------------------------------------------------
 // 진단용 블록 JSON 저장 — <폴더>/<이름>.blocks.json
 //------------------------------------------------------------------
 pub fn dump_json(doc: &Document, out_dir: &str, name: &str) -> std::io::Result<String> {

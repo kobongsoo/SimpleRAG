@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::app::App;
 use crate::cli::{answer_setup_line, out, outln, INTERRUPT};
 use crate::find::{clean_body, split_prefix};
-use crate::generate::prompts::{numbers_supported, BRIEF_LINE_SYSTEM};
+use crate::generate::prompts::{numbers_supported, BRIEF_LINE_SYSTEM, SIMILAR_SUMMARY_SYSTEM};
 use crate::pyutil;
 use crate::store::pl_str;
 
@@ -26,6 +26,9 @@ pub const MAX_DOCS: usize = 3;      // 정리할 문서 수 상한 — 네 번�
 const CAP_CHARS: usize = 450;       // 문서 하나에서 모델에 넣는 글자 수
 const SAME_RATIO: f64 = 0.8;        // 글자 2개 조각이 이만큼 겹치면 같은 내용으로 본다
 const LINE_TOKENS: usize = 90;      // 문서별 한 줄의 토큰 상한
+// 비슷한 문서 찾기 기준 문서 요약 — 넣는 글자 수(overview::CAP_ONE 과 같은 값) · 토큰 상한(2~4문장)
+const SUMMARY_CAP: usize = 1400;
+const SUMMARY_TOKENS: usize = 260;
 const MIN_LINE_CHARS: usize = 20;   // 이보다 짧으면 문장이 아니라 조각이다
 const INTERRUPTED: &str = "KeyboardInterrupt";
 // 모델이 지시문을 옮겨 적을 때 나오는 말 — 원문에 있으면 되뱉기가 아니다
@@ -209,6 +212,34 @@ fn doc_lines(app: &App, q: &str, items: &[Item], first: &mut Option<Instant>) ->
 }
 
 //------------------------------------------------------------------
+// 기준 문서 요약 쓰기 (비슷한 문서 찾기 — mode "summary")
+//=> 문서 하나를 2~4문장으로 요약해 "[1] 글" 한 줄로 흘려보낸다. 화면 해석기가 줄 단위라 줄바꿈은 공백으로 바꾼다.
+//   근거에 없는 숫자 · 되뱉기면 "[1!] 발췌" 로 바꾼다(문서별 줄과 같은 규칙).
+//
+// -in: app = 앱 / it = 기준 문서(글은 화면이 찾기 결과에서 실어 보낸 고른 조각) / first = 첫 글자 시각
+//
+// -out: Ok(())
+// -out: error = 생성 실패 · 취소면 Err
+//------------------------------------------------------------------
+fn summary_line(app: &App, it: &Item, first: &mut Option<Instant>) -> Result<(), String> {
+    if INTERRUPT.load(Ordering::SeqCst) {
+        return Err(INTERRUPTED.into());
+    }
+    let user = format!("[문서 내용]\n{}\n{}", it.doc, it.text);
+    out(&format!("[{}] ", it.no));
+    let o = app.generator.stream_chat(SIMILAR_SUMMARY_SYSTEM, &user, SUMMARY_TOKENS, None, &mut |p| {
+        first.get_or_insert_with(Instant::now);
+        out(&p.replace(['\r', '\n'], " "));
+    })?;
+    outln("");
+    let line = o.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !line_ok(&line, &format!("{}\n{}", it.doc, it.text)) {
+        outln(&format!("[{}!] {}", it.no, excerpt(it)));
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------
 // /brief 처리 (핵심)
 //=> 문서를 고르고 근거 블록 · 문서별 줄 · 소요 블록을 차례로 낸다.
 //   어떤 경우에도 소요 블록까지 내보낸다 — 해석기는 그 표식으로 답이 끝난 줄 안다.
@@ -223,13 +254,28 @@ pub fn run(app: &App, raw: &str) {
     INTERRUPT.store(false, Ordering::SeqCst);
     let req: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
     let q = req.get("q").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
-    let (items, dropped) = pick(read_items(app, &req), MAX_DOCS);
+    // 비슷한 문서 찾기 — 목록 대신 기준 문서 하나를 요약한다(글은 화면이 보낸 고른 조각, 다시 읽지 않는다)
+    let summary = req.get("mode").and_then(|v| v.as_str()) == Some("summary");
+    let (items, dropped) = if summary {
+        let mut v: Vec<Item> = req.get("items").and_then(|x| x.as_array()).and_then(|a| a.first()).map(|x| {
+            let s = |k: &str| x.get(k).and_then(|y| y.as_str()).unwrap_or("").to_string();
+            Item { no: 1, doc: s("doc"), path: s("path"), page: x.get("page").cloned().unwrap_or(Value::Null),
+                   text: pyutil::head(&s("text"), SUMMARY_CAP).to_string(), snippet: s("snippet") }
+        }).into_iter().filter(|it| !it.text.trim().is_empty()).collect();
+        v.truncate(1);
+        (v, 0)
+    } else {
+        pick(read_items(app, &req), MAX_DOCS)
+    };
     print_evidence(&items);
     if dropped > 0 {
         outln(&format!("[겹침] {}", dropped));
     }
     let mut first: Option<Instant> = None;
-    let r = doc_lines(app, &q, &items, &mut first);
+    let r = match items.first() {
+        Some(it) if summary => summary_line(app, it, &mut first),
+        _ => doc_lines(app, &q, &items, &mut first),
+    };
     let cancelled = matches!(&r, Err(e) if e.contains(INTERRUPTED));
     match r {
         Err(e) if !cancelled => outln(&format!("\n[오류] {}", pyutil::head(&e, 200))),

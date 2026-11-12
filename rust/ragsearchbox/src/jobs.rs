@@ -209,6 +209,33 @@ impl IndexJobs {
         if scanning || !self.dirty.is_empty() { Some((0, 0)) } else { None }
     }
 
+    //------------------------------------------------------------------
+    // 설정 > 로그 판 [다시 시도] — 실패했던 문서 한 건을 큐에 넣는다(로그 보기 설계서 §4-3)
+    //=> 같은 파일로 실패했던 문서는 워커가 건너뛰므로(failed_before) retry 표시를 붙여 보낸다.
+    //   index 명령(CLI)은 실패 문서를 다시 하지 않으므로 워커가 올라와 있을 때만 받는다.
+    // -in: path = 문서 경로
+    // -out: Ok(안내 글) / 받을 수 없으면 Err(까닭)
+    //------------------------------------------------------------------
+    pub fn retry_doc(&mut self, path: &str) -> Result<String, String> {
+        if !self.enabled {
+            return Err("자동 인덱싱이 꺼져 있어 다시 시도할 수 없습니다 — 트레이에서 켜 주세요".into());
+        }
+        if let Some(r) = &self.disabled_reason {
+            return Err(r.clone());
+        }
+        if self.worker.as_ref().map(|w| w.availability()).unwrap_or("down") != "up" {
+            return Err("모델이 올라와 있을 때 다시 시도할 수 있습니다 — 질문을 한 번 하거나 설정 > 기본에서 모델을 올려 주세요".into());
+        }
+        let p = abspath(path);
+        // 같은 문서를 두 번 넣지 않는다
+        if self.queued.insert(("retry-doc".into(), p.to_lowercase())) {
+            self.docs.push_back(("retry-doc".into(), p.clone(), None));
+            self.round.total += 1;
+        }
+        crate::info!("autoindex", "다시 시도 요청: {}", p);
+        Ok(format!("다시 시도합니다: {}", basename(&p)))
+    }
+
     pub fn rescan_all(&mut self) {
         for r in self.roots.clone() {
             self.mark_dirty(&r, "사용자 요청");
@@ -362,6 +389,9 @@ impl IndexJobs {
             self.queued.remove(&(op.clone(), path.to_lowercase()));
             let line = if op == "remove-outside" {
                 format!("/remove-doc {}", crate::worker::ascii_json(&json!({"path": path, "outside_of": self.roots})))
+            } else if op == "retry-doc" {
+                // 다시 시도 — 실패했던 같은 파일이어도 건너뛰지 말라고 retry 를 붙인다
+                format!("/index-doc {}", crate::worker::ascii_json(&json!({"path": path, "retry": true})))
             } else {
                 format!("/{} {}", op, crate::worker::ascii_json(&json!({"path": path})))
             };
@@ -587,7 +617,11 @@ impl IndexJobs {
             crate::info!("autoindex", "반영 {}: {} ({}청크, {}ms)", label, path, res.get("chunks").or(res.get("removed")).cloned().unwrap_or(json!("")), res["ms"]);
             (self.notify)("doc", &format!("방금 반영({}): {}", label, name));
         } else if !Self::b(res, "ok") {
-            self.round.failed.push(name);
+            // 사람이 [다시 시도]를 눌렀으면 결과를 바로 알린다(감시 반영 실패는 차례 끝 요약으로만)
+            if op == "retry-doc" {
+                (self.notify)("warn", &format!("다시 시도했지만 실패: {} — {}", name, res["why"].as_str().unwrap_or("")));
+            }
+            self.round.failed.push(name.clone());
             crate::warn!("autoindex", "반영 실패 {}: {} — {}", op, path, res["why"]);
         }
     }

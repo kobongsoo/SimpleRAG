@@ -69,6 +69,7 @@ pub struct Args {
     pub out: Option<String>,
     pub no_llm: bool,
     pub group: bool,
+    pub similar: bool,
 }
 
 fn model_mode(alias: &str) -> String {
@@ -670,7 +671,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
     }
     outln(&format!("모델: 임베딩 {} / 리랭커 {}", pyutil::basename(pyutil::rstrip_chars(&cfg().model_dir, "\\/")),
         pyutil::basename(pyutil::rstrip_chars(&cfg().rerank_dir, "\\/"))));
-    outln("기능: ask-folder index-commands ask-prev upload find brief cancel find-all");
+    outln("기능: ask-folder index-commands ask-prev upload find brief cancel find-all similar");
     outln("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n");
     // 입력은 따로 읽는다 — 답을 쓰는 동안에도 /cancel 을 받아야 다음 찾기가 기다리지 않는다
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -743,6 +744,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 outln("  /find {..., \"all\": true}  모두 찾기 — 글자 일치 문서를 묶음별로(문서마다 앞 5쪽)");
                 outln("  /find-doc {\"kws\": [낱말], \"paths\": [문서]}  모두 찾기 — 문서들의 나머지 쪽 줄");
                 outln("  /find-page {\"ids\": [청크 id]}  모두 찾기 — 쪽 본문(글 미리 보기)");
+                outln("  /similar {\"path\": 문서, \"folder\": 폴더}  비슷한 문서 찾기 — 사본 · 다른 판 · 내용 비슷(@find 줄)");
                 outln("  exit        종료\n");
             } else if cmd == "/topk" && parts.len() > 1 && parts[1].chars().all(|c| c.is_ascii_digit()) && !parts[1].is_empty() {
                 top_k = parts[1].parse().ok();
@@ -784,6 +786,19 @@ pub fn cmd_chat(a: &Args) -> i32 {
                         }
                     }
                     _ => outln(&crate::find::error_line("/find 형식이 잘못됐습니다: /find {\"q\": \"검색어\"}")),
+                }
+            } else if cmd == "/similar" {
+                // 비슷한 문서 찾기(비슷한 문서 찾기 설계서 §6) — 찾기와 같은 "@find" 줄 + @find_done(kind: similar)
+                let req: Value = serde_json::from_str(if rest.is_empty() { "{}" } else { &rest }).unwrap_or(Value::Null);
+                let path = req["path"].as_str().map(|s| pyutil::strip(s).to_string()).unwrap_or_default();
+                let folder = req["folder"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                if path.is_empty() {
+                    outln(&crate::find::error_line("/similar 형식이 잘못됐습니다: /similar {\"path\": \"문서 경로\"}"));
+                } else {
+                    match crate::similar::similar(&app.retriever, &path, folder.as_deref()) {
+                        Ok((lines, done)) => crate::find::print_lines(&lines, &done, &mut |s| outln(s)),
+                        Err(e) => outln(&crate::find::error_line(&e)),
+                    }
                 }
             } else if cmd == "/find-doc" || cmd == "/find-page" {
                 // 모두 찾기 — 나머지 쪽 줄 · 쪽 본문(@find 줄 + @find_done)
@@ -963,6 +978,21 @@ pub fn cmd_search(a: &Args) -> i32 {
     app.wait_rerank();
     let q = a.query.clone().unwrap_or_default();
     let chars = a.chars.unwrap_or(200);
+    // --similar — 비슷한 문서 찾기(워커 /similar 와 같은 출력). 질의 자리에 문서 경로를 준다
+    if a.similar {
+        let code = match crate::similar::similar(&app.retriever, &q, a.folder.as_deref()) {
+            Ok((lines, done)) => {
+                crate::find::print_lines(&lines, &done, &mut |s| outln(s));
+                0
+            }
+            Err(e) => {
+                outln(&crate::find::error_line(&e));
+                1
+            }
+        };
+        app.close();
+        return code;
+    }
     // --group — 탐색기 모드 찾기(워커 /find 와 같은 출력)
     if a.group {
         let code = match crate::find::find(&app.retriever, &q, a.folder.as_deref(), a.top_k.unwrap_or(0)) {

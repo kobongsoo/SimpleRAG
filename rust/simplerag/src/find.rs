@@ -637,7 +637,7 @@ fn find_meta_only(mp: &crate::meta::query::Plan, rows: Option<&crate::meta::quer
 }
 
 // 문서 줄에 메타 표시 칸 — 제목(파일 이름과 다를 때) · 관련인(작성 → 수정 순 최대 3명)
-fn add_meta(dl: &mut Value, key: &str, rows: Option<&crate::meta::query::Cached>) {
+pub(crate) fn add_meta(dl: &mut Value, key: &str, rows: Option<&crate::meta::query::Cached>) {
     let c = match rows {
         Some(c) => c,
         None => return,
@@ -662,7 +662,7 @@ fn add_meta(dl: &mut Value, key: &str, rows: Option<&crate::meta::query::Cached>
 }
 
 // 소수 둘째 자리
-fn round2(x: f64) -> f64 {
+pub(crate) fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
 
@@ -672,7 +672,7 @@ fn round2(x: f64) -> f64 {
 //      score = 문서 점수(이름만 맞은 문서는 None) / low = 모든 청크가 문턱 아래 / hits = 내용이 맞은 청크 수
 //------------------------------------------------------------------
 #[allow(clippy::too_many_arguments)]
-fn doc_line(no: usize, key: &str, name: &str, kws: &[String], query: &str, meta: Option<&Value>,
+pub(crate) fn doc_line(no: usize, key: &str, name: &str, kws: &[String], query: &str, meta: Option<&Value>,
             score: Option<f64>, low: bool, hits: usize) -> Value {
     let mtime = meta.and_then(|m| m.get("mtime")).cloned().unwrap_or(Value::Null);
     json!({
@@ -740,7 +740,7 @@ pub fn clean_body(body: &str) -> String {
 // -in: body = 접두 뗀 청크 본문 / kws = 핵심 낱말
 // -out: (발췌, [[시작, 끝], …])
 //------------------------------------------------------------------
-fn snippet(body: &str, kws: &[String]) -> (String, Vec<[usize; 2]>) {
+pub(crate) fn snippet(body: &str, kws: &[String]) -> (String, Vec<[usize; 2]>) {
     let flat: Vec<char> = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     let lower: Vec<char> = flat.iter().flat_map(|c| c.to_lowercase()).collect();
     // 소문자로 바꿔 길이가 달라지는 글자(드묾)가 있으면 원문으로 찾는다
@@ -806,7 +806,7 @@ fn find_all(hay: &[char], needle: &[char]) -> Vec<usize> {
 //   3) PDF 면 본문을 읽어 청크 첫머리가 나오는 쪽(옛 인덱스 보정) → 찾으면 확실
 //   4) 그래도 모르면 page_from(근사)
 //------------------------------------------------------------------
-fn chunk_page(pl: &Payload, may_locate: bool) -> (Option<i64>, bool) {
+pub(crate) fn chunk_page(pl: &Payload, may_locate: bool) -> (Option<i64>, bool) {
     if let Some(p) = pl.get("page").and_then(|v| v.as_i64()) {
         return (Some(p), true);
     }

@@ -86,6 +86,102 @@ pub fn pl_str<'a>(p: &'a Payload, k: &str) -> &'a str {
     p.get(k).and_then(|v| v.as_str()).unwrap_or("")
 }
 
+//------------------------------------------------------------------
+// 문서별 최고 점수 훑기 결과 (doc_max_scan)
+// -필드: docs   = 문서 경로(훑은 순서)
+// -필드: best   = 문서마다 질의 청크별 (최고 내적, 그 청크 id) — 벡터가 하나도 없으면 (-1, -1)
+// -필드: same   = 문서마다 기준 문서와 본문이 그대로 같은 본문 열쇠 집합
+// -필드: chunks = 문서마다 청크 수 / first = 문서마다 (가장 작은 id, 그 payload) — 이름 · 해시 표시용
+//------------------------------------------------------------------
+#[derive(Debug, Default, Clone)]
+pub struct DocScan {
+    pub docs: Vec<String>,
+    pub best: Vec<Vec<(f32, i64)>>,
+    pub same: Vec<HashSet<u64>>,
+    pub chunks: Vec<usize>,
+    pub first: Vec<(i64, Payload)>,
+}
+
+//------------------------------------------------------------------
+// 내적 — 8칸씩 나눠 더한다
+//=> 한 칸씩 더하면 컴파일러가 실수 덧셈 순서를 지키느라 SIMD 로 묶지 못한다. 칸을 나누면 묶여 몇 배 빠르다.
+//
+// -in: a · b = 같은 길이의 벡터
+//
+// -out: 내적
+// -out: error = 없음 (길이가 다르면 짧은 쪽까지만)
+//------------------------------------------------------------------
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len().min(b.len());
+    let mut acc = [0f32; 8];
+    let mut i = 0;
+    while i + 8 <= n {
+        for k in 0..8 {
+            acc[k] += a[i + k] * b[i + k];
+        }
+        i += 8;
+    }
+    let mut s: f32 = acc.iter().sum();
+    // 8 로 나눠떨어지지 않는 꼬리
+    while i < n {
+        s += a[i] * b[i];
+        i += 1;
+    }
+    s
+}
+
+//------------------------------------------------------------------
+// 점 한 묶음 훑기 (doc_max_scan 의 스레드 하나)
+//=> 점마다 문서 칸을 찾아(처음이면 만든다) 질의별 최고 점수와 같은 본문을 갱신한다.
+//
+// -in: part = (id, 점) 묶음 / qs = 정규화된 질의 벡터 / bodies · body_key = doc_max_scan 과 같음
+//
+// -out: 이 묶음의 DocScan
+// -out: error = 없음
+//------------------------------------------------------------------
+fn scan_part(part: &[(&i64, &Point)], qs: &[Vec<f32>], bodies: &HashSet<u64>, body_key: fn(&str) -> Option<u64>) -> DocScan {
+    let mut out = DocScan::default();
+    let mut at: HashMap<&str, usize> = HashMap::new();
+    for (id, p) in part {
+        let d = pl_str(&p.payload, "doc_path");
+        let j = match at.get(d) {
+            Some(&j) => j,
+            None => {
+                at.insert(d, out.docs.len());
+                out.docs.push(d.to_string());
+                out.best.push(vec![(-1.0, -1); qs.len()]);
+                out.same.push(HashSet::new());
+                out.chunks.push(0);
+                out.first.push((**id, p.payload.clone()));
+                out.docs.len() - 1
+            }
+        };
+        out.chunks[j] += 1;
+        if **id < out.first[j].0 {
+            out.first[j] = (**id, p.payload.clone());
+        }
+        // 본문이 기준 문서와 그대로 같은가 — 사본 · 다른 판 판정
+        if !bodies.is_empty() {
+            if let Some(k) = body_key(pl_str(&p.payload, "text")) {
+                if bodies.contains(&k) {
+                    out.same[j].insert(k);
+                }
+            }
+        }
+        // 벡터 대기 점은 내적하지 않는다(BM25 로만 찾히는 점)
+        if p.vec.is_empty() {
+            continue;
+        }
+        for (q, qv) in qs.iter().enumerate() {
+            let s = dot(&p.vec, qv);
+            if s > out.best[j][q].0 {
+                out.best[j][q] = (s, **id);
+            }
+        }
+    }
+    out
+}
+
 impl VectorStore {
     pub fn new(path: Option<String>) -> VectorStore {
         VectorStore {
@@ -333,6 +429,114 @@ impl VectorStore {
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
             scored.truncate(limit);
             Ok(scored.into_iter().map(|(s, i)| (i, s, inn.points[&i].payload.clone())).collect())
+        })
+    }
+
+    //------------------------------------------------------------------
+    // 문서 하나의 점 — (id, 벡터, payload) chunk_idx 순 (비슷한 문서 찾기의 기준 문서)
+    //=> 경로는 normcase 로 비교한다(대소문자 · 구분자 차이 무시). 벡터 대기 점은 빈 벡터로 온다.
+    //
+    // -in: doc_path = 문서 경로
+    //
+    // -out: 점 목록(없으면 빈 목록)
+    // -out: error = 저장소 적재 실패면 Err
+    //------------------------------------------------------------------
+    pub fn doc_points(&self, doc_path: &str) -> Result<Vec<(i64, Vec<f32>, Payload)>, String> {
+        let want = pyutil::normcase(doc_path);
+        self.with(|inn| {
+            let mut v: Vec<(i64, Vec<f32>, Payload)> = inn.points.iter()
+                .filter(|(_, p)| pyutil::normcase(pl_str(&p.payload, "doc_path")) == want)
+                .map(|(i, p)| (*i, p.vec.clone(), p.payload.clone())).collect();
+            // 문서 순서대로 — 고른 간격으로 뽑을 때 문서 전체에 고르게 퍼지게
+            v.sort_by_key(|(i, _, p)| (p.get("chunk_idx").and_then(|x| x.as_i64()).unwrap_or(0), *i));
+            Ok(v)
+        })
+    }
+
+    //------------------------------------------------------------------
+    // 내용 해시로 문서 찾기 — 인덱스에 같은 내용의 문서가 있으면 그 경로(경로 순 첫 문서)
+    //=> 인덱싱 폴더 밖의 파일이라도 내용이 같으면 그 문서의 저장 벡터를 쓸 수 있다.
+    //
+    // -in: hash = 파일 내용 sha1
+    //
+    // -out: Some(문서 경로) / 없으면 None
+    // -out: error = 저장소 적재 실패면 Err
+    //------------------------------------------------------------------
+    pub fn doc_by_hash(&self, hash: &str) -> Result<Option<String>, String> {
+        if hash.is_empty() {
+            return Ok(None);
+        }
+        self.with(|inn| {
+            Ok(inn.points.values().filter(|p| pl_str(&p.payload, "content_hash") == hash)
+                .map(|p| pl_str(&p.payload, "doc_path").to_string()).min())
+        })
+    }
+
+    //------------------------------------------------------------------
+    // 문서별 최고 점수 훑기 (비슷한 문서 찾기 · 설계서 §5-③)
+    //=> 기준 문서에서 고른 청크 벡터(qvs) 하나하나에 대해, 문서마다 "가장 비슷한 청크 점수와 그 id" 를 구한다.
+    //   같은 훑기에서 본문이 기준 문서와 그대로 같은 청크도 센다(사본 · 다른 판 판정, §5-①).
+    //    1) 점을 스레드 수만큼 나눠 동시에 훑는다(점 21만 × 질의 32 — 한 줄이면 1초 넘게 걸린다)
+    //    2) 스레드마다 문서 → (질의별 최고, 같은 본문 집합) 표를 만들고 끝에 합친다
+    //    3) 벡터 대기 점은 내적을 건너뛰지만 청크 수 · 본문 비교에는 넣는다
+    //
+    // -in: qvs      = 질의 벡터들(정규화 안 됐어도 됨)
+    // -in: bodies   = 기준 문서 본문 열쇠 집합 / body_key = 청크 글 → 본문 열쇠(짧으면 None)
+    // -in: allow    = Some(허용 id) 이면 그 안에서만(폴더 한정) / threads = 스레드 수(1 이상)
+    //
+    // -out: DocScan = 문서별 결과
+    // -out: error = 저장소 적재 실패면 Err
+    //------------------------------------------------------------------
+    pub fn doc_max_scan(&self, qvs: &[Vec<f32>], bodies: &HashSet<u64>, body_key: fn(&str) -> Option<u64>,
+                        allow: Option<&HashSet<i64>>, threads: usize) -> Result<DocScan, String> {
+        let qs: Vec<Vec<f32>> = qvs.iter().map(|q| {
+            let mut q = q.clone();
+            normalize(&mut q);
+            q
+        }).collect();
+        self.with(|inn| {
+            let pts: Vec<(&i64, &Point)> = inn.points.iter().filter(|(i, _)| allow.map_or(true, |a| a.contains(i))).collect();
+            let nt = threads.max(1).min(pts.len().max(1));
+            let per = pts.len().div_ceil(nt).max(1);
+            let parts: Vec<DocScan> = std::thread::scope(|s| {
+                let hs: Vec<_> = pts.chunks(per).map(|part| {
+                    let qs = &qs;
+                    s.spawn(move || scan_part(part, qs, bodies, body_key))
+                }).collect();
+                hs.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+            });
+            // 스레드 결과 합치기 — 같은 문서는 질의별 더 높은 점수 · 본문 집합 합집합 · 청크 수 합
+            let mut out = DocScan::default();
+            let mut at: HashMap<String, usize> = HashMap::new();
+            for p in parts {
+                for (k, d) in p.docs.into_iter().enumerate() {
+                    match at.get(&d) {
+                        None => {
+                            at.insert(d.clone(), out.docs.len());
+                            out.docs.push(d);
+                            out.best.push(p.best[k].clone());
+                            out.same.push(p.same[k].clone());
+                            out.chunks.push(p.chunks[k]);
+                            out.first.push(p.first[k].clone());
+                        }
+                        Some(&j) => {
+                            for (q, b) in p.best[k].iter().enumerate() {
+                                if b.0 > out.best[j][q].0 {
+                                    out.best[j][q] = *b;
+                                }
+                            }
+                            let add = p.same[k].clone();
+                            out.same[j].extend(add);
+                            out.chunks[j] += p.chunks[k];
+                            // 문서 대표 payload 는 id 가 작은 쪽(처음 청크에 가까운 쪽)
+                            if p.first[k].0 < out.first[j].0 {
+                                out.first[j] = p.first[k].clone();
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(out)
         })
     }
 

@@ -68,12 +68,25 @@ fn split_lines(s: &str) -> Vec<String> {
 // -out: Ok(Document) / Err("PDF 열기 실패" · "PDF 텍스트층 없음(스캔 PDF)")
 //------------------------------------------------------------------
 pub fn extract(path: &str, title: &str) -> Result<Document, String> {
+    extract_keep(path, title, None)
+}
+
+//------------------------------------------------------------------
+// PDF 추출 — 고른 쪽만 (keep 이 None 이면 extract 와 같다)
+//=> 비슷한 문서 찾기에서 쪽이 아주 많은 바깥 PDF 를 고른 쪽만 읽는다(pdfium::read_pages_keep).
+//   읽지 않은 쪽은 빈 쪽이라 블록이 없고, 블록의 쪽 번호는 원래 쪽 번호 그대로다.
+//
+// -in: path · title = extract 와 같음 / keep = 쪽 번호(0부터), 전체 쪽 수 → 읽을지
+//
+// -out: Ok(Document) / Err("PDF 열기 실패" · "PDF 텍스트층 없음(스캔 PDF)")
+//------------------------------------------------------------------
+pub fn extract_keep(path: &str, title: &str, keep: Option<&dyn Fn(usize, usize) -> bool>) -> Result<Document, String> {
     let mut doc = Document::new("pdf", title);
     let t0 = std::time::Instant::now();
     let infer = crate::config::cfg().pdf_infer_headings;
     let want_tables = crate::config::cfg().pdf_tables;
     let mut stop_note: Option<(usize, usize)> = None;
-    let (raw_pages, _n) = crate::pdfium::read_pages(path, infer, want_tables, |i, n| {
+    let (raw_pages, _n) = crate::pdfium::read_pages_keep(path, infer, want_tables, keep, |i, n| {
         if i >= MAX_PAGES || t0.elapsed().as_secs() > MAX_SECONDS {
             stop_note = Some((i, n));
             return false;

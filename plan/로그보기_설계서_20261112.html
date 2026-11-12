@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>로그 보기 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0; --brand: #e5163f;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; }
+section { margin: 40px 0; }
+h2 { font-size: 21px; margin-bottom: 12px; padding-top: 6px; }
+h3 { font-size: 16.5px; margin: 22px 0 8px; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 20px; }
+.toc ol { margin: 0; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card .s { color: var(--muted); font-size: 14px; }
+.tw { overflow-x: auto; margin: 12px 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.tag.w { background: var(--warn-soft); color: var(--warn); }
+.tag.e { background: var(--bad-soft); color: var(--bad); }
+.tag.g { background: var(--good-soft); color: var(--good); }
+/* 설정 창 그림 */
+.mock { background: #f3f4f6; border: 1px solid #c8ccd4; border-radius: 8px; padding: 10px; color: #1f2937; font-family: "Malgun Gothic", sans-serif; font-size: 13px; line-height: 1.5; overflow-x: auto; }
+.mock .win { display: flex; min-width: 640px; }
+.mock .nav { width: 112px; flex: none; }
+.mock .nav div { padding: 8px 10px; color: #5b6475; }
+.mock .nav div.on { background: #fff; color: #1f2937; font-weight: bold; box-shadow: inset 3px 0 0 var(--brand); }
+.mock .nav .lg { font-weight: bold; color: #1f2937; padding-bottom: 10px; }
+.mock .nav .lg span { color: var(--brand); }
+.mock .pan { flex: 1; background: #fff; border: 1px solid #d7dbe3; padding: 6px 12px 10px; }
+.mock fieldset { border: 1px solid #d7dbe3; border-radius: 3px; margin: 6px 0 10px; padding: 4px 10px 8px; }
+.mock legend { font-weight: bold; padding: 0 5px; }
+.mock table { font-size: 12.5px; }
+.mock th { background: #f3f4f6; color: #5b6475; font-weight: normal; padding: 4px 6px; }
+.mock td { padding: 4px 6px; border-bottom: 1px solid #eceef2; }
+.mock .bt { display: inline-block; border: 1px solid #9aa3b2; border-radius: 3px; padding: 0 8px; background: #fff; font-size: 12px; margin-right: 3px; white-space: nowrap; }
+.mock .sub { color: #5b6475; }
+.mock .w { color: #b45309; } .mock .e { color: #b91c1c; }
+.mock .bar { display: flex; gap: 10px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
+.mock .pill { border: 1px solid #d7dbe3; border-radius: 10px; padding: 0 8px; }
+.mock .pill.on { background: #1f2937; color: #fff; border-color: #1f2937; }
+.dec { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.dec b.q { display: block; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 50px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (RAGSearchBox Rust 판) · 설계서 · 2026-11-12 · 검토용(구현 전)</div>
+  <h1>설정 &gt; 로그 보기</h1>
+  <p class="lede">인덱싱에 실패한 문서와 그 까닭, 로그에 남은 경고·오류를 설정 창 왼쪽 메뉴 <b>로그</b>에서 바로 보게 한다.
+  기본 판에 있던 로그 폴더도 이 판으로 옮기고, 로그 파일 이름과 폴더를 <code>MoAISearch</code> 로 바꾼다.</p>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">요구 사항 정리</a></li>
+  <li><a href="#s2">지금 구조 (조사 결과)</a></li>
+  <li><a href="#s3">화면 설계</a></li>
+  <li><a href="#s4">실패 문서 — 데이터와 원인 풀이</a></li>
+  <li><a href="#s5">로그 경고·오류 — 읽기와 묶기</a></li>
+  <li><a href="#s6">로그 이름·폴더 바꾸기</a></li>
+  <li><a href="#s7">주고받는 메시지(IPC)</a></li>
+  <li><a href="#s8">고칠 파일</a></li>
+  <li><a href="#s9">확인 방법</a></li>
+  <li><a href="#s10">정해 주실 것</a></li>
+</ol></nav>
+
+<!-- ================================================================== -->
+<section id="s1">
+<h2>1. 요구 사항 정리</h2>
+<div class="cards">
+  <div class="card"><b>① 실패 문서 보기</b><span class="s">인덱싱에 실패한 문서마다 이름·위치·실패 원인을 보여 준다. 사용자가 무엇을 하면 되는지(스캔 PDF라 OCR 필요 등)까지 쉬운 말로.</span></div>
+  <div class="card"><b>② 로그의 경고·오류 보기</b><span class="s">인덱싱 말고도 로그에 남은 WARNING·ERROR 줄(워커 종료, 감시 실패, 저장 실패 등)을 함께 보인다.</span></div>
+  <div class="card"><b>③ 로그 폴더 옮기기</b><span class="s">기본 판 맨 아래 "로그 폴더" 묶음을 로그 판으로 옮긴다.</span></div>
+  <div class="card"><b>④ 이름·폴더 바꾸기</b><span class="s"><code>RAGSearchBox._날짜.log</code> → <code>MoAISearch_날짜.log</code>, 기본 폴더 → <code>%LOCALAPPDATA%\MoAISearch\log</code>.</span></div>
+</div>
+<p>이번 작업은 <b>검토와 설계까지</b>이다. 코드는 바꾸지 않았다.</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s2">
+<h2>2. 지금 구조 (조사 결과)</h2>
+
+<h3>2-1. 로그 파일</h3>
+<div class="tw"><table>
+<tr><th>항목</th><th>지금</th><th>위치</th></tr>
+<tr><td>폴더</td><td><code>%LOCALAPPDATA%\RAGSearchBox-rs\log</code></td><td><code>ragsearchbox/src/log.rs</code> <code>log_dir()</code></td></tr>
+<tr><td>프로그램 로그</td><td><code>RAGSearchBox._2026-11-12.log</code> — <code>시각 단계 rsb.이름 내용</code>, 단계 설정(INI <code>LogLevel</code>) 이상만</td><td><code>log::write()</code></td></tr>
+<tr><td>워커 로그</td><td><code>worker._2026-11-12.log</code> — 워커 stderr 와 <code>[index]</code> 명령 출력 줄, 단계 구분 없이 늘 <code>INFO</code></td><td><code>log::worker()</code></td></tr>
+<tr><td>돌려 쓰기</td><td>하루치 5MB 넘으면 <code>.1 .2 .3</code></td><td><code>log::append()</code></td></tr>
+<tr><td>설정 창</td><td>기본 판 맨 아래 "로그 폴더" — 경로 + [열기] (<code>open_logs</code>)</td><td><code>ui/info.html:139</code>, <code>main.rs:2479</code></td></tr>
+</table></div>
+
+<h3>2-2. 실패 문서는 어디에 남나</h3>
+<ul>
+  <li><b>로그</b>: 자동 반영(<code>/index-doc</code>) 실패는 <code>rsb.autoindex 반영 실패 index-doc: 경로 — "사유"</code> 로 경로와 사유가 남는다(<code>jobs.rs:591</code>).
+      그러나 폴더 전체 <code>index</code> 명령 실패는 <b>개수만</b> 남는다(<code>jobs.rs:834</code> "실패 N", <code>round.failed</code> 에 <code>"?"</code>). 이름은 워커 로그 <code>[index]</code> 줄에 섞여 있다.</li>
+  <li><b>인덱스 상태 파일</b> <code>index_state.json</code> 의 <code>"failed"</code> 묶음: <code>{경로: {fingerprint, why, name}}</code>(<code>indexer.rs:856</code>).
+      <b>지금 실패 중인 문서의 정답 목록</b>이다 — 나중에 성공하거나 지워지면 <code>failed_pop</code> 으로 빠진다. 같은 파일(지문 같음)은 다시 시도하지 않는다(<code>plan_changes</code> 의 <code>retry_skip</code>, <code>/index-doc</code> 의 <code>failed_before</code>).</li>
+  <li>사유 글은 <code>why_of()</code> 가 <code>"종류: 내용"</code> 꼴, 내용 80자로 줄인다. 예: <code>ExtractError: 하이브리드 전엔진 실패(감지=pdf; pdf:empty)</code>.</li>
+</ul>
+<div class="callout"><b>결론</b> — 실패 문서 목록은 <b>로그를 긁지 않고 <code>index_state.json</code> 의 <code>failed</code> 를 읽는다</b>.
+로그를 긁으면 ① 이미 고쳐진 문서가 계속 남고 ② 전체 인덱싱 실패는 이름이 없으며 ③ 5MB 돌려 쓰기·날짜 바뀜으로 빠진다. 상태 파일은 이 셋이 다 없다.</div>
+
+<h3>2-3. 함께 영향받는 것 — 로그 폴더의 "부모"를 쓰는 곳</h3>
+<div class="callout bad">
+<b>주의</b> — 아래 둘은 <code>log_dir()</code> 의 <b>부모 폴더</b>를 앱 데이터 폴더로 쓴다. 로그 폴더만 바꾸면 이 둘도 몰래 따라 옮겨져 <b>대화 기록이 사라진 것처럼 보이고</b> WebView 캐시가 새로 만들어진다.
+<ul>
+  <li><code>history.rs:16</code> — 대화 기록 <code>history.json</code> = <code>log_dir()/../history.json</code></li>
+  <li><code>main.rs:2824</code> — WebView2 사용자 데이터 = <code>log_dir()/../webview</code></li>
+</ul>
+<code>folder_icon.rs:41</code> 는 <code>RAGSearchBox-rs</code> 를 직접 적어 따로 쓴다. 그래서 <b>앱 데이터 폴더 함수(<code>app_dir()</code>)를 따로 두고</b> 위 둘을 그쪽으로 돌린 뒤 로그 폴더를 바꾼다(§6).
+</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s3">
+<h2>3. 화면 설계</h2>
+<p>왼쪽 메뉴 맨 아래에 <b>로그</b>를 더한다(기본 · 동의어 · 이름별칭 · <b>로그</b>). 실패 문서가 있으면 동의어처럼 개수를 붙인다: <code>로그 (12)</code>.</p>
+
+<div class="mock"><div class="win">
+  <div class="nav">
+    <div class="lg">MoAI<span>-S</span></div>
+    <div>⚙ 기본</div><div>⇄ 동의어</div><div>☺ 이름별칭</div><div class="on">☰ 로그 (12)</div>
+  </div>
+  <div class="pan">
+    <fieldset><legend>인덱싱 실패 문서 12건</legend>
+      <div class="bar"><span class="sub">원인별</span>
+        <span class="pill on">전체 12</span><span class="pill">글자 없는 PDF 9</span><span class="pill">암호 걸림 2</span><span class="pill">너무 큼 1</span>
+        <span style="flex:1"></span><span class="bt">새로고침</span></div>
+      <table>
+        <tr><th>문서</th><th>원인</th><th>때</th><th></th></tr>
+        <tr><td><b>채널사협력계약(카파정보기술_230315).pdf</b><br><span class="sub">D:\분류함\영업\채널계약</span></td>
+            <td><span class="w">글자 없는 PDF</span><br><span class="sub">스캔·이미지로만 된 PDF 라 글자를 뽑지 못했습니다. 이름·날짜로는 찾을 수 있습니다.</span></td>
+            <td class="sub">11-12 12:57</td><td><span class="bt">열기</span><span class="bt">폴더</span><span class="bt">다시 시도</span></td></tr>
+        <tr><td><b>보안서약서.hwp</b><br><span class="sub">D:\분류함\인사</span></td>
+            <td><span class="w">암호 걸린 문서</span><br><span class="sub">암호를 풀어 저장하면 다음 대조 때 저절로 다시 넣습니다.</span></td>
+            <td class="sub">11-11 09:10</td><td><span class="bt">열기</span><span class="bt">폴더</span><span class="bt">다시 시도</span></td></tr>
+        <tr><td colspan="4" class="sub">▸ 원래 사유 보기: ExtractError: 하이브리드 전엔진 실패(감지=pdf; pdf:empty)</td></tr>
+      </table>
+    </fieldset>
+    <fieldset><legend>로그 경고·오류 (최근 7일)</legend>
+      <div class="bar"><span class="pill on">전체 23</span><span class="pill">오류 2</span><span class="pill">경고 21</span>
+        <label class="sub">☐ 인덱싱 실패 줄도 보기</label><span style="flex:1"></span><span class="bt">새로고침</span></div>
+      <table>
+        <tr><th>마지막</th><th>단계</th><th>곳</th><th>내용</th><th>횟수</th></tr>
+        <tr><td class="sub">11-12 10:02</td><td class="e">오류</td><td>worker</td><td>워커가 종료됨 code=101 (답변 중이던 질문: …)</td><td>1</td></tr>
+        <tr><td class="sub">11-12 08:40</td><td class="w">경고</td><td>watcher</td><td>폴더를 지켜볼 수 없다(60초 뒤 다시): \\NAS\공유 — …</td><td>14</td></tr>
+        <tr><td class="sub">11-11 17:20</td><td class="w">경고</td><td>panel</td><td>대화 기록을 저장하지 못했다: …</td><td>1</td></tr>
+      </table>
+    </fieldset>
+    <fieldset><legend>로그 폴더</legend>
+      <div class="bar"><span style="flex:1">C:\Users\…\AppData\Local\MoAISearch\log</span><span class="bt">열기</span></div>
+      <div class="sub">MoAISearch_2026-11-12.log (프로그램) · MoAISearch-worker_2026-11-12.log (워커) · 기록 단계 INFO</div>
+    </fieldset>
+  </div>
+</div></div>
+
+<h3>3-1. 실패 문서 묶음</h3>
+<ul>
+  <li>한 줄 = 한 문서. <b>이름(굵게) + 폴더(작게)</b>, <b>원인(쉬운 말) + 할 일 한 줄</b>, 실패한 때, 단추.</li>
+  <li>정렬: 최근 실패가 위. 같은 원인 묶음 알약(전체 · 원인별 개수)으로 거른다.</li>
+  <li>원래 사유(<code>why</code> 원문)는 줄을 누르면 펼쳐 보인다 — 문의할 때 복사해 붙일 수 있게.</li>
+  <li><code>kept_old</code>(옛 버전 유지)면 "예전 내용으로 검색됩니다" 를 덧붙인다 — 수정본만 실패했고 검색은 된다는 뜻.</li>
+  <li>단추: <b>[열기]</b>(기존 <code>open_file</code>), <b>[폴더]</b>(기존 <code>reveal</code>), <b>[다시 시도]</b>(§4-3). 파일이 없어졌으면 단추 대신 "파일 없음" — 다음 대조 때 목록에서 빠진다.</li>
+  <li>문서 수가 많을 수 있으므로(분류함 수천 건 중 수백 건 가능) 처음 200줄만 그리고 [더 보기].</li>
+  <li>없으면: "실패한 문서가 없습니다 ✓".</li>
+</ul>
+
+<h3>3-2. 로그 경고·오류 묶음</h3>
+<ul>
+  <li>최근 7일 프로그램 로그의 <code>WARNI</code> · <code>ERROR</code> 줄 + 워커 로그에서 오류로 보이는 줄(§5-2).</li>
+  <li><b>같은 내용은 한 줄로 묶어 횟수</b>를 보인다 — 감시 실패처럼 60초마다 되풀이되는 경고가 목록을 덮지 않게.</li>
+  <li><code>반영 실패</code> · <code>index 명령 실패</code> 줄은 위 실패 문서 묶음과 겹치므로 <b>기본으로 숨기고</b> "인덱싱 실패 줄도 보기" 를 켜면 보인다.</li>
+  <li>줄을 누르면 그 묶음의 원래 줄들(최대 20줄, 시각 포함)을 펼친다.</li>
+</ul>
+
+<h3>3-3. 로그 폴더 묶음</h3>
+<p>기본 판의 "로그 폴더" fieldset 을 그대로 옮기고(<code>logdir</code> · <code>b_logs</code> · <code>open_logs</code> 재사용) 오늘 파일 이름과 기록 단계를 한 줄 덧붙인다. 기본 판에서는 지운다.</p>
+
+<h3>3-4. 언제 읽나</h3>
+<p>설정 창은 1초마다 <code>info_json</code> 을 다시 받는다. 로그 읽기는 그보다 무거우므로 <b>1초 주기에 넣지 않는다</b>.
+로그 판을 <b>열 때 한 번</b>, [새로고침]을 누를 때 읽는다. 메뉴의 개수 표시(<code>로그 (12)</code>)만 1초 주기의 <code>info_json</code> 에 <code>n_failed</code> 로 싣는데, 이는 상태 파일 수정 시각이 바뀔 때만 다시 센다(§4-1).</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s4">
+<h2>4. 실패 문서 — 데이터와 원인 풀이</h2>
+
+<h3>4-1. 읽는 법</h3>
+<ul>
+  <li>GUI 가 워커 폴더의 <code>index_state.json</code> 을 <b>읽기만</b> 한다. 워커는 <code>write_atomic</code> 으로 바꿔 끼우므로 반쯤 쓴 파일을 읽을 일이 없다.</li>
+  <li>워커 명령으로 받지 않는 까닭: 모델을 올리는 중이거나 워커가 죽었을 때(=실패를 가장 보고 싶을 때)에도 보여야 한다.</li>
+  <li>상태 파일 경로는 워커 <code>config.yaml</code> 의 인덱스 위치에서 정한다(GUI 는 이미 정밀 모드 때문에 <code>config.yaml</code> 을 찾는다 — <code>main.rs:1507</code>). 정확한 경로 계산은 simplerag <code>config.rs:423</code>(<code>root/index_state.json</code>)와 같게.</li>
+  <li>크기: 운영 상태 파일은 수백 KB~수 MB(<code>dist-rust/index_state.json</code> 668KB). 수정 시각·크기를 기억해 바뀌었을 때만 다시 파싱하고, <code>failed</code> 만 꺼낸다.</li>
+</ul>
+
+<h3>4-2. 상태 파일에 더할 값 (simplerag)</h3>
+<p>지금 <code>failed</code> 에는 <b>언제</b> 실패했는지가 없다. 실패를 적는 곳(<code>indexer.rs:856</code> 외 같은 꼴)에 두 값을 더한다. 옛 항목엔 없으므로 읽는 쪽은 없으면 "—" 로 보인다(하위 호환).</p>
+<pre>"failed": {
+  "D:\\분류함\\영업\\채널계약\\채널사협력계약(카파정보기술_230315).pdf": {
+    "fingerprint": "…", "why": "ExtractError: 하이브리드 전엔진 실패(감지=pdf; pdf:empty)",
+    "name": "채널사협력계약(카파정보기술_230315).pdf",
+    <b>"at": "2026-11-12 12:57:12",     // 새로 — 실패한 때(현지 시각)
+    "kept_old": false                  // 새로 — 옛 버전이 인덱스에 남아 검색되는가</b>
+  }
+}</pre>
+<p>Python 판과 상태 파일 모양을 맞춰 왔으므로(<code>indexer.rs:12</code>), 키를 <b>더하기만</b> 하고 기존 키는 그대로 둔다. Python 판은 모르는 키를 무시한다.</p>
+
+<h3>4-3. [다시 시도]</h3>
+<ul>
+  <li>지금 <code>/index-doc</code> 은 같은 지문의 실패 문서를 <code>failed_before</code> 로 바로 돌려보낸다(<code>commands.rs:132</code>). 그래서 인자에 <code>"retry": true</code> 를 받으면 이 검사를 건너뛰게 한다.</li>
+  <li>GUI 는 이를 자동 인덱싱 큐(<code>jobs.rs</code>)에 넣어 다른 반영과 같은 순서로 처리한다 — 질문 중이면 기다린다.</li>
+  <li>쓸모: 파일이 잠겨 있었거나(읽기 실패) 추출기·설정이 바뀐 뒤. 스캔 PDF 처럼 다시 해도 같은 결과일 원인은 단추 옆에 "다시 해도 같을 수 있음" 을 작게 보인다.</li>
+  <li>끝나면 결과를 알림(기존 <code>notify</code>)으로 보이고 목록을 새로 읽는다.</li>
+</ul>
+
+<h3>4-4. 원인 풀이표</h3>
+<p>사유 원문에서 아래 순서대로 처음 맞는 규칙을 고른다. 규칙은 <code>logview.rs</code> 한 곳의 표로 둔다(테스트 쉬움).</p>
+<div class="tw"><table>
+<tr><th>원문에 이것이 있으면</th><th>보일 원인</th><th>할 일 안내</th><th>다시 시도 의미</th></tr>
+<tr><td><code>pdf:empty</code></td><td>글자 없는 PDF</td><td>스캔·이미지로만 된 PDF 입니다. OCR 로 글자를 넣은 PDF 로 바꾸면 다시 넣습니다. 이름·날짜·사람으로는 지금도 찾을 수 있습니다.</td><td>같음</td></tr>
+<tr><td><code>암호화</code> · <code>Encrypt</code> · <code>PdfiumError</code>(암호)</td><td>암호 걸린 문서</td><td>암호를 풀어 저장하면 다음 대조 때 저절로 다시 넣습니다.</td><td>같음</td></tr>
+<tr><td><code>크기 상한 초과</code></td><td>파일이 너무 큼</td><td>상한(<code>MAX_FILE_BYTES</code>)보다 큽니다. 문서를 나누거나 상한을 늘리세요.</td><td>같음</td></tr>
+<tr><td><code>OSError</code> · <code>읽기 실패</code></td><td>파일을 열 수 없음</td><td>다른 프로그램이 쓰고 있거나, 권한이 없거나, 네트워크 폴더가 끊겼습니다.</td><td>쓸모 있음</td></tr>
+<tr><td><code>사용 가능한 추출기 없음</code></td><td>지원하지 않는 형식</td><td>글자를 뽑을 수 없는 형식입니다. 인덱싱 확장자에서 빼도 됩니다.</td><td>같음</td></tr>
+<tr><td><code>추출 텍스트 없음</code> · <code>:empty</code>(그 밖)</td><td>본문이 비어 있음</td><td>빈 문서이거나 그림만 있습니다.</td><td>같음</td></tr>
+<tr><td><code>timeout</code> · <code>시간 한도</code></td><td>시간 초과</td><td>추출이 너무 오래 걸렸습니다. 쉴 때 다시 시도해 보세요.</td><td>쓸모 있음</td></tr>
+<tr><td>그 밖</td><td>추출 실패</td><td>원래 사유를 펼쳐 보세요.</td><td>쓸모 있음</td></tr>
+</table></div>
+<div class="callout warn">사유는 <code>why_of()</code> 가 80자로 자르므로 긴 사유는 뒤가 잘린다. 규칙은 앞쪽 글자(종류·엔진 이름)로만 맞춘다. 정확한 문자열(특히 암호 PDF의 pdfium 글)은 구현 때 실패 표본으로 한 번 더 맞춘다.</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s5">
+<h2>5. 로그 경고·오류 — 읽기와 묶기</h2>
+
+<h3>5-1. 프로그램 로그</h3>
+<ul>
+  <li>대상: 로그 폴더의 <code>MoAISearch_YYYY-MM-DD.log</code> 와 돌려 쓴 <code>.1 .2 .3</code>, 오늘부터 7일.</li>
+  <li>줄 모양 <code>YYYY-MM-DD HH:MM:SS 단계 rsb.이름 내용</code> 을 나눠 단계가 <code>WARNI</code> · <code>ERROR</code> 인 줄만 고른다.
+      여러 줄로 이어지는 경고(<code>워커가 종료됨</code> 뒤 <code>  stderr: …</code>)는 앞줄에 붙인다.</li>
+  <li>파일마다 <b>끝에서 최대 2MB</b>만 읽는다(5MB 돌려 쓰기 한도 안). 7일 × 수 MB 라도 수십 ms 수준 — 그래도 메인 스레드를 막지 않게 별도 스레드에서 읽고 결과를 보낸다.</li>
+  <li>최대 500묶음까지. 넘으면 "더 오래된 것은 로그 폴더에서 보세요".</li>
+</ul>
+
+<h3>5-2. 워커 로그</h3>
+<p>워커 로그는 단계 없이 모두 <code>INFO</code> 로 적힌다. 그래서 내용에 <code>panicked</code> · <code>error</code>/<code>Error</code> · <code>오류</code> · <code>실패</code> 가 있는 줄만 "워커" 로 골라 경고로 보인다.
+<code>[index]</code> 줄의 문서별 실패는 실패 문서 묶음과 겹치므로 숨김 대상(인덱싱 실패 줄)으로 친다.</p>
+
+<h3>5-3. 같은 내용 묶기</h3>
+<ul>
+  <li>묶음 열쇠 = (단계, <code>rsb.이름</code>, 내용 틀). 내용 틀은 숫자를 <code>#</code> 로, 따옴표·경로 뒤의 사유는 남기고 경로만 <code>…</code> 로 바꾼 글이다.
+      예) <code>폴더를 지켜볼 수 없다(60초 뒤 다시): \\NAS\공유 — 지정된 네트워크 이름…</code> 는 하루 종일 하나로 묶인다.</li>
+  <li>보이는 값: 마지막 시각, 첫 시각, 횟수, 대표 줄(마지막 줄 원문).</li>
+  <li>"인덱싱 실패 줄" = 이름이 <code>autoindex</code> 이고 내용이 <code>반영 실패</code> · <code>index 명령 실패</code> 로 시작하는 줄 + 워커 <code>[index]</code> 실패 줄.</li>
+</ul>
+
+<h3>5-4. 단계 이름 바꿔 보이기</h3>
+<p><code>WARNI</code> → <span class="tag w">경고</span>, <code>ERROR</code> → <span class="tag e">오류</span>. 로그 파일 형식은 바꾸지 않는다(Python 판 · 기존 분석 습관과 같게).</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s6">
+<h2>6. 로그 이름·폴더 바꾸기</h2>
+<div class="tw"><table>
+<tr><th></th><th>지금</th><th>바꾼 뒤</th></tr>
+<tr><td>로그 폴더</td><td><code>%LOCALAPPDATA%\RAGSearchBox-rs\log</code></td><td><code>%LOCALAPPDATA%\MoAISearch\log</code></td></tr>
+<tr><td>프로그램 로그</td><td><code>RAGSearchBox._2026-11-12.log</code></td><td><code>MoAISearch_2026-11-12.log</code></td></tr>
+<tr><td>워커 로그</td><td><code>worker._2026-11-12.log</code></td><td><code>MoAISearch-worker_2026-11-12.log</code> <span class="tag">제안</span></td></tr>
+<tr><td>돌려 쓴 파일</td><td><code>….log.1</code></td><td>그대로(<code>MoAISearch_2026-11-12.log.1</code>)</td></tr>
+<tr><td>대화 기록 · WebView · 폴더 아이콘</td><td><code>RAGSearchBox-rs\</code></td><td><b>그대로</b> — 새 <code>app_dir()</code> 로 따로 정한다</td></tr>
+</table></div>
+<ul>
+  <li>워커 로그 이름에 <code>MoAISearch-worker_</code> 처럼 <b>하이픈</b>을 쓰는 까닭: <code>MoAISearch_*.log</code> 로 프로그램 로그만 고를 때 워커 로그가 섞이지 않게.</li>
+  <li><code>log.rs</code>: <code>dated_name()</code> 꼴을 <code>"{base}_{date}.log"</code> 로, <code>log_dir()</code> 를 <code>MoAISearch\log</code> 로. 새 <code>app_dir()</code> = <code>%LOCALAPPDATA%\RAGSearchBox-rs</code>.</li>
+  <li><code>history.rs</code> · <code>main.rs:2824</code>(WebView) · <code>folder_icon.rs</code> 는 <code>app_dir()</code> 를 쓰게 바꾼다 — <b>대화 기록이 그대로 보이는지</b>가 이 작업의 가장 큰 확인 항목(§2-3).</li>
+  <li>옛 로그(<code>RAGSearchBox-rs\log</code>)는 <b>옮기지도 지우지도 않는다</b>. 로그 판은 새 폴더만 읽는다. 이 때문에 바꾼 날 처음에는 "로그 경고·오류" 가 비어 보인다(실패 문서는 상태 파일이라 그대로 보인다).</li>
+  <li>README(<code>rust/README.md:95</code>)의 경로 설명, <code>log.rs</code> 머리 주석·테스트(<code>name_has_date</code>)를 함께 고친다. 설치 프로그램(<code>installer.iss</code>)은 로그 폴더를 다루지 않아 손댈 것 없음 — 뮤텍스 이름은 이번 범위 밖.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="s7">
+<h2>7. 주고받는 메시지(IPC)</h2>
+<div class="tw"><table>
+<tr><th>방향</th><th>메시지</th><th>내용</th></tr>
+<tr><td>창 → 앱</td><td><code>{type:"log_view"}</code></td><td>로그 판을 열 때 · [새로고침]. 앱이 별도 스레드에서 상태 파일 + 로그를 읽는다.</td></tr>
+<tr><td>앱 → 창</td><td><code>onLogView({failed:[…], issues:[…], files:{…}, more:{…}})</code></td><td><code>failed[i] = {path, name, dir, kind, title, hint, why, at, kept_old, exists, retry_useful}</code><br>
+<code>issues[i] = {level, src, text, first, last, count, index_fail, lines:[…]}</code></td></tr>
+<tr><td>창 → 앱</td><td><code>{type:"retry_doc", path}</code></td><td>[다시 시도] — 자동 인덱싱 큐에 <code>/index-doc {"path", "retry": true}</code></td></tr>
+<tr><td>창 → 앱</td><td><code>open_file</code> · <code>reveal</code> · <code>open_logs</code></td><td>기존 메시지 그대로 재사용</td></tr>
+<tr><td>info_json</td><td><code>n_failed</code></td><td>메뉴 개수 표시용. 상태 파일 수정 시각이 바뀔 때만 다시 센다.</td></tr>
+</table></div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s8">
+<h2>8. 고칠 파일</h2>
+<div class="tw"><table>
+<tr><th>파일</th><th>바꿀 것</th></tr>
+<tr><td><code>ragsearchbox/src/log.rs</code></td><td>폴더 <code>MoAISearch\log</code>, 이름 <code>MoAISearch_</code> · <code>MoAISearch-worker_</code>, <code>app_dir()</code> 추가, 줄 나누기 함수 · 테스트</td></tr>
+<tr><td><code>ragsearchbox/src/logview.rs</code> <span class="tag g">새로</span></td><td>상태 파일 <code>failed</code> 읽기(수정 시각 캐시) · 원인 풀이표 · 로그 경고·오류 읽기 · 묶기 · 단위 테스트</td></tr>
+<tr><td><code>ragsearchbox/src/history.rs</code>, <code>folder_icon.rs</code>, <code>main.rs</code>(WebView 경로)</td><td><code>app_dir()</code> 사용</td></tr>
+<tr><td><code>ragsearchbox/src/main.rs</code></td><td><code>log_view</code> · <code>retry_doc</code> 처리, <code>info_json</code> 에 <code>n_failed</code></td></tr>
+<tr><td><code>ragsearchbox/src/jobs.rs</code></td><td>다시 시도 요청을 큐에 넣기(<code>retry</code> 표시를 붙인 <code>Handler::Doc</code>)</td></tr>
+<tr><td><code>ragsearchbox/ui/info.html</code></td><td>메뉴 <code>t_log</code>, 판 <code>tab_log</code>(세 묶음), 기본 판의 "로그 폴더" 삭제, <code>showTab</code> 목록에 <code>log</code></td></tr>
+<tr><td><code>simplerag/src/indexer.rs</code></td><td><code>failed</code> 항목에 <code>at</code> · <code>kept_old</code></td></tr>
+<tr><td><code>simplerag/src/commands.rs</code></td><td><code>/index-doc</code> 의 <code>retry: true</code> 면 <code>failed_before</code> 건너뜀</td></tr>
+<tr><td><code>rust/README.md</code></td><td>로그 경로 · 파일 이름 설명</td></tr>
+</table></div>
+<p>Python 판(<code>RAGSearchBox/</code>)은 이번 범위에 넣지 않는다 — 필요하면 따로.</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s9">
+<h2>9. 확인 방법</h2>
+<ol>
+  <li><b>단위 테스트</b>: 파일 이름(<code>MoAISearch_2026-11-12.log</code>), 로그 줄 나누기, 원인 풀이표(붙여 주신 <code>pdf:empty</code> 표본 포함), 같은 내용 묶기, 옛 <code>failed</code> 항목(<code>at</code> 없음) 읽기.</li>
+  <li><b>대화 기록 유지</b>: 바꾼 판을 켠 뒤 패널의 지난 대화가 그대로 있는지, <code>RAGSearchBox-rs\webview</code> 를 계속 쓰는지.</li>
+  <li><b>새 로그 폴더</b>: <code>%LOCALAPPDATA%\MoAISearch\log</code> 에 두 파일이 생기는지, 설정 &gt; 로그 &gt; [열기] 가 그 폴더를 여는지.</li>
+  <li><b>실패 문서</b>: 분류함의 스캔 PDF(예: 채널계약 폴더)가 "글자 없는 PDF" 로 보이는지, 개수가 상태 파일 <code>failed</code> 수와 같은지, 메뉴 <code>로그 (N)</code>.</li>
+  <li><b>다시 시도</b>: 문서를 다른 프로그램으로 잠가 실패시킨 뒤 풀고 [다시 시도] → 목록에서 빠지는지.</li>
+  <li><b>경고 묶기</b>: 네트워크 폴더를 끊어 감시 경고를 여러 번 낸 뒤 한 줄 · 횟수로 보이는지.</li>
+  <li><b>부담</b>: 운영 상태 파일(3,500건 규모)과 7일 로그로 로그 판 열기 시간 측정 — 목표 0.5초 안.</li>
+</ol>
+</section>
+
+<!-- ================================================================== -->
+<section id="s10">
+<h2>10. 정해 주실 것</h2>
+<div class="dec"><b class="q">① 앱 데이터 폴더 전체도 MoAISearch 로 옮길까?</b>
+<span class="tag g">제안: 이번엔 로그만</span> 요청대로 로그 폴더만 <code>MoAISearch\log</code> 로 옮기고 대화 기록·WebView·아이콘은 <code>RAGSearchBox-rs</code> 에 둔다. 폴더가 둘이 되는 게 어색하면, 다음 판에서 <code>RAGSearchBox-rs</code> 전체를 <code>MoAISearch</code> 로 한 번 옮기는 작업(처음 켤 때 옮기기 · 실패 시 옛 폴더 계속 쓰기)을 따로 한다.</div>
+<div class="dec"><b class="q">② 워커 로그 이름</b>
+<span class="tag g">제안: <code>MoAISearch-worker_날짜.log</code></span> 요청은 프로그램 로그만 말씀하셨다. 워커 로그를 <code>worker_날짜.log</code> 로 그냥 둘 수도 있다.</div>
+<div class="dec"><b class="q">③ 옛 로그 처리</b>
+<span class="tag g">제안: 그대로 둠</span> 옛 폴더의 로그를 새 폴더로 옮기거나, 로그 판이 옛 폴더도 함께 읽게 할 수도 있다(7일 지나면 의미 없어짐).</div>
+<div class="dec"><b class="q">④ [다시 시도] 를 넣을까?</b>
+<span class="tag g">제안: 넣음</span> simplerag 쪽 <code>retry</code> 인자 한 개가 더 필요하다. 보기만 원하시면 빼고 [열기]·[폴더]만 둔다.</div>
+<div class="dec"><b class="q">⑤ 경고·오류 보는 기간</b>
+<span class="tag g">제안: 7일</span> 오늘만 · 3일 · 7일 고르기를 둘 수도 있다.</div>
+</section>
+
+<footer>MoAI-S 로그 보기 설계서 · 2026-11-12 · 조사 대상: <code>rust/ragsearchbox/src/{log,history,jobs,main,folder_icon}.rs</code>, <code>ui/info.html</code>, <code>rust/simplerag/src/{indexer,commands,legacy}.rs</code></footer>
+</div>
+</body>
+</html>

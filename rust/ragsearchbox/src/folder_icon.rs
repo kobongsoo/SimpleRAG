@@ -37,8 +37,7 @@ const DRIVE_ICO_NAME: &str = "moai-drive-3.ico";
 
 // 앱 데이터 폴더(%LOCALAPPDATA%\RAGSearchBox-rs)
 fn data_dir() -> String {
-    let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into()));
-    format!("{}\\RAGSearchBox-rs", base)
+    crate::log::app_dir()
 }
 
 fn state_path() -> String {

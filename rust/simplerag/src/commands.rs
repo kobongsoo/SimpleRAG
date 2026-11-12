@@ -73,7 +73,8 @@ pub fn run(app: &App, cmd: &str, arg: &str) -> Map<String, Value> {
     let t0 = Instant::now();
     let op = cmd.trim_start_matches('/').to_string();
     let r: Result<Map<String, Value>, String> = match cmd {
-        "/index-doc" => index_doc(app, &parse_path(arg)),
+        // retry: true = 설정 > 로그 판 [다시 시도] — 같은 파일로 실패했던 문서도 다시 해 본다
+        "/index-doc" => index_doc(app, &parse_path(arg), parse_value(arg, "retry").and_then(|v| v.as_bool()).unwrap_or(false)),
         "/remove-doc" => remove_doc(app, &parse_path(arg), parse_value(arg, "outside_of")),
         "/index-outside" => Ok(outside(&parse_value(arg, "roots").and_then(|v| v.as_array().cloned()).unwrap_or_default())),
         "/bm25" => rebuild_bm25(app, parse_value(arg, "merge").and_then(|v| v.as_bool()).unwrap_or(true)),
@@ -111,7 +112,7 @@ fn state() -> Result<indexer::State, String> {
 //------------------------------------------------------------------
 // 문서 한 건 추가·수정
 //------------------------------------------------------------------
-fn index_doc(app: &App, path: &str) -> Result<Map<String, Value>, String> {
+fn index_doc(app: &App, path: &str, retry: bool) -> Result<Map<String, Value>, String> {
     if path.is_empty() {
         return Ok(obj(json!({"ok": false, "why": "경로가 없습니다"})));
     }
@@ -129,7 +130,8 @@ fn index_doc(app: &App, path: &str) -> Result<Map<String, Value>, String> {
             return Ok(obj(json!({"ok": true, "path": path, "result": "unchanged", "chunks": prev.get("chunks").cloned().unwrap_or(json!(0))})));
         }
     }
-    if let Some(f) = st.get("failed").and_then(|v| v.get(&path)) {
+    // 같은 파일로 실패했던 문서는 건너뛴다 — 다시 시도(retry)면 그래도 해 본다
+    if let Some(f) = st.get("failed").and_then(|v| v.get(&path)).filter(|_| !retry) {
         if f.get("fingerprint").and_then(|v| v.as_str()) == Some(fp.as_str()) {
             return Ok(obj(json!({"ok": false, "path": path, "result": "failed_before", "why": f.get("why").cloned().unwrap_or(json!(""))})));
         }

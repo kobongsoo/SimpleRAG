@@ -10,12 +10,10 @@ pub const MAX_CONVS: usize = 10;
 pub const MAX_TURNS: usize = 20;
 
 //------------------------------------------------------------------
-// 기록 파일 위치 — 로그 폴더의 부모
+// 기록 파일 위치 — 앱 데이터 폴더(로그 폴더와 따로)
 //------------------------------------------------------------------
 pub fn default_path() -> String {
-    let d = crate::log::log_dir();
-    let p = std::path::Path::new(&d).parent().map(|p| p.join("history.json")).unwrap_or_else(|| "history.json".into());
-    p.to_string_lossy().into_owned()
+    std::path::Path::new(&crate::log::app_dir()).join("history.json").to_string_lossy().into_owned()
 }
 
 //------------------------------------------------------------------

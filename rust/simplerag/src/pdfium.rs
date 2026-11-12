@@ -151,8 +151,24 @@ pub struct PageText {
 // -out: Ok((쪽 결과 목록, 전체 쪽 수))
 // -out: error = DLL·파일·열기 실패면 Err(오류문)
 //------------------------------------------------------------------
-pub fn read_pages(path: &str, want_sizes: bool, want_tables: bool, mut on_page: impl FnMut(usize, usize) -> bool)
+pub fn read_pages(path: &str, want_sizes: bool, want_tables: bool, on_page: impl FnMut(usize, usize) -> bool)
                   -> Result<(Vec<PageText>, usize), String> {
+    read_pages_keep(path, want_sizes, want_tables, None, on_page)
+}
+
+//------------------------------------------------------------------
+// PDF 를 쪽별 글자로 읽기 — 고른 쪽만 (비슷한 문서 찾기의 큰 바깥 PDF)
+//=> read_pages 와 같고, keep 이 false 인 쪽은 열지 않고 빈 쪽으로 둔다(쪽 번호는 그대로).
+//   쪽을 여는 일(글자 · 표 검출)이 시간 대부분이라 고른 쪽만 열면 그만큼 빨라진다.
+//
+// -in: path · want_sizes · want_tables · on_page = read_pages 와 같음
+// -in: keep = Some(쪽 번호(0부터), 전체 쪽 수 → 읽을지) / None 이면 전부
+//
+// -out: Ok((쪽 결과 목록 — 읽지 않은 쪽은 빈 글, 전체 쪽 수))
+// -out: error = DLL·파일·열기 실패면 Err(오류문)
+//------------------------------------------------------------------
+pub fn read_pages_keep(path: &str, want_sizes: bool, want_tables: bool, keep: Option<&dyn Fn(usize, usize) -> bool>,
+                       mut on_page: impl FnMut(usize, usize) -> bool) -> Result<(Vec<PageText>, usize), String> {
     let data = std::fs::read(path).map_err(|e| format!("PDF 읽기 실패: {}", e))?;
     let m = api()?;
     let a = m.lock().unwrap_or_else(|p| p.into_inner());
@@ -166,6 +182,11 @@ pub fn read_pages(path: &str, want_sizes: bool, want_tables: bool, mut on_page: 
         for i in 0..n {
             if !on_page(i, n) {
                 break;
+            }
+            // 고르지 않은 쪽은 열지 않는다 — 빈 쪽으로 자리만 지킨다
+            if keep.map_or(false, |k| !k(i, n)) {
+                out.push(PageText { text: String::new(), n_chars: 0, sizes: None, tables: vec![] });
+                continue;
             }
             let page = (a.load_page)(doc, i as i32);
             if page.is_null() {

@@ -55,6 +55,18 @@
   .search .go, .search .clr { flex: none; white-space: nowrap; }
   .search .clr { color: var(--ink2); border: 1px solid var(--rule); border-radius: 6px; padding: 2px 9px; background: var(--surface); }
   .search .clr:hover { border-color: var(--brand); color: var(--brand); }
+  /* 비슷한 문서 찾기 — [+] · 기준 문서 칩 · 끌어 놓기 강조 */
+  .search .add { flex: none; width: 26px; height: 26px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); color: var(--ink2); font-weight: bold; line-height: 1; }
+  .search .add:hover { border-color: var(--brand); color: var(--brand); }
+  .search .src { flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 45%; background: var(--sel); border: 1px solid var(--brand); border-radius: 999px; padding: 1px 4px 1px 9px; font-size: calc(var(--fs) * .9); }
+  .search .src.hidden { display: none; }
+  .search .src span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search .src button { border: 0; background: none; color: var(--muted); padding: 0 4px; }
+  .search .src button:hover { color: var(--brand); }
+  .search.dropzone { border-style: dashed; }
+  .search.dropover { border-style: solid; box-shadow: 0 0 0 3px var(--sel); }
+  .search .drophint { position: absolute; left: 10px; top: calc(100% + 6px); z-index: 20; background: var(--brand); color: #fff; border-radius: 6px; padding: 3px 9px; font-size: calc(var(--fs) * .85); white-space: nowrap; pointer-events: none; }
+  .r .mine { color: var(--muted); font-size: calc(var(--fs) * .88); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ── 명령 모음 ── */
   .cmd { display: flex; align-items: center; gap: 4px; padding: 5px 10px; background: var(--surface); border-bottom: 1px solid var(--rule); color: var(--ink2); }
@@ -441,8 +453,8 @@
     <button class="navbtn" id="up" title="상위 폴더 (Alt+↑)">↑</button>
     <button class="navbtn" id="again" title="다시 찾기 (F5)">⟳</button>
     <div class="crumb" id="crumb"></div>
-    <div class="search"><span>🔍</span><input id="q" placeholder="예: 작년 내가 작성한 AI 제안서 찾아줘." autocomplete="off" spellcheck="false">
-      <span class="hint">Enter 찾기</span><button class="go" id="go">찾기</button><button class="clr" id="clr">초기화</button></div>
+    <div class="search"><span>🔍</span><span class="src hidden" id="src"></span><input id="q" placeholder="예: 작년 내가 작성한 AI 제안서 찾아줘." autocomplete="off" spellcheck="false">
+      <span class="hint">Enter 찾기</span><button class="add" id="add" title="문서를 골라 비슷한 문서 찾기 (입력란에 파일을 끌어 놓아도 됩니다)">＋</button><button class="go" id="go">찾기</button><button class="clr" id="clr">초기화</button></div>
     <button id="wtop" title="항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg></button>
   </div>
   <div class="cmd">
@@ -499,7 +511,7 @@
     <button class="ibtn" id="ptop" title="항상 위에 표시 — 누르면 다른 창에 가리지 않게 맨 위에 둡니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/><path d="M12 14v7"/></svg></button>
     <button class="ibtn" id="pclose" title="닫기 (Esc)">✕</button>
   </div>
-  <div class="psearch"><div class="search"><span>🔍</span><input id="pq" placeholder="예: 작년 내가 작성한 AI 제안서" autocomplete="off" spellcheck="false"><button class="go" id="pgo">찾기</button><button class="clr" id="pclr">초기화</button></div></div>
+  <div class="psearch"><div class="search"><span>🔍</span><span class="src hidden" id="psrc"></span><input id="pq" placeholder="예: 작년 내가 작성한 AI 제안서" autocomplete="off" spellcheck="false"><button class="add" id="padd" title="문서를 골라 비슷한 문서 찾기 (입력란에 파일을 끌어 놓아도 됩니다)">＋</button><button class="go" id="pgo">찾기</button><button class="clr" id="pclr">초기화</button></div></div>
   <div class="chips hidden" id="pchips"></div>
   <div class="cards" id="cards"></div>
   <div class="aip hidden" id="paip"></div>
@@ -601,7 +613,11 @@ function setFindBusy(on) {
 
 function runFind(q, push) {
   q = (q || "").trim();
+  // 기준 문서가 있고 입력란이 비었으면 그 문서로 다시 찾는다
+  if (!q && simSrc && !busy) { runSimilar(simSrc.path, push); return; }
   if (!q || busy) return;
+  // 검색어로 찾으면 비슷한 문서 찾기를 끝낸다(검색어 + 기준 문서를 함께 쓰는 검색은 하지 않는다)
+  if (simSrc) { simSrc = null; drawSrc(); }
   // 워커는 한 번에 한 일만 한다 — 쓰던 정리를 멈춰야 찾기가 기다리지 않는다
   stopBrief();
   // 다른 검색어면 조건 칩에서 고친 것을 버린다
@@ -620,6 +636,66 @@ function runFind(q, push) {
   drawNav();
 }
 
+// ── 비슷한 문서 찾기 (plan/비슷한문서찾기_설계서_20261112.html) ─────────────
+//   기준 문서 하나 → 사본 · 다른 판 · 내용이 비슷한 문서. 결과는 찾기와 같은 줄 모양(done.kind === "similar")
+let simSrc = null;       // 기준 문서 {path, name} — 없으면 일반 찾기
+function fileName(p) { return String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop(); }
+// 입력란의 기준 문서 칩 — ✕ 를 누르면 처음 화면으로
+function drawSrc() {
+  const el = $(LAYOUT === "window" ? "src" : "psrc");
+  if (!simSrc) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.innerHTML = `📄<span title="${esc(simSrc.path)}">${esc(simSrc.name)}</span><button title="비슷한 문서 찾기 끝내기">✕</button>`;
+  el.classList.remove("hidden");
+  el.querySelector("button").onclick = (e) => { e.stopPropagation(); simSrc = null; resetFind(); };
+}
+function runSimilar(path, push) {
+  if (!path || busy) return;
+  stopBrief();
+  simSrc = { path, name: fileName(path) };
+  // 화면의 "지금 검색" 표시 — 늦게 온 결과를 가리는 데 쓴다(Rust 가 그대로 돌려준다)
+  lastQ = "📄 " + simSrc.name;
+  cond = { q: lastQ, off: [], widen: 0, labels: {} };
+  const inp = $(LAYOUT === "window" ? "q" : "pq");
+  inp.value = "";
+  drawSrc();
+  if (push !== false) {
+    hist = hist.slice(0, histPos + 1);
+    hist.push({ q: lastQ, scope, sim: path });
+    histPos = hist.length - 1;
+  }
+  setFindBusy(true);
+  setStatus("비슷한 문서를 찾는 중…");
+  send({ type: "similar", path, q: lastQ, folder: scope });
+  drawNav();
+}
+// [+] — 파일 창은 Rust 가 연다(지원 형식만). 보던 폴더에서 연다
+function pickSimilar() {
+  if (busy) return;
+  send({ type: "similar_pick", dir: scope || (roots[0] && roots[0].path) || "" });
+}
+// 끌어 놓기 — Rust 가 웹뷰 좌표를 준다. 배율에 따라 물리 · 논리 픽셀일 수 있어 둘 다 맞춰 본다
+function overSearch(x, y) {
+  const box = $(LAYOUT === "window" ? "q" : "pq").closest(".search");
+  const r = box.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const inside = (a, b) => a >= r.left && a <= r.right && b >= r.top && b <= r.bottom;
+  return inside(x / dpr, y / dpr) || inside(x, y);
+}
+function dropMark(a) {
+  const box = $(LAYOUT === "window" ? "q" : "pq").closest(".search");
+  let hint = box.querySelector(".drophint");
+  if (!a) {
+    box.classList.remove("dropzone", "dropover");
+    if (hint) hint.remove();
+    return;
+  }
+  const over = overSearch(a.x, a.y);
+  box.classList.add("dropzone");
+  box.classList.toggle("dropover", over);
+  if (!hint) { hint = document.createElement("div"); hint.className = "drophint"; box.appendChild(hint); }
+  hint.textContent = over ? "놓으면 이 문서와 비슷한 문서를 찾습니다" : "여기(입력란)에 놓으면 비슷한 문서를 찾습니다";
+}
+
 // [초기화] — 검색어 · 결과 · AI 정리 · 조건 칩 · 미리 보기를 지우고 처음 화면으로. 찾는 범위(폴더)는 그대로 둔다
 //   찾는 중이었으면 늦게 온 결과는 검색어가 달라 onResults 가 버린다
 function resetFind() {
@@ -629,6 +705,8 @@ function resetFind() {
   briefCache.clear();
   openDocs.clear(); moreDocs.clear(); cardPick = {};
   cond = { q: "", off: [], widen: 0, labels: {} };
+  simSrc = null;
+  drawSrc();
   const inp = $(LAYOUT === "window" ? "q" : "pq");
   inp.value = "";
   render();
@@ -651,6 +729,7 @@ function resetFind() {
 // Rust 가 /find 결과를 넘긴다
 // 결과가 비었을 때 글 — 인덱싱이 끝나지 않았으면 "없다" 가 아니라 "아직 안 들어왔다" 고 알린다
 function noResultMsg(q, more) {
+  if (simSrc) return `<b>"${esc(simSrc.name)}"</b> 와 비슷한 문서를 찾지 못했습니다.<br>범위를 넓혀 보세요.`;
   const n = idxNote;
   if (n && n.stage === "model") return `<b>AI 모델을 준비하고 있습니다</b><br>끝나면 인덱싱을 시작하고, 그 뒤에 찾을 수 있습니다.`;
   if (n && n.total) return `<b>아직 인덱싱 중입니다</b> (${fmtN(n.n)} / ${fmtN(n.total)})<br>끝나면 더 많은 문서를 찾을 수 있습니다.`;
@@ -666,8 +745,9 @@ function onResults(r) {
     docs = []; done = null;
     drawChips();
     ai = null; redrawAi();
-    showMessage("<b>찾지 못했습니다</b><br>" + esc((r.done && r.done.error) || r.why || "워커가 응답하지 않았습니다"));
-    setStatus((r.done && r.done.error) || r.why || "찾지 못함", true);
+    const why = String((r.done && r.done.error) || r.why || "워커가 응답하지 않았습니다").replace(/^NOT_INDEXED:\s*/, "");
+    showMessage("<b>" + (simSrc ? "비슷한 문서를 찾지 못했습니다" : "찾지 못했습니다") + "</b><br>" + esc(why));
+    setStatus(why, true);
     return;
   }
   docs = [];
@@ -711,6 +791,20 @@ function status() {
   const sec = done.ms != null ? (done.ms / 1000).toFixed(2) + "초" : "";
   const sc = scope ? base(scope) : "검색 폴더 전체";
   const sd = done.scope_docs != null ? `(문서 ${done.scope_docs}개)` : "";
+  if (done.kind === "similar") {
+    const g = done.groups || {};
+    const t = `비슷한 문서 ${g.similar || 0}개` + ((g.copy || 0) + (g.version || 0) ? ` · 사본 · 다른 판 ${(g.copy || 0) + (g.version || 0)}개` : "");
+    if (LAYOUT === "window") {
+      $("st1").textContent = t; $("st1").classList.remove("err");
+      $("st2").textContent = sec ? "검색 " + sec : "";
+      const s = done.source || {};
+      $("st3").textContent = `범위: ${sc}${sd}`;
+      $("st4").textContent = s.name ? `기준: ${s.name} (청크 ${s.used}/${s.chunks})` + (s.mode === "same_content" ? " · 같은 내용의 인덱스 문서로" : s.mode === "external" ? " · 인덱스에 없는 문서" + (s.pages_total ? ` — ${s.pages_total}쪽 중 고른 ${s.pages_read}쪽만 읽어 비교` : " — 고른 부분만 비교") : "") : "";
+    } else {
+      $("pst1").textContent = `${t} · ${sec}`;
+    }
+    return;
+  }
   if (LAYOUT === "window") {
     $("st1").textContent = `문서 ${docs.length}개 · 위치 ${done.all && done.places != null ? done.places : places}곳`;
     $("st1").classList.remove("err");
@@ -788,6 +882,20 @@ function bars(score, low) {
   let h = `<span class="rel" title="${esc(tip)}">`;
   for (let i = 0; i < 5; i++) h += `<i class="${i < n ? "f" : ""}"></i>`;
   return h + "</span>";
+}
+// 비슷한 문서 유사도 막대 — 청크별 최고 유사도의 평균(%). e5 는 관계없는 글도 45~50% 가 나와 그 위를 5칸으로 나눈다(제안값)
+const SIM_BARS = [70, 63, 57, 52];
+function simBars(pct) {
+  const at = SIM_BARS.findIndex((v) => pct >= v);
+  const n = at < 0 ? 1 : 5 - at;
+  let h = `<span class="rel" title="유사도 ${Math.round(pct)}% — 기준 문서의 고른 부분마다 가장 비슷한 곳의 평균">`;
+  for (let i = 0; i < 5; i++) h += `<i class="${i < n ? "f" : ""}"></i>`;
+  return h + "</span>";
+}
+// 사본 · 다른 판 줄의 설명 — 본문 비교로 판정했으면 "본문 N% 같음", 유사도로 판정했으면 "내용 N% 비슷"
+function verLabel(m) {
+  if (m.group === "copy") return "사본(내용 같음)";
+  return m.near != null ? `다른 판 · 내용 ${Math.round(m.near)}% 비슷` : `다른 판 · 본문 ${Math.round((m.overlap || 0) * 100)}% 같음`;
 }
 function pageLabel(p) {
   if (p.page == null) return "";
@@ -890,7 +998,22 @@ function render() {
   const head = (key, label, n, unit, cls, extra) => `<div class="grp ${cls || ""}"><button class="gh" data-grp="${key}" title="눌러서 ${grpShut.has(key) ? "펼치기" : "접기"}">`
     + `<span class="ga">${grpShut.has(key) ? "▸" : "▾"}</span>${label}<span class="gc">${unit || `문서 ${n}개`}</span></button>${extra || ""}</div>`;
   const open = (key) => !grpShut.has(key);
-  if ($("group").value === "page") {
+  if (done && done.kind === "similar") {
+    // 비슷한 문서 찾기 — ① 사본 · 다른 판 ② 내용이 비슷한 문서(펼치면 비슷한 문단 짝)
+    const vers = docs.filter((d) => d.meta.group === "copy" || d.meta.group === "version");
+    const sims = docs.filter((d) => d.meta.group === "similar");
+    if (vers.length) {
+      h += head("sv", "사본 · 같은 문서의 다른 판", vers.length);
+      if (open("sv")) for (const d of sortedDocs(vers)) h += docRow(d, true, verLabel(d.meta));
+    }
+    if (sims.length) {
+      h += head("ss", "내용이 비슷한 문서", sims.length);
+      if (open("ss")) for (const d of sortedDocs(sims)) {
+        h += docRow(d, false);
+        if (openDocs.has(d.meta.doc_path)) for (const p of d.pages) h += pageRow(d, p, false);
+      }
+    }
+  } else if ($("group").value === "page") {
     // 쪽 목록 — 모든 쪽 줄을 관련도 순으로 한 줄씩(문서 이름을 함께). 모두 찾기면 나머지 쪽도 가져온다
     askPages(content.filter((d) => d.meta.pages_left > 0).map((d) => d.meta.doc_path));
     const all = [];
@@ -975,11 +1098,12 @@ function docRow(d, nameGroup, why) {
   const m = d.meta;
   const open = openDocs.has(m.doc_path);
   const tw = d.pages.length && !nameGroup ? `<span class="tw" data-tw="${i}">${open ? "▾" : "▸"}</span>` : `<span class="tw"></span>`;
-  const cnt = why ? `· ${why}` : nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length + (m.pages_left || 0)}곳`;
+  const cnt = why ? `· ${why}` : m.group === "similar" ? `· 비슷한 곳 ${d.pages.length}` + (m.copies ? ` · 같은 문서 ${m.copies.length}곳 더` : "")
+    : nameGroup ? `· 이름에 검색어` : m.low ? `· 관련 낮음` : `· ${d.pages.length + (m.pages_left || 0)}곳`;
   const who = whoOf(m);
   return `<div class="r doc ${m.low ? "low" : ""}" data-row="${i}" title="${esc(tipOf(m))}">
     <span class="n">${tw}${docIcon(m.doc_path)}<span class="t">${esc(m.doc_name)}</span><span class="cnt">${cnt}</span>${who ? `<span class="who">${esc(who)}</span>` : ""}</span>
-    <span></span><span>${bars(m.score == null && m.tier ? -100 : m.score, m.low)}</span><span class="date">${dateOf(m)}</span></div>`;
+    <span></span><span>${m.group === "similar" ? simBars(m.pct) : m.group ? "" : bars(m.score == null && m.tier ? -100 : m.score, m.low)}</span><span class="date">${dateOf(m)}</span></div>`;
 }
 function pageRow(d, p, withDoc) {
   const i = rows.push({ kind: "page", doc: d, page: p }) - 1;
@@ -987,8 +1111,8 @@ function pageRow(d, p, withDoc) {
   const more = p.more ? ` <span class="cnt">· 이 쪽 ${p.more + 1}곳</span>` : "";
   return `<div class="r pg ${p.low ? "low" : ""}" data-row="${i}" ${withDoc ? 'style="padding-left:12px"' : ""}>
     <span class="n">${withDoc ? `<div class="dn">${docIcon(d.meta.doc_path)}</div><div class="dn">${esc(d.meta.doc_name)}</div>` : ""}
-      ${sec ? `<div class="sec">${sec}${more}</div>` : ""}<div class="snip">${marked(p.snippet, p.marks)}</div></span>
-    <span>${pageLabel(p)}</span><span>${bars(p.score == null && p.ids ? -100 : p.score, p.low)}</span><span></span></div>`;
+      ${sec ? `<div class="sec">${sec}${more}</div>` : ""}<div class="snip">${marked(p.snippet, p.marks)}</div>${p.mine ? `<div class="mine" title="${esc(p.mine.snippet)}">↔ 기준 문서${p.mine.page != null ? " p." + p.mine.page : ""}: ${esc(p.mine.snippet)}</div>` : ""}</span>
+    <span>${pageLabel(p)}</span><span>${p.mine ? simBars(p.score * 100) : bars(p.score == null && p.ids ? -100 : p.score, p.low)}</span><span></span></div>`;
 }
 // 이노테나 마크 — 네모 · 위 오른쪽 조각 · 아래 왼쪽 조각 (색은 currentColor)
 const INNOTENA_SVG = `<svg viewBox="0 0 35 42" aria-hidden="true"><g fill="currentColor"><rect x="0" y="0" width="12.5" height="12"/>
@@ -1117,7 +1241,8 @@ function showMenu(x, y, row) {
     [openLabel(row.doc.meta.doc_path, p ? p.page : null), () => openPage(row)],
     ["폴더 열기", () => send({ type: "reveal", path: row.doc.meta.doc_path })],
     ["경로 복사", () => copy(row.doc.meta.doc_path)],
-    ["이 폴더에서만 찾기", () => { scope = row.doc.meta.doc_path.replace(/[\\/][^\\/]+$/, ""); runFind(lastQ); }],
+    ["이 폴더에서만 찾기", () => { scope = row.doc.meta.doc_path.replace(/[\\/][^\\/]+$/, ""); if (simSrc) runSimilar(simSrc.path); else runFind(lastQ); }],
+    ["이 문서와 비슷한 문서 찾기", () => runSimilar(row.doc.meta.doc_path)],
     ["문서 속성 보기", () => send({ type: "properties", path: row.doc.meta.doc_path })],
   ];
   popMenu(x, y, items);
@@ -1297,6 +1422,8 @@ function startBrief() {
   clearTimeout(briefTimer);
   if (!aiOn) return;
   if (!lastQ || !docs.length) { ai = null; redrawAi(); return; }
+  // 비슷한 문서 찾기 결과 — 목록 정리 대신 넣은(기준) 문서를 간략히 요약한다. 글은 찾기 결과에 실려 온 고른 조각
+  if (simSrc) { startSummary(); return; }
   const key = briefKey();
   if (ai && ai.key === key && !ai.stopped && !briefDrop) return;
   if (briefCache.has(key)) { ai = briefCache.get(key); redrawAi(); return; }
@@ -1311,6 +1438,24 @@ function startBrief() {
   }
   briefBusy = true;
   send({ type: "brief", q: lastQ, items });
+  redrawAi();
+}
+//------------------------------------------------------------------
+// 기준 문서 요약 (비슷한 문서 찾기) — AI 답변창이 켜져 있을 때
+//=> 워커 /brief 의 요약 모드로 기준 문서 하나를 2~4문장 요약한다. 같은 문서의 끝난 요약은 다시 만들지 않는다.
+//------------------------------------------------------------------
+function startSummary() {
+  const s = (done && done.source) || {};
+  const key = "sim:" + (s.doc_path || simSrc.path);
+  if (ai && ai.key === key && !ai.stopped && !briefDrop) return;
+  if (briefCache.has(key)) { ai = briefCache.get(key); redrawAi(); return; }
+  if (!s.text) { ai = { key, q: lastQ, text: "", empty: "기준 문서에서 요약할 글을 찾지 못했습니다.", done: true, summary: true }; redrawAi(); return; }
+  if (briefBusy) stopBrief();
+  ai = { key, q: lastQ, text: "", items: null, info: null, err: null, done: false, summary: true };
+  if (briefBusy) { briefNext = true; redrawAi(); return; }
+  briefBusy = true;
+  // 바깥 문서면 경로가 인덱스 문서가 아니다 — [1] 을 누르면 넣은 파일을 그대로 연다
+  send({ type: "brief", q: lastQ, mode: "summary", items: [{ doc: s.name || simSrc.name, path: s.doc_path || simSrc.path, page: null, text: s.text, snippet: "" }] });
   redrawAi();
 }
 // 찾기가 끝났다 — 창이 열려 있으면 잠시 뒤 정리한다
@@ -1374,7 +1519,7 @@ function aiPaneHtml() {
   if (ai.empty) return head("", false) + `<div class="ph2">${esc(ai.empty)}</div>`;
   const p = briefParts(ai.text);
   const items = ai.items || [];
-  const sub = !ai.items ? "문서를 고르는 중…" :
+  const sub = ai.summary ? "넣은 문서 요약" : !ai.items ? "문서를 고르는 중…" :
     `찾은 문서 ${docs.length}건 중 상위 ${items.length}건` + (p.dropped ? ` · 겹침 ${p.dropped}건 제외` : "");
   let body = "";
   // "쓰는 중…" 은 앞 줄이 끝난 뒤에만 — 줄이 끝나면 글 끝이 줄바꿈이다
@@ -1391,10 +1536,10 @@ function aiPaneHtml() {
       + `</em></div>`;
   });
   if (ai.err || p.err) body += `<div class="er">${esc(ai.err || p.err)}</div>`;
-  if (!body) body = `<div class="ph2">${ai.items && !items.length ? esc(briefEmptyText()) : "정리하는 중…"}</div>`;
+  if (!body) body = `<div class="ph2">${ai.items && !items.length ? esc(briefEmptyText()) : ai.summary ? "요약하는 중…" : "정리하는 중…"}</div>`;
   const cost = ai.info && ai.info.total_s != null ? ` · 첫 글자 ${ai.info.ttft_s}초 · 완료 ${ai.info.total_s}초` : "";
   return head(sub, briefBusy && !briefDrop) + body +
-    `<div class="ft">${ai.stopped ? "중지했습니다 · " : ""}검색된 부분을 바탕으로 만든 참고 답변입니다. 원문 확인을 권장합니다.${cost}
+    `<div class="ft">${ai.stopped ? "중지했습니다 · " : ""}${ai.summary ? "문서에서 고르게 뽑은 부분을 바탕으로 만든 참고 요약입니다." : "검색된 부분을 바탕으로 만든 참고 답변입니다."} 원문 확인을 권장합니다.${cost}
       · <button id="aichat" title="채팅 모드에서 문서를 근거로 묻습니다">💬 채팅에서 이어 묻기</button></div>`;
 }
 function redrawAi() {
@@ -1595,7 +1740,8 @@ function renderCards() {
       + (d.pages.length > 8 ? `<button data-big="1">+${d.pages.length - 8}</button>` : "");
     const p = d.pages[pick];
     h += `<div class="card ${m.low ? "low" : ""}" data-row="${di}"><div class="t">${docIcon(m.doc_path)}<span title="${esc(tipOf(m))}">${esc(m.doc_name)}</span></div>
-      <div class="m">${m.meta_hit && !d.pages.length ? "조건 일치" : m.name_hit && !d.pages.length ? "이름에 검색어" : d.pages.length + "곳"} · ${bars(m.score, m.low)}${whoOf(m) ? " · " + esc(whoOf(m)) : ""}</div>
+      <div class="m">${m.group === "copy" || m.group === "version" ? verLabel(m) : m.group === "similar" ? `비슷한 곳 ${d.pages.length} · ${simBars(m.pct)}`
+        : (m.meta_hit && !d.pages.length ? "조건 일치" : m.name_hit && !d.pages.length ? "이름에 검색어" : d.pages.length + "곳") + " · " + bars(m.score, m.low)}${whoOf(m) ? " · " + esc(whoOf(m)) : ""}</div>
       ${d.pages.length ? `<div class="pgs">${chips}</div>` : ""}
       ${p ? `<div class="sn">${p.section ? `<b>${esc(p.section)}</b>` : ""}${marked(p.snippet, p.marks)}
         <div class="acts"><button data-open="${di}:${pick}">${openLabel(m.doc_path, p.page)} ↗</button><button data-reveal="${di}">폴더 열기</button><button data-full="${di}:${pick}">내용 전체 보기</button></div></div>` : ""}
@@ -1860,7 +2006,8 @@ function goHist(d) {
   if (k < 0 || k >= hist.length) return;
   histPos = k;
   scope = hist[k].scope;
-  runFind(hist[k].q, false);
+  if (hist[k].sim) runSimilar(hist[k].sim, false);
+  else runFind(hist[k].q, false);
 }
 function goUp() {
   if (!scope) return;
@@ -2002,6 +2149,19 @@ const api = {
   },
   // 찾기를 맡겼는데 워커가 인덱싱 명령을 처리하는 중이다
   findWaiting() { findWaits = busy; },
+  // 비슷한 문서 찾기 — [+] 로 고른 문서
+  similarPicked(a) { if (a && a.path) runSimilar(a.path); },
+  // 끌어 놓기 — 들어옴 · 움직임(입력란 강조) / 나감(null)
+  dropOver(a) { dropMark(a); },
+  // 끌어 놓기 — 놓음. 입력란 위에 놓았을 때만 받는다
+  dropAt(a) {
+    dropMark(null);
+    if (!a) return;
+    if (!overSearch(a.x, a.y)) { setStatus("입력란에 놓아 주세요 — 놓은 문서와 비슷한 문서를 찾습니다"); return; }
+    if (a.why) { setStatus("비슷한 문서를 찾을 수 없습니다: " + a.why, true); return; }
+    runSimilar(a.path);
+    if (a.many) setStatus("여러 파일 중 첫 문서로 비슷한 문서를 찾는 중…");
+  },
   error(t) {
     setFindBusy(false);
     briefDrop = false; briefNext = false; briefBusy = false;
@@ -2065,6 +2225,7 @@ window.rsb = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => {}) });
 if (LAYOUT === "window") {
   $("win").classList.remove("hidden");
   $("go").onclick = () => runFind($("q").value);
+  $("add").onclick = pickSimilar;
   $("clr").onclick = resetFind;
   $("q").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); runFind($("q").value); }
@@ -2076,7 +2237,7 @@ if (LAYOUT === "window") {
   // 문서 클릭(메뉴 닫기)보다 먼저 받아, 띄운 메뉴가 바로 닫히지 않게 한다
   $("tohelp").onclick = (e) => { e.stopPropagation(); showHelpMenu(); };
   $("keysx").onclick = () => $("keys").classList.add("hidden");
-  $("again").onclick = () => { if (lastQ) runFind(lastQ, false); };
+  $("again").onclick = () => { if (simSrc) runSimilar(simSrc.path, false); else if (lastQ) runFind(lastQ, false); };
   $("back").onclick = () => goHist(-1);
   $("fwd").onclick = () => goHist(1);
   $("up").onclick = goUp;
@@ -2110,6 +2271,7 @@ if (LAYOUT === "window") {
   document.body.classList.add("panel");
   $("pnl").classList.remove("hidden");
   $("pgo").onclick = () => runFind($("pq").value);
+  $("padd").onclick = pickSimilar;
   $("pclr").onclick = resetFind;
   $("pq").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); runFind($("pq").value); }

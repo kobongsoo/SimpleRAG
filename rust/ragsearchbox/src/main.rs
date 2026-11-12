@@ -14,6 +14,7 @@ mod folder_icon;
 mod history;
 mod jobs;
 mod log;
+mod logview;
 mod monitor;
 mod panel;
 mod people;
@@ -77,8 +78,12 @@ enum UserEvent {
     BrowseIpc(String),
     // 패널에 파일을 끌어 놓음(들어옴 · 놓음 · 나감) — 채팅 모드 문서 올리기
     PanelDrop(wry::DragDropEvent),
+    // MoAI 탐색기 창에 파일을 끌어 놓음 — 비슷한 문서 찾기 입력란
+    BrowseDrop(wry::DragDropEvent),
     // 폴더 아이콘 맞추기가 끝났다 — 실패 안내 목록(성공이면 비어 있음)
     IconNotes(Vec<String>),
+    // 설정 > 로그 판 — 스레드가 모은 실패 문서 · 로그 경고·오류
+    LogView(Value),
 }
 
 type Proxy = Arc<Mutex<EventLoopProxy<UserEvent>>>;
@@ -128,6 +133,30 @@ fn upload_safe_id(conv: &str) -> Option<String> {
     let s: String = conv.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' }).collect();
     let s = s.trim_matches(|c| c == '.' || c == '_').to_string();
     if s.is_empty() { None } else { Some(s) }
+}
+
+//------------------------------------------------------------------
+// 비슷한 문서 찾기에 쓸 수 없는 이유 — 쓸 수 있으면 None ([+] · 끌어 놓기 공통, 설계서 §4-3)
+//=> 인덱스에 있는 문서는 벡터를 다시 만들지 않으므로 업로드 크기 한도는 두지 않는다.
+//
+// -in: p = 고르거나 놓은 경로
+//
+// -out: 거절 이유 / 쓸 수 있으면 None
+// -out: error = 없음
+//------------------------------------------------------------------
+fn similar_reject(p: &std::path::Path) -> Option<String> {
+    if p.is_dir() {
+        return Some("폴더가 아닌 문서 파일을 넣어 주세요".into());
+    }
+    let ext = p.extension().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !UPLOAD_EXTS.contains(&ext.as_str()) {
+        return Some(format!("지원하지 않는 형식입니다 — 지원 형식: {}", UPLOAD_EXTS.join(", ")));
+    }
+    // 오피스 잠금 파일(~$문서.docx)은 내용이 없다
+    if p.file_name().map(|n| n.to_string_lossy().starts_with("~$")).unwrap_or(false) {
+        return Some("임시 파일입니다".into());
+    }
+    None
 }
 
 // JSON 글자 배열 → Vec<String> (배열이 아니거나 글자가 아닌 칸은 건너뛴다)
@@ -746,7 +775,7 @@ impl App {
 
     //------------------------------------------------------------------
     // 탐색기 모드 화면 요청 (탐색기 창 · 패널 공통) — 처리했으면 true
-    //   find · preview · preview_hide · pv_rect · open_page · reveal · list_dirs · brief · brief_cancel · big · mode
+    //   find · similar · similar_pick · preview · preview_hide · pv_rect · open_page · reveal · list_dirs · brief · brief_cancel · big · mode
     //------------------------------------------------------------------
     fn on_find_ipc(&mut self, to_browse: bool, m: &Value) -> bool {
         match m["type"].as_str().unwrap_or("") {
@@ -794,6 +823,47 @@ impl App {
                 if waits {
                     if to_browse { self.browse.call("findWaiting", Value::Null) } else { self.panel.call("findWaiting", Value::Null) }
                 }
+            }
+            // 비슷한 문서 찾기(비슷한 문서 찾기 설계서 §6) — 결과는 찾기와 같은 길(find_done → results)로, done.kind 로 나뉜다
+            "similar" => {
+                let path = m["path"].as_str().unwrap_or("").trim().to_string();
+                let q = m["q"].as_str().unwrap_or("").to_string();
+                let folder = m["folder"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                if path.is_empty() {
+                    return true;
+                }
+                crate::info!("browse", "비슷한 문서: {} (범위 {:?})", path, folder);
+                let done = self.find_done.clone();
+                match &self.worker {
+                    None => {
+                        let e = self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into());
+                        done.lock().unwrap().push((to_browse, json!({"ok": false, "q": q, "why": e})));
+                    }
+                    Some(w) => {
+                        // 이미 떠 있는 옛 워커는 /similar 를 모른다 — 새로 빌드하라고 알린다
+                        if w.availability() == "up" && !w.knows("similar") {
+                            done.lock().unwrap().push((to_browse, json!({"ok": false, "q": q,
+                                "why": "워커가 비슷한 문서 찾기(/similar)를 모릅니다 — simplerag-rs.exe 를 새로 빌드하세요"})));
+                            return true;
+                        }
+                        w.ensure_started();
+                        w.note_use();
+                        let waits = w.is_indexing();
+                        let qq = q.clone();
+                        w.command(format!("/similar {}", worker::ascii_json(&json!({"path": path, "folder": folder}))),
+                            Box::new(move |mut r: Value| {
+                                r["q"] = json!(qq);
+                                done.lock().unwrap().push((to_browse, r));
+                            }));
+                        if waits {
+                            if to_browse { self.browse.call("findWaiting", Value::Null) } else { self.panel.call("findWaiting", Value::Null) }
+                        }
+                    }
+                }
+            }
+            "similar_pick" => {
+                let dir = m["dir"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                self.similar_pick(to_browse, dir);
             }
             "preview" if to_browse => {
                 let path = m["path"].as_str().unwrap_or("");
@@ -853,7 +923,8 @@ impl App {
                         Some("워커가 AI 정리(/brief)를 모릅니다 — simplerag-rs.exe 를 새로 빌드하세요".to_string())
                     }
                     Some(w) => {
-                        w.brief(&json!({"q": q, "items": m["items"]}));
+                        // mode "summary" — 비슷한 문서 찾기 결과에서 기준 문서 요약(설계서)
+                        w.brief(&json!({"q": q, "items": m["items"], "mode": m["mode"]}));
                         None
                     }
                     None => Some(self.worker_error.clone().unwrap_or("SimpleRAG 를 찾지 못했습니다".into())),
@@ -1125,10 +1196,11 @@ impl App {
     //------------------------------------------------------------------
     // 패널 끌어 놓기 (채팅 첨부 설계서 §2-3)
     //=> 들어옴/나감은 입력 상자 강조만, 놓음은 경로를 패널에 넘겨 대화 id · 올린 수와 함께 upload_paths 로 되돌려 받는다
-    //   (대화 id 와 칩 상태는 패널 JS 가 갖고 있다). 탐색기 모드 화면이면 아무 것도 하지 않는다
+    //   (대화 id 와 칩 상태는 패널 JS 가 갖고 있다). 탐색기 모드 화면이면 비슷한 문서 찾기 입력란으로 받는다
     //------------------------------------------------------------------
     fn on_panel_drop(&mut self, e: wry::DragDropEvent) {
         if self.panel_mode == "explorer" {
+            self.similar_drop(false, e);
             return;
         }
         match e {
@@ -1142,6 +1214,67 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    //------------------------------------------------------------------
+    // 비슷한 문서 찾기 — 끌어 놓기 (비슷한 문서 찾기 설계서 §4-2)
+    //=> 창 어디에 놓아도 이벤트는 오지만 입력란 위에 놓을 때만 받는다. 입력란인지는 화면 JS 가
+    //   좌표로 판단하므로 좌표를 그대로 넘긴다(웹뷰 왼쪽 위 기준).
+    //    1) 들어옴 · 움직임 → dropOver{x, y, n} (입력란 강조) / 나감 → dropOver(null)
+    //    2) 놓음 → 첫 파일을 검사해 dropAt{x, y, path | why, many}
+    //
+    // -in: to_browse = MoAI 탐색기 창이면 true, 탐색기 옆 패널(탐색기 모드)이면 false / e = 끌어 놓기 이벤트
+    //
+    // -out: 없음
+    // -out: error = 없음 (거절 이유는 화면에 넘긴다)
+    //------------------------------------------------------------------
+    fn similar_drop(&mut self, to_browse: bool, e: wry::DragDropEvent) {
+        let (func, arg) = match e {
+            wry::DragDropEvent::Enter { paths, position } => ("dropOver", json!({"x": position.0, "y": position.1, "n": paths.len()})),
+            wry::DragDropEvent::Over { position } => ("dropOver", json!({"x": position.0, "y": position.1})),
+            wry::DragDropEvent::Leave => ("dropOver", Value::Null),
+            wry::DragDropEvent::Drop { paths, position } => {
+                let mut a = json!({"x": position.0, "y": position.1, "many": paths.len() > 1});
+                match paths.first() {
+                    Some(p) => match similar_reject(p) {
+                        None => a["path"] = json!(p.to_string_lossy()),
+                        Some(why) => a["why"] = json!(why),
+                    },
+                    None => a["why"] = json!("놓은 파일이 없습니다"),
+                }
+                crate::info!("browse", "비슷한 문서 — 끌어 놓은 파일 {}개", paths.len());
+                ("dropAt", a)
+            }
+            _ => return,
+        };
+        if to_browse { self.browse.call(func, arg) } else { self.panel.call(func, arg) }
+    }
+
+    //------------------------------------------------------------------
+    // 비슷한 문서 찾기 — [+] 파일 고르기 (설계서 §4-1)
+    //=> 지원 형식만 보이는 파일 창으로 문서 하나를 고른다. [항상 위] 켬에서도 창 뒤로 숨지 않게 부모 창을 정하고,
+    //   보던 폴더에서 연다. 이름 칸에 *.* 를 쳐서 다른 파일을 고를 수 있으므로 고른 뒤 다시 검사한다.
+    //
+    // -in: to_browse = MoAI 탐색기 창이면 true / dir = 처음 열 폴더(없으면 None)
+    //
+    // -out: 없음 (고르면 화면 similarPicked, 거절이면 notice)
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    fn similar_pick(&mut self, to_browse: bool, dir: Option<String>) {
+        let mut d = rfd::FileDialog::new().set_title("비슷한 문서를 찾을 기준 문서 고르기").add_filter("문서", UPLOAD_EXTS);
+        if let Some(dir) = dir.filter(|p| std::path::Path::new(p).is_dir()) {
+            d = d.set_directory(dir);
+        }
+        d = if to_browse { d.set_parent(&self.browse.window) } else { d.set_parent(&self.panel.window) };
+        let p = match d.pick_file() {
+            Some(p) => p,
+            None => return,
+        };
+        let (func, arg) = match similar_reject(&p) {
+            None => ("similarPicked", json!({"path": p.to_string_lossy()})),
+            Some(why) => ("notice", json!(format!("비슷한 문서를 찾을 수 없습니다: {}", why))),
+        };
+        if to_browse { self.browse.call(func, arg) } else { self.panel.call(func, arg) }
     }
 
     //------------------------------------------------------------------
@@ -1232,6 +1365,11 @@ impl App {
             UserEvent::InfoIpc(s) => self.on_info_ipc(&s),
             UserEvent::BrowseIpc(s) => self.on_browse_ipc(&s),
             UserEvent::PanelDrop(e) => self.on_panel_drop(e),
+            UserEvent::BrowseDrop(e) => self.similar_drop(true, e),
+            // 로그 판 — 스레드가 다 모았다
+            UserEvent::LogView(v) => {
+                let _ = self.info.webview.evaluate_script(&format!("rsb.logView({})", v));
+            }
             UserEvent::IconNotes(notes) => {
                 self.icon_msg = notes.join("\n");
                 if self.info.visible {
@@ -1371,6 +1509,13 @@ impl App {
             Ok(h) if !h.is_empty() => Some(h),
             _ => self.app_dir(),
         }
+    }
+
+    //------------------------------------------------------------------
+    // 워커 인덱스 상태 파일(index_state.json) — 데이터 폴더 바로 아래(simplerag config.rs 의 state_path 와 같다)
+    //------------------------------------------------------------------
+    fn state_path(&self) -> Option<String> {
+        Some(std::path::Path::new(&self.data_home()?).join("index_state.json").to_string_lossy().into_owned())
     }
 
     //------------------------------------------------------------------
@@ -2040,6 +2185,10 @@ impl App {
     //------------------------------------------------------------------
     fn info_json(&mut self) -> Value {
         let mut info = json!({"log_dir": log::log_dir()});
+        // 메뉴 "로그 (N)" — 상태 파일이 바뀔 때만 다시 센다(logview 캐시)
+        if let Some(p) = self.state_path() {
+            info["n_failed"] = json!(logview::count_failed(&p));
+        }
         if let Some(w) = &self.worker {
             let up = w.availability() != "down";
             info["model_up"] = json!(up);
@@ -2348,6 +2497,34 @@ impl App {
             }
             "open_logs" => {
                 let _ = win::open_explorer(&log::log_dir());
+            }
+            // 로그 판 — 열 때 · [새로고침]. 상태 파일 2MB · 로그 7일치를 읽으므로 스레드에서
+            "log_view" => {
+                let (sp, p) = (self.state_path(), self.proxy.clone());
+                std::thread::spawn(move || {
+                    let v = logview::build(sp.as_deref());
+                    post(&p, UserEvent::LogView(v));
+                });
+            }
+            "log_open" | "log_reveal" => {
+                let path = m["path"].as_str().unwrap_or("");
+                let r = if m["type"] == "log_open" { win::open_path(path) } else { win::reveal(path) };
+                if let Err(e) = r {
+                    crate::warn!("app", "로그 판에서 문서를 열지 못했다: {} ({})", path, e);
+                    // 로그 판 실패 문서 묶음 위 안내 줄에 보인다(retryResult 의 실패 꼴과 같다)
+                    let msg = format!("열지 못했습니다: {}", e);
+                    let _ = self.info.webview.evaluate_script(&format!("rsb.retryResult({}, false, {})", json!(path), json!(msg)));
+                }
+            }
+            "retry_doc" => {
+                let path = m["path"].as_str().unwrap_or("");
+                let msg = match self.jobs.as_mut() {
+                    None => Err("자동 인덱싱할 폴더가 없습니다".to_string()),
+                    Some(j) => j.retry_doc(path),
+                };
+                let (ok, msg) = match msg { Ok(t) => (true, t), Err(t) => (false, t) };
+                let _ = self.info.webview.evaluate_script(&format!("rsb.retryResult({}, {}, {})", json!(path), json!(ok), json!(msg)));
+                self.update_tooltip();
             }
             // 동의어 탭 — [맞음] · [아님] · [직접 추가] · [빼기] · [후보 만들기]
             "syn_approve" | "syn_reject" | "syn_remove" => {
@@ -2691,7 +2868,8 @@ fn main() {
     let icon = Icon::from_resource(1, None).ok();
 
     // WebView2 사용자 데이터는 %LOCALAPPDATA%\RAGSearchBox-rs\webview (exe 옆이 쓰기 금지여도 되게)
-    let data = std::path::Path::new(&log::log_dir()).parent().map(|p| p.join("webview")).unwrap_or_default();
+    //   로그 폴더(MoAISearch\log)와 따로 둔다 — 옮기면 캐시를 새로 만들게 된다
+    let data = std::path::Path::new(&log::app_dir()).join("webview");
     let ctx: &'static mut WebContext = Box::leak(Box::new(WebContext::new(Some(data))));
 
     // 패널 창
@@ -2726,9 +2904,12 @@ fn main() {
         .with_inner_size(tao::dpi::LogicalSize::new(1240.0, 780.0)).with_min_inner_size(tao::dpi::LogicalSize::new(760.0, 420.0))
         .build(&event_loop).expect("탐색기 창");
     let p3 = proxy.clone();
+    let p3d = proxy.clone();
     let bview = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
         .with_html(BROWSE_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai).replace("__LAYOUT__", "window").replace("__UISTATE__", &settings::ui_state_js(&s.browse_state)))
         .with_ipc_handler(move |req| post(&p3, UserEvent::BrowseIpc(req.into_body())))
+        // 끌어 놓기 — 비슷한 문서 찾기 입력란(화면이 좌표로 입력란 위인지 판단). 기본 동작(놓은 파일로 화면 이동)은 끈다
+        .with_drag_drop_handler(move |e| { post(&p3d, UserEvent::BrowseDrop(e)); true })
         .build(&bwin).expect("탐색기 화면");
     let pv = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
         .with_url("about:blank").with_visible(false)

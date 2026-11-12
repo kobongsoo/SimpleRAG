@@ -92,5 +92,7 @@ rust\
 - 폴더 한정 검색은 항상 메모리의 벡터로 합니다(Python 판의 '300MB 넘으면 Qdrant 필터' 느린 길이 없습니다).
 - 패널 너비 INI 값은 **100% 배율 기준**입니다(고배율 모니터에서는 배율을 곱한 픽셀로 놓습니다).
 - 다른 이름을 씁니다 — 중복 실행 뮤텍스 `Local\RAGSearchBox-rs`, 자동 시작 값 `RAGSearchBox-rs`,
-  로그·대화 기록 `%LOCALAPPDATA%\RAGSearchBox-rs\`. Python 판과 동시에 켜면 패널이 두 개 뜰 수 있습니다.
+  대화 기록·WebView `%LOCALAPPDATA%\RAGSearchBox-rs\`, 로그 `%LOCALAPPDATA%\MoAISearch\log\`
+  (`MoAISearch_날짜.log` 프로그램 · `MoAISearch-worker_날짜.log` 워커). Python 판과 동시에 켜면 패널이 두 개 뜰 수 있습니다.
+- 설정 > **로그** 판에서 인덱싱 실패 문서(원인 · 할 일 · 다시 시도)와 최근 7일 로그의 경고·오류를 봅니다.
 - 사이냅(snf_exe) 폴백은 `SIMPLERAG_SNF_EXE` 또는 exe 옆 `synap\snf_exe.exe` 가 있을 때만 씁니다(Python 배포본도 동봉하지 않음).
