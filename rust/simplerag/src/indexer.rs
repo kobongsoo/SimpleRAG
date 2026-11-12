@@ -525,9 +525,11 @@ pub struct Prepared {
 //                     청킹이 끝나야 청크 수를 알므로 문서마다 그때 정한다 — 큰 문서 한 건도 미룰 수 있다
 // -필드: fresh      = 이번 실행에서 이미 새로 임베딩하거나 미룬 청크 수
 // -필드: prepared   = 준비 스레드 결과(없으면 그 자리에서 추출·청킹)
+// -필드: pool       = 재구축 때 옛 인덱스의 '청크 지문 → 벡터'(벡터 재사용 재구축). 같은 글이면 다시 임베딩하지 않는다
 //------------------------------------------------------------------
 #[derive(Default)]
-pub struct SyncOpts {
+pub struct SyncOpts<'a> {
+    pub pool: Option<&'a HashMap<String, Vec<f32>>>,
     pub defer_over: Option<usize>,
     pub fresh: usize,
     pub prepared: Option<Prepared>,
@@ -725,7 +727,7 @@ pub fn sync_doc(path: &str, fp: &str, state: &mut State, embedder: &Embedder, st
 // -out: error = 추출·임베딩 실패는 ok=false, 저장소 · 상태 파일 쓰기 실패는 Err
 //------------------------------------------------------------------
 pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedder, store: &VectorStore,
-                     log: &mut dyn FnMut(&str), opts: SyncOpts) -> Result<SyncResult, String> {
+                     log: &mut dyn FnMut(&str), opts: SyncOpts<'_>) -> Result<SyncResult, String> {
     let key = pyutil::abspath(path);
     let name = pyutil::basename(path).to_string();
     let prev = docs(state).get(&key).cloned();
@@ -799,7 +801,7 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
     let tok = embedder.tokenizer()?;
     // 옛 버전의 점 id — 글이 같은 청크의 벡터를 다시 쓴다(설계서 §4-5)
     let old_ids: Vec<i64> = prev.as_ref().and_then(id_range).map(|(a, b)| (a..b).collect()).unwrap_or_default();
-    let (defer_over, fresh_before) = (opts.defer_over, opts.fresh);
+    let (defer_over, fresh_before, pool) = (opts.defer_over, opts.fresh, opts.pool);
     let made: Result<(String, usize, Vec<String>, Option<Vec<crate::chunk::ChunkMeta>>, Vec<Vec<f32>>, Vec<String>, usize, usize, bool), String> = (|| {
         // 준비 스레드가 이미 만들었으면 그것을 쓴다(결과는 그 자리에서 만든 것과 같다)
         let (text, n_rows, chunks, metas) = match pre_parsed.take() {
@@ -807,7 +809,15 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
             None => parse_doc(path, &name, &tok)?,
         };
         let hashes: Vec<String> = chunks.iter().map(|c| chunk_hash(c)).collect();
-        let reused = reuse_vectors(store, &old_ids, &hashes)?;
+        let mut reused = reuse_vectors(store, &old_ids, &hashes)?;
+        // 재구축이면 옛 인덱스 전체에서도 찾는다 — 설정만 바뀌고 글이 같은 청크는 벡터를 그대로 쓴다
+        if let Some(pool) = pool {
+            for (r, h) in reused.iter_mut().zip(&hashes) {
+                if r.is_none() {
+                    *r = pool.get(h).cloned();
+                }
+            }
+        }
         let n_reused = reused.iter().filter(|v| v.is_some()).count();
         // 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 빈 벡터로 둔다
         let need: Vec<String> = chunks.iter().zip(&reused).filter(|(_, r)| r.is_none()).map(|(c, _)| c.clone()).collect();
@@ -1303,6 +1313,8 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
     embedder.ensure_loaded()?;
     let mut state = if rebuild { empty_state() } else { load_state() };
     check_chunk_params(&mut state, rebuild, log)?;
+    // 재구축이면 비우기 전에 옛 벡터를 꺼내 둔다(벡터 재사용 재구축)
+    let pool = if rebuild { take_pool(embedder, store, log)? } else { None };
     if rebuild {
         store.recreate()?;
     } else {
@@ -1311,6 +1323,110 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
     let plan = plan_changes(doc_dir, &state, recursive, allow_delete, rebuild)?;
     // 메타데이터의 폴더 토큰은 이 인덱싱 폴더 아래 경로로 잡는다
     crate::meta::hook::set_base(Some(doc_dir));
+    run_plan(plan, state, pool, embedder, store, bm25, rebuild, log, max_add)
+}
+
+//------------------------------------------------------------------
+// 지금 인덱스의 문서 그대로 재구축 (index --rebuild, --dir 없이)
+//=> 인덱스는 여러 폴더(바탕화면 일부 파일 · 업무 폴더 등)에서 들어온 문서로 이루어진다. 폴더 하나로
+//   --rebuild 하면 나머지 폴더 문서가 빠지고, 상위 폴더로 하면 원래 없던 파일까지 들어간다.
+//   그래서 상태 파일의 문서 목록을 그대로 다시 넣는다. 청킹 설정이 바뀌었을 때 쓴다.
+//    1) 상태 파일의 문서 경로를 모은다(지금 디스크에 없는 문서는 빠진다)
+//    2) 옛 벡터를 꺼내 두고(take_pool) 저장소를 비운다
+//    3) 모은 문서를 새 설정으로 다시 넣는다 — 글이 같은 청크는 옛 벡터를 그대로 쓴다
+//   메타데이터 기준 폴더는 비워 둔다(None) — 기존 문서의 기준 폴더 값이 그대로 남는다.
+//
+// -in: embedder · store · bm25 = 앱 부품 / log = 안내 출력
+//
+// -out: Summary
+// -out: error = 저장소 · 상태 파일 실패는 Err
+//------------------------------------------------------------------
+pub fn rebuild_indexed(embedder: &Embedder, store: &VectorStore, bm25: &Bm25Index,
+                       log: &mut dyn FnMut(&str)) -> Result<Summary, String> {
+    embedder.ensure_loaded()?;
+    let old = load_state();
+    let mut paths: Vec<String> = docs(&old).keys().cloned().collect();
+    paths.sort();
+    let n_all = paths.len();
+    paths.retain(|p| std::path::Path::new(p).is_file());
+    let gone = n_all - paths.len();
+    if paths.is_empty() {
+        return Err("다시 넣을 문서가 없습니다(인덱스가 비어 있거나 문서가 모두 사라졌습니다)".into());
+    }
+    log(&format!("지금 인덱스의 문서 {}건을 새 설정으로 다시 넣습니다{}", n_all,
+        if gone > 0 { format!(" — 디스크에 없는 {}건은 뺍니다", gone) } else { String::new() }));
+    let mut state = empty_state();
+    check_chunk_params(&mut state, true, log)?;
+    let pool = take_pool(embedder, store, log)?;
+    store.recreate()?;
+    let mut todo = vec![];
+    let mut unreadable = 0;
+    for p in &paths {
+        match file_fingerprint(p) {
+            Ok(fp) => todo.push((p.clone(), fp)),
+            Err(_) => unreadable += 1,
+        }
+    }
+    let plan = Plan { files: paths.clone(), skipped: unreadable, todo, removed: vec![], moved: vec![],
+                      delete_blocked: String::new(), retry_skip: 0 };
+    crate::meta::hook::set_base(None);
+    run_plan(plan, state, pool, embedder, store, bm25, true, log, None)
+}
+
+//------------------------------------------------------------------
+// 옛 인덱스의 벡터 풀 꺼내기 (벡터 재사용 재구축)
+//=> 저장소를 비우기 전에 '청크 지문 → 벡터'를 꺼낸다. 단 지금 임베딩 모델이 옛 인덱스를 만든
+//   모델과 같은지 먼저 확인한다 — 견본 청크 몇 개를 지금 모델로 다시 임베딩해 옛 벡터와 비교하고,
+//   하나라도 다르면(코사인 0.95 미만) 풀을 버리고 전부 새로 임베딩한다(모델을 바꾼 재구축).
+//   int8 양자화 모델은 같은 글도 함께 묶인 배치에 따라 조금 달라 같은 모델에서 0.98~1.0 이 나온다
+//   (2026-11-11 실측 최저 0.988). 다른 모델이면 벡터가 무관해 훨씬 낮거나 차원부터 다르다.
+//
+// -in: embedder = 임베딩기 / store = 저장소(아직 비우기 전) / log = 안내 출력
+//
+// -out: Some(풀) / 모델이 다르거나 옛 벡터가 없으면 None
+// -out: error = 저장소 적재 · 임베딩 실패면 Err
+//------------------------------------------------------------------
+fn take_pool(embedder: &Embedder, store: &VectorStore, log: &mut dyn FnMut(&str))
+             -> Result<Option<HashMap<String, Vec<f32>>>, String> {
+    store.ensure_loaded()?;
+    // 지문은 reuse_vectors 와 같은 규칙 — payload 의 chunk_hash, 없으면 본문으로 계산
+    let key = |p: &crate::store::Payload| p.get("chunk_hash").and_then(|v| v.as_str()).map(|s| s.to_string())
+        .unwrap_or_else(|| chunk_hash(crate::store::pl_str(p, "text")));
+    let (pool, samples) = store.take_vectors(key, 5)?;
+    if pool.is_empty() {
+        return Ok(None);
+    }
+    // 모델 확인 — 같은 글을 지금 모델로 임베딩한 벡터가 옛 벡터와 같아야 다시 쓸 수 있다
+    let texts: Vec<String> = samples.iter().map(|s| s.0.clone()).collect();
+    let fresh = embedder.embed_passages(&texts)?;
+    let cos = |a: &[f32], b: &[f32]| -> f32 {
+        let (na, nb) = (a.iter().map(|x| x * x).sum::<f32>().sqrt(), b.iter().map(|x| x * x).sum::<f32>().sqrt());
+        if a.len() != b.len() || na == 0.0 || nb == 0.0 { 0.0 } else { a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() / (na * nb) }
+    };
+    let worst = samples.iter().zip(&fresh).map(|(s, f)| cos(&s.1, f)).fold(1.0f32, f32::min);
+    if worst < 0.95 {
+        log(&format!("  옛 벡터를 다시 쓰지 않습니다 — 임베딩 모델이 옛 인덱스와 다릅니다(견본 코사인 {:.4}). 전부 새로 임베딩합니다", worst));
+        return Ok(None);
+    }
+    log(&format!("  옛 벡터 {}개를 꺼내 두었습니다 — 글이 같은 청크는 다시 임베딩하지 않습니다(견본 코사인 {:.4})",
+        pyutil::comma(pool.len() as i64), worst));
+    Ok(Some(pool))
+}
+
+//------------------------------------------------------------------
+// 인덱싱 계획 실행 (index_folder · rebuild_indexed 공통 본체)
+//=> 사라진 문서 지우기 → 문서마다 반영(준비 스레드와 겹쳐) → 미룬 제목 갱신 → BM25 → 메타 마무리.
+//
+// -in: plan = 할 일 / state = 상태(재구축이면 빈 상태) / pool = 재구축 벡터 풀
+// -in: rebuild = 전체 재구축인가 / max_add = 새 문서 한도
+//
+// -out: Summary
+// -out: error = 저장소 · 상태 파일 실패는 Err
+//------------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
+fn run_plan(plan: Plan, mut state: State, pool: Option<HashMap<String, Vec<f32>>>, embedder: &Embedder,
+            store: &VectorStore, bm25: &Bm25Index, rebuild: bool, log: &mut dyn FnMut(&str),
+            max_add: Option<usize>) -> Result<Summary, String> {
     let mut todo = plan.todo.clone();
     if plan.skipped > 0 {
         log(&format!("제외 {}건(확장자·임시 파일 등)", plan.skipped));
@@ -1376,7 +1492,8 @@ pub fn index_folder(doc_dir: &str, embedder: &Embedder, store: &VectorStore, bm2
             let name = pyutil::basename(path).to_string();
             let prepared = rx.as_ref().and_then(|r| r.recv().ok());
             let r = sync_doc_with(path, fp, &mut state, embedder, store, log,
-                                  SyncOpts { defer_over: defer_limit, fresh: fresh_chunks, prepared, retitle_force: false })?;
+                                  SyncOpts { defer_over: defer_limit, fresh: fresh_chunks, prepared, retitle_force: false,
+                                             pool: pool.as_ref() })?;
             if !r.ok {
                 sum.failed.push((name, format!("{}{}", r.why, if r.kept_old { " (옛 버전 유지)" } else { "" })));
                 continue;

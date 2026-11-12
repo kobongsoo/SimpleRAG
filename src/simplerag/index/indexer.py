@@ -472,12 +472,13 @@ def _reuse_vectors(store, old_ids, hashes):
 #                   청킹이 끝나야 청크 수를 알므로 문서마다 그때 정한다 — 큰 문서 한 건도 미룰 수 있다
 # -in: fresh    = 이번 실행에서 이미 새로 임베딩하거나 미룬 청크 수(기본 0)
 # -in: prepared = 준비 스레드 결과 {chash, parsed?}(None 이면 그 자리에서 해시 · 추출 · 청킹)
+# -in: pool     = 재구축 때 옛 인덱스의 {청크 지문: 벡터}(벡터 재사용 재구축). 같은 글이면 다시 임베딩하지 않는다
 #
 # -out: dict = {ok, op("added"|"modified"|"same"|"moved"|"copied"|"retitled"), chunks, why, kept_old, n_rows, from,
 #               reused(옛 벡터를 다시 쓴 청크 수), embedded(새로 임베딩한 수), deferred(벡터 대기로 둔 수)}
 # -out: error = 추출·임베딩 실패는 ok=False 로 돌려준다. 저장소 쓰기 실패는 예외 전파
 #------------------------------------------------------------------
-def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, fresh=0, prepared=None):
+def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, fresh=0, prepared=None, pool=None):
     log = log or (lambda m: None)
     key = os.path.abspath(path)
     name = os.path.basename(path)
@@ -546,6 +547,9 @@ def sync_doc(path, fp, state, embedder, store, ext, log=None, defer_over=None, f
         text, n_rows, chunks, metas = parsed
         hashes = [chunk_hash(c) for c in chunks]
         reused = _reuse_vectors(store, old_ids, hashes)      # [None | (옛 벡터, 대기였나)]
+        # 재구축이면 옛 인덱스 전체에서도 찾는다 — 설정만 바뀌고 글이 같은 청크는 벡터를 그대로 쓴다
+        if pool:
+            reused = [r if r is not None or h not in pool else (pool[h], False) for r, h in zip(reused, hashes)]
         # 다시 쓸 벡터가 없는 청크만 임베딩한다 — 대기면 자리 표시 벡터로 둔다
         need = [c for c, r in zip(chunks, reused) if r is None]
         # 이번 실행에서 새로 임베딩할 청크가 문턱을 넘으면 벡터는 미룬다(큰 문서가 명령 시간 한도를 넘지 않게)
@@ -1149,6 +1153,8 @@ def move_doc(old_key, path, fp, state, store):
 # -in: max_add      = 새 문서가 이보다 많으면 새 문서는 넣지 않고 미룬다(수정·삭제는 한다).
 #                     None 이면 제한 없음. 자동 인덱싱이 처음 켠 폴더를 묻지 않고 통째로
 #                     인덱싱하지 않게 한다(설계서 §8 — 371건에 19분 걸렸다)
+# -in: paths        = 문서 경로 목록을 주면 폴더를 훑지 않고 이 문서들만 넣는다(rebuild_indexed). 기본 None
+#                     재구축(rebuild)이면 비우기 전에 옛 벡터를 꺼내 두고 글이 같은 청크는 다시 임베딩하지 않는다
 #
 # -out: dict = 처리 요약 {files, changed, added, modified, same, moved, copied, retitled(이름 바꿈 후 제목 갱신), removed,
 #                         delete_blocked, held_new, chunks, failed, sec,
@@ -1156,11 +1162,11 @@ def move_doc(old_key, path, fp, state, store):
 # -out: error = 폴더 없음·청킹 설정 불일치는 RuntimeError
 #------------------------------------------------------------------
 def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
-                 recursive=True, allow_delete=False, max_add=None):
+                 recursive=True, allow_delete=False, max_add=None, paths=None):
     log = on_log or (lambda m: None)
 
     # ⚠️ 폴더가 안 보이면 여기서 멈춘다 — 계속하면 "전부 사라졌다" 로 보여 다 지운다
-    if not os.path.isdir(doc_dir):
+    if paths is None and not os.path.isdir(doc_dir):
         raise RuntimeError("폴더 없음: " + doc_dir)
 
     ext = build_extractor()
@@ -1169,15 +1175,29 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
     state = {"docs": {}, "next_id": 0} if rebuild else load_state()
     # 청킹 설정이 이 인덱스를 만들 때와 다르면 증분으로 섞지 않는다(§35) — 저장소를 건드리기 전에
     check_chunk_params(state, rebuild, log)
+    # 재구축이면 비우기 전에 옛 벡터를 꺼내 둔다(벡터 재사용 재구축)
+    pool = _take_pool(embedder, store, log) if rebuild else None
     store.ensure_collection(recreate=rebuild)
     if rebuild:
         # id 를 0 부터 다시 쓰므로 옛 토큰 표도 비운다
         bm25_mod.TfStore().clear()
 
-    plan = plan_changes(doc_dir, state, recursive=recursive, allow_delete=allow_delete,
-                        rebuild=rebuild)
-    # 메타데이터의 폴더 토큰은 이 인덱싱 폴더 아래 경로로 잡는다
-    meta_hook.set_base(doc_dir)
+    if paths is None:
+        plan = plan_changes(doc_dir, state, recursive=recursive, allow_delete=allow_delete,
+                            rebuild=rebuild)
+        # 메타데이터의 폴더 토큰은 이 인덱싱 폴더 아래 경로로 잡는다
+        meta_hook.set_base(doc_dir)
+    else:
+        # 문서 목록 그대로(rebuild_indexed) — 메타 기준 폴더는 비워 두어 기존 값을 그대로 둔다
+        todo, unreadable = [], 0
+        for p in paths:
+            try:
+                todo.append((p, file_fingerprint(p)))
+            except OSError:
+                unreadable += 1
+        plan = {"files": list(paths), "todo": todo, "removed": [], "moved": {}, "delete_blocked": "",
+                "skipped": unreadable, "retry_skip": 0}
+        meta_hook.set_base(None)
     files, todo, removed = plan["files"], plan["todo"], plan["removed"]
     delete_blocked = plan["delete_blocked"]
     if plan["skipped"]:
@@ -1229,7 +1249,7 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
             name = os.path.basename(path)
             prepared = prep.next() if prep else None
             r = sync_doc(path, fp, state, embedder, store, ext, log, defer_over=defer_over,
-                         fresh=fresh_chunks, prepared=prepared)
+                         fresh=fresh_chunks, prepared=prepared, pool=pool)
             if not r["ok"]:
                 failed.append((name, r["why"] + (" (옛 버전 유지)" if r.get("kept_old") else "")))
                 continue
@@ -1290,6 +1310,68 @@ def index_folder(doc_dir, embedder, store, bm25, rebuild=False, on_log=None,
             "chunks": total_chunks, "failed": failed,
             "pending": pending, "reused": n_reused, "embedded": n_embedded,
             "sec": round(time.perf_counter() - t_start, 1)}
+
+
+#------------------------------------------------------------------
+# 옛 인덱스의 벡터 풀 꺼내기 (벡터 재사용 재구축)
+#=> 저장소를 비우기 전에 '청크 지문 → 벡터'를 꺼낸다. 단 지금 임베딩 모델이 옛 인덱스를 만든
+#   모델과 같은지 먼저 확인한다 — 견본 청크 몇 개를 지금 모델로 다시 임베딩해 옛 벡터와 비교하고,
+#   하나라도 다르면(코사인 0.95 미만) 풀을 버리고 전부 새로 임베딩한다(모델을 바꾼 재구축).
+#   int8 양자화 모델은 같은 글도 함께 묶인 배치에 따라 조금 달라 같은 모델에서 0.98~1.0 이 나온다
+#   (2026-11-11 Rust 실측 최저 0.988). 다른 모델이면 벡터가 무관해 훨씬 낮거나 차원부터 다르다.
+#
+# -in: embedder = OnnxEmbedder / store = VectorStore(아직 비우기 전) / log = 안내 출력
+#
+# -out: dict 풀 / 모델이 다르거나 옛 벡터가 없으면 None
+# -out: error = 저장소 · 임베딩 예외 전파
+#------------------------------------------------------------------
+def _take_pool(embedder, store, log):
+    import numpy as np
+
+    pool, samples = store.take_vectors(lambda p: p.get("chunk_hash") or chunk_hash(p.get("text", "")))
+    if not pool:
+        return None
+    fresh = embedder.embed_passages([t for t, _ in samples])
+
+    # 코사인 — 길이가 다르면(차원이 다른 모델) 0
+    def cos(a, b):
+        a, b = np.asarray(a, dtype="float32"), np.asarray(b, dtype="float32")
+        na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        return 0.0 if a.shape != b.shape or not na or not nb else float(a @ b) / (na * nb)
+
+    worst = min(cos(v, f) for (_, v), f in zip(samples, fresh))
+    if worst < 0.95:
+        log("  옛 벡터를 다시 쓰지 않습니다 — 임베딩 모델이 옛 인덱스와 다릅니다(견본 코사인 {:.4f}). "
+            "전부 새로 임베딩합니다".format(worst))
+        return None
+    log("  옛 벡터 {:,}개를 꺼내 두었습니다 — 글이 같은 청크는 다시 임베딩하지 않습니다(견본 코사인 {:.4f})"
+        .format(len(pool), worst))
+    return pool
+
+
+#------------------------------------------------------------------
+# 지금 인덱스의 문서 그대로 재구축 (index --rebuild, --dir 없이)
+#=> 인덱스는 여러 폴더(바탕화면 일부 파일 · 업무 폴더 등)에서 들어온 문서로 이루어진다. 폴더 하나로
+#   --rebuild 하면 나머지 폴더 문서가 빠지고, 상위 폴더로 하면 원래 없던 파일까지 들어간다.
+#   그래서 상태 파일의 문서 목록을 그대로 다시 넣는다. 청킹 설정이 바뀌었을 때 쓴다.
+#    1) 상태 파일의 문서 경로를 모은다(지금 디스크에 없는 문서는 빠진다)
+#    2) index_folder(paths=…) 로 재구축 — 옛 벡터를 꺼내 두고 글이 같은 청크는 그대로 쓴다
+#
+# -in: embedder · store · bm25 = 앱 부품 / on_log = 안내 출력
+#
+# -out: dict = index_folder 와 같은 요약
+# -out: error = 다시 넣을 문서가 없으면 RuntimeError
+#------------------------------------------------------------------
+def rebuild_indexed(embedder, store, bm25, on_log=None):
+    log = on_log or (lambda m: None)
+    keys = sorted(load_state()["docs"])
+    paths = [p for p in keys if os.path.isfile(p)]
+    if not paths:
+        raise RuntimeError("다시 넣을 문서가 없습니다(인덱스가 비어 있거나 문서가 모두 사라졌습니다)")
+    gone = len(keys) - len(paths)
+    log("지금 인덱스의 문서 {}건을 새 설정으로 다시 넣습니다{}".format(
+        len(keys), " — 디스크에 없는 {}건은 뺍니다".format(gone) if gone else ""))
+    return index_folder(None, embedder, store, bm25, rebuild=True, on_log=log, paths=paths)
 
 
 #------------------------------------------------------------------

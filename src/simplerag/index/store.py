@@ -281,6 +281,42 @@ class VectorStore:
         return np.array([p.vector for p in pts], dtype="float32"), [dict(p.payload) for p in pts]
 
     #------------------------------------------------------------------
+    # 재구축 전 벡터 꺼내기 (벡터 재사용 재구축)
+    #=> 전체 비우기 직전에 모든 점에서 '청크 지문 → 벡터' 표를 만든다. 재구축 중 새 청크의 글이
+    #   옛 청크와 같으면 이 벡터를 그대로 써서 다시 임베딩하지 않는다.
+    #    1) 점을 5,000개씩 훑어 지문(payload chunk_hash, 없으면 본문으로 계산)마다 벡터 하나를 둔다
+    #    2) 벡터 대기 점(vec_pending)은 자리 표시 벡터라 넣지 않는다
+    #    3) 모델 확인용 견본 (글, 벡터) 를 고르게 최대 n_sample 개 함께 돌려준다
+    #
+    # -in: key      = payload → 청크 지문 함수
+    # -in: n_sample = 견본 수 (기본 5)
+    #
+    # -out: (dict 지문 → np 벡터, [(글, np 벡터), …])
+    # -out: error = qdrant 예외 전파
+    #------------------------------------------------------------------
+    def take_vectors(self, key, n_sample=5):
+        import numpy as np
+
+        self.ensure_collection()
+        total = self._client.count(collection_name=COLLECTION, exact=True).count
+        # 견본은 전체에서 고르게 — 앞쪽 문서 하나에 몰리지 않게
+        step = max(1, total // max(1, n_sample))
+        pool, samples, i, offset = {}, [], 0, None
+        while True:
+            pts, offset = self._client.scroll(collection_name=COLLECTION, limit=5000, offset=offset,
+                                              with_payload=True, with_vectors=True)
+            for p in pts:
+                pl = dict(p.payload or {})
+                if not pl.get("vec_pending"):
+                    v = np.asarray(p.vector, dtype="float32")
+                    if i % step == 0 and len(samples) < n_sample:
+                        samples.append((pl.get("text", ""), v))
+                    pool.setdefault(key(pl), v)
+                i += 1
+            if offset is None:
+                return pool, samples
+
+    #------------------------------------------------------------------
     # 점 id 로 payload 만 읽기 — 메타데이터 본문 첫머리(7단계)가 문서의 첫 청크를 찾을 때
     #
     # -in: ids = 점 id 목록

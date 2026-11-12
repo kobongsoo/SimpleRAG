@@ -108,7 +108,8 @@ fn parse(argv: &[String]) -> Args {
         i += 1;
     }
     match a.cmd.as_str() {
-        "index" if a.dir.is_none() => arg_error("the following arguments are required: --dir"),
+        // --rebuild 만 주면 지금 인덱스의 문서 그대로 재구축 — 그 밖에는 --dir 이 필요하다
+        "index" if a.dir.is_none() && !a.rebuild => arg_error("the following arguments are required: --dir (또는 --rebuild 만: 지금 인덱스 문서 그대로 재구축)"),
         "import" if a.from.is_none() => arg_error("the following arguments are required: --from"),
         "ask" => a.query = positional.first().cloned(),
         "search" => {

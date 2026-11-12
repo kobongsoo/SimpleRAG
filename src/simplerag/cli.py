@@ -128,10 +128,17 @@ def cmd_index(args):
         # 인덱싱에는 생성 모델도 리랭커도 필요 없다 — 괜히 올리지 않는다.
         app.warmup(wait=True, skip_llm=True, rerank=False)
         try:
-            summary = index_folder(args.dir, app.embedder, app.store, app.bm25,
-                                   rebuild=args.rebuild, on_log=print,
-                                   recursive=not args.no_recursive,
-                                   allow_delete=args.allow_delete, max_add=args.max_add)
+            # --dir 없이 --rebuild 면 지금 인덱스에 든 문서 목록 그대로 다시 만든다(여러 폴더에서 들어온 인덱스)
+            if args.dir is None and args.rebuild:
+                from simplerag.index.indexer import rebuild_indexed
+                summary = rebuild_indexed(app.embedder, app.store, app.bm25, on_log=print)
+            elif args.dir is None:
+                raise RuntimeError("--dir 이 필요합니다 (또는 --rebuild 만: 지금 인덱스 문서 그대로 재구축)")
+            else:
+                summary = index_folder(args.dir, app.embedder, app.store, app.bm25,
+                                       rebuild=args.rebuild, on_log=print,
+                                       recursive=not args.no_recursive,
+                                       allow_delete=args.allow_delete, max_add=args.max_add)
         except RuntimeError as e:
             # 폴더 없음·청킹 설정 불일치 — 사용자가 고칠 수 있는 오류라 스택 없이 알린다
             print("\n❌ {}".format(e), file=sys.stderr)
@@ -1463,7 +1470,8 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("index", help="폴더 인덱싱(증분)")
-    pi.add_argument("--dir", required=True)
+    # --rebuild 만 주면(--dir 없이) 지금 인덱스의 문서 그대로 재구축
+    pi.add_argument("--dir")
     pi.add_argument("--rebuild", action="store_true", help="전체 재인덱싱")
     pi.add_argument("--no-recursive", action="store_true", help="하위 폴더 제외")
     pi.add_argument("--allow-delete", action="store_true",

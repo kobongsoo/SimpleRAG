@@ -148,6 +148,45 @@ impl VectorStore {
     }
 
     //------------------------------------------------------------------
+    // 재구축 전 벡터 꺼내기 (벡터 재사용 재구축)
+    //=> 전체 비우기 직전에 메모리의 점에서 '청크 지문 → 벡터' 표를 만든다. 재구축 중 새 청크의 글이
+    //   옛 청크와 같으면 이 벡터를 그대로 써서 다시 임베딩하지 않는다.
+    //    1) 점마다 key(payload) 로 지문을 구한다(같은 지문은 처음 것 하나만 — 같은 글이면 벡터도 같다)
+    //    2) 벡터가 빈 점(벡터 대기)은 넣지 않는다 — 다시 쓸 것이 없다
+    //    3) 모델 확인용 견본 (글, 벡터) 를 고르게 최대 n_sample 개 함께 돌려준다
+    //   메모리의 벡터를 옮겨 오므로(복사 아님) 이 뒤에는 반드시 recreate() 로 비워야 한다.
+    //
+    // -in: key      = payload → 청크 지문
+    // -in: n_sample = 견본 수
+    //
+    // -out: (지문 → 벡터, 견본 [(글, 벡터)])
+    // -out: error = 저장소 적재 실패면 Err
+    //------------------------------------------------------------------
+    pub fn take_vectors(&self, key: impl Fn(&Payload) -> String, n_sample: usize)
+                        -> Result<(HashMap<String, Vec<f32>>, Vec<(String, Vec<f32>)>), String> {
+        self.with(|inn| {
+            let n = inn.points.len();
+            // 견본은 전체에서 고르게 — 앞쪽 문서 하나에 몰리지 않게
+            let step = (n / n_sample.max(1)).max(1);
+            let mut pool: HashMap<String, Vec<f32>> = HashMap::with_capacity(n);
+            let mut samples = vec![];
+            for (i, p) in inn.points.values_mut().enumerate() {
+                if p.vec.is_empty() {
+                    continue;
+                }
+                if i % step == 0 && samples.len() < n_sample {
+                    samples.push((pl_str(&p.payload, "text").to_string(), p.vec.clone()));
+                }
+                let k = key(&p.payload);
+                if !pool.contains_key(&k) {
+                    pool.insert(k, std::mem::take(&mut p.vec));
+                }
+            }
+            Ok((pool, samples))
+        })
+    }
+
+    //------------------------------------------------------------------
     // 전체 비우기(--rebuild) — 표를 비우고 남은 점이 0 인지 확인
     //------------------------------------------------------------------
     pub fn recreate(&self) -> Result<(), String> {

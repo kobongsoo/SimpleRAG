@@ -116,8 +116,13 @@ pub fn cmd_index(a: &Args) -> i32 {
     app.warmup(true, &mut |_| {}, Some(false));
     let dir = a.dir.clone().unwrap_or_default();
     let mut lg = |m: &str| outln(m);
-    let r = indexer::index_folder(&dir, &app.embedder, &app.store, &app.bm25, a.rebuild, &mut lg,
-                                  !a.no_recursive, a.allow_delete, a.max_add);
+    // --dir 없이 --rebuild 면 지금 인덱스에 든 문서 목록 그대로 다시 만든다(여러 폴더에서 들어온 인덱스)
+    let r = if a.dir.is_none() && a.rebuild {
+        indexer::rebuild_indexed(&app.embedder, &app.store, &app.bm25, &mut lg)
+    } else {
+        indexer::index_folder(&dir, &app.embedder, &app.store, &app.bm25, a.rebuild, &mut lg,
+                              !a.no_recursive, a.allow_delete, a.max_add)
+    };
     // 단계형 인덱싱 2단계 — 1단계(BM25 까지)가 끝나 이미 검색할 수 있다. 같은 실행에서 벡터를 이어 채운다
     let r = r.map(|mut s| {
         if s.pending > 0 {
