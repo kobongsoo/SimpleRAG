@@ -61,6 +61,8 @@ Source: "{#Dist}\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recu
 ; ONNX 모델 · tokenizer 는 20~80% 줄어들어 압축한다
 Source: "{#Dist}\models\e5-small-ko\*"; DestDir: "{app}\models\e5-small-ko"; Flags: ignoreversion
 Source: "{#Dist}\models\bge-reranker-base-int8\*"; DestDir: "{app}\models\bge-reranker-base-int8"; Flags: ignoreversion
+; OCR 모델(스캔 문서 · 그림 파일 글자 읽기, 약 15MB) — OCR 설계서 §10
+Source: "{#Dist}\models\ocr\*"; DestDir: "{app}\models\ocr"; Flags: ignoreversion
 ; GGUF 는 12% 밖에 줄지 않아 시간만 든다. 다른 답변 모델은 installer_model.iss 로 모델마다 따로(설정 > 모델에서 받는다)
 Source: "{#Dist}\models\Qwen3-1.7B-Q4_K_M.gguf"; DestDir: "{app}\models"; Flags: ignoreversion nocompression
 

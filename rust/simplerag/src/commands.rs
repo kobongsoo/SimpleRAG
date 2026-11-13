@@ -6,6 +6,8 @@
 //     받기  : @index {"op": "index-doc", "ok": true, ...}    (한 줄 ASCII JSON)
 //   /embed-pending {"max": 64} — 단계형 인덱싱의 벡터 대기 청크를 최대 64개 채운다(4스레드로 약 1초).
 //   RAGSearchBox 가 질문이 없을 때만 보낸다(인덱싱 속도 개선 설계서 §3-5-5).
+//   /ocr-step {"pages": 1} — 스캔 문서·그림 파일 OCR 대기열을 최대 1쪽 처리한다(쪽당 1~3초, OCR 설계서 §6).
+//   벡터 채우기가 끝난 뒤 질문이 없을 때 보낸다. pages 0 이면 남은 수만 센다.
 //------------------------------------------------------------------
 
 use std::time::Instant;
@@ -17,7 +19,7 @@ use crate::indexer::{self, docs};
 use crate::pyutil;
 
 pub const PREFIX: &str = "@index ";
-pub const COMMANDS: &[&str] = &["/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside", "/embed-pending"];
+pub const COMMANDS: &[&str] = &["/index-doc", "/remove-doc", "/bm25", "/index-plan", "/index-outside", "/embed-pending", "/ocr-step"];
 
 //------------------------------------------------------------------
 // 인자에서 경로 꺼내기 — JSON {"path": …} 이면 그 값, 아니면 글자 그대로(따옴표 제거)
@@ -80,6 +82,7 @@ pub fn run(app: &App, cmd: &str, arg: &str) -> Map<String, Value> {
         "/bm25" => rebuild_bm25(app, parse_value(arg, "merge").and_then(|v| v.as_bool()).unwrap_or(true)),
         "/index-plan" => Ok(plan(app, &parse_path(arg), truthy(parse_value(arg, "allow_delete")))),
         "/embed-pending" => embed_pending(app, parse_value(arg, "max").and_then(|v| v.as_u64()).unwrap_or(64) as usize),
+        "/ocr-step" => ocr_step(app, parse_value(arg, "pages").and_then(|v| v.as_u64()).unwrap_or(1) as usize),
         _ => Ok(obj(json!({"ok": false, "why": "알 수 없는 명령"}))),
     };
     let res = r.unwrap_or_else(|e| {
@@ -237,6 +240,49 @@ fn embed_pending(app: &App, max: usize) -> Result<Map<String, Value>, String> {
     }
     let (done, left) = indexer::retitle_stale(&mut st, &app.embedder, &app.store, Some(1), &mut |_| {})?;
     Ok(obj(json!({"ok": true, "filled": 0, "pending": 0, "retitle": left, "retitled": done})))
+}
+
+//------------------------------------------------------------------
+// OCR 대기열 조금씩 처리 (OCR 설계서 §6)
+//=> 대기열에서 최대 pages 쪽만 OCR 한다(엔진은 대기열이 빌 때까지 올려 둔다). 문서 하나를 끝내면
+//   그 문서를 다시 반영하고 키워드 색인에 덧붙여 바로 찾히게 한다.
+//
+// -in: app = 앱 / pages = 이번에 처리할 최대 쪽 수(0 이면 남은 수만)
+//
+// -out: {ok, enabled, pages(이번 쪽), docs(끝낸 문서), failed, docs_left, pages_left, name, page, of, sec_per_page}
+// -out: error = 상태 파일·저장소 실패면 Err (OCR 자체 실패는 그 문서를 실패 목록으로 옮기고 ok)
+//------------------------------------------------------------------
+fn ocr_step(app: &App, pages: usize) -> Result<Map<String, Value>, String> {
+    let mut st = state()?;
+    let enabled = crate::ocr::enabled();
+    let (d, p) = indexer::ocr_queue_size(&st);
+    if !enabled || pages == 0 || d == 0 {
+        if d == 0 {
+            crate::ocr::unload();
+        }
+        return Ok(obj(json!({"ok": true, "enabled": enabled, "pages": 0, "docs": 0, "failed": 0, "docs_left": d, "pages_left": p})));
+    }
+    app.store.ensure_loaded()?;
+    app.embedder.ensure_loaded()?;
+    let done = std::cell::Cell::new(0usize);
+    let last = std::cell::RefCell::new(indexer::OcrProgress::default());
+    let stop = || done.get() >= pages;
+    let run = indexer::run_ocr_queue(&mut st, &app.embedder, &app.store, &mut |_| {}, &stop,
+        &mut |pr| {
+            done.set(done.get() + 1);
+            *last.borrow_mut() = pr.clone();
+        }, true)?;
+    // 끝낸 문서는 키워드 색인에 바로 덧붙인다(합치기 · 메타 마무리는 다음 /bm25 가)
+    if run.docs > 0 {
+        let tok = app.embedder.tokenizer()?;
+        indexer::append_bm25(&app.store, &app.bm25, &tok, &mut |_| {})?;
+    }
+    let (d2, p2) = indexer::ocr_queue_size(&st);
+    let pr = last.into_inner();
+    let mut out = obj(json!({"ok": true, "enabled": true, "pages": run.pages, "docs": run.docs, "failed": run.failed,
+                             "docs_left": d2, "pages_left": p2, "name": pr.name, "page": pr.page, "of": pr.of}));
+    out.insert("sec_per_page".into(), pyutil::jf(pyutil::round_to(pr.sec_per_page, 2)));
+    Ok(out)
 }
 
 //------------------------------------------------------------------

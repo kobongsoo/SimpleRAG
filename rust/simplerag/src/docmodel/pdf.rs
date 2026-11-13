@@ -96,15 +96,49 @@ pub fn extract_keep(path: &str, title: &str, keep: Option<&dyn Fn(usize, usize) 
     if let Some((i, n)) = stop_note {
         doc.warnings.push(format!("PDF 부분 추출 {}/{}쪽 (상한)", i, n));
     }
+    // OCR — 스캔 쪽은 캐시에 글이 있으면 그 줄을 쪽 끝에 붙이고, 없으면 대기열로 보낼 쪽만 적는다
+    //   (OCR 설계서 §4 · §6). 고른 쪽만 읽을 때(비슷한 문서 찾기)는 OCR 하지 않는다
+    let mut ocr_rows: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    let mut info = crate::ocr::DocOcr::default();
+    if keep.is_none() && crate::ocr::enabled() {
+        let (want, dropped) = crate::ocr::pdf_ocr_pages(&raw_pages);
+        if !want.is_empty() {
+            let cache = crate::indexer::content_hash(path).ok().and_then(|h| crate::ocr::load_cache(&h));
+            for &i in &want {
+                match cache.as_ref().and_then(|c| c.pages.get(&(i + 1))) {
+                    Some(lines) => {
+                        let boxes: Vec<(String, [f32; 4])> = lines.iter().map(|l| (l.t.clone(), l.b)).collect();
+                        ocr_rows.insert(i, crate::ocr::group_rows(&boxes).into_iter().map(|r| r.0).collect());
+                        info.done.push(i + 1);
+                    }
+                    None => info.pending.push(i + 1),
+                }
+            }
+            if dropped > 0 {
+                doc.warnings.push(format!("OCR 부분 {}/{}쪽 (상한)", want.len(), want.len() + dropped));
+            }
+        }
+    }
+    if keep.is_none() {
+        crate::ocr::note(path, info.clone());
+    }
     let mut pages: Vec<Vec<String>> = vec![];
     let mut sizes: Vec<Vec<Option<f64>>> = vec![];
     let mut anchors: Vec<BTreeMap<usize, Vec<Vec<Vec<String>>>>> = vec![];
-    for p in &raw_pages {
+    // 쪽마다 OCR 줄이 시작하는 줄 번호 — 이 번호부터는 OCR 출처 블록이다
+    let mut ocr_from: Vec<usize> = vec![];
+    for (pi, p) in raw_pages.iter().enumerate() {
         // 표가 있으면 표 글자를 뺀 글로 줄을 만든다(줄 수는 원문과 같다)
         let (body, at) = if p.tables.is_empty() { (p.text.clone(), BTreeMap::new()) } else { strip_tables(&p.text, &p.tables) };
-        let lines: Vec<String> = split_lines(&body).into_iter().map(|l| pyutil::rstrip(&l).to_string()).collect();
+        let mut lines: Vec<String> = split_lines(&body).into_iter().map(|l| pyutil::rstrip(&l).to_string()).collect();
         // 글자 크기는 원문 글(p.text)로 잰다 — 줄바꿈을 그대로 두었으므로 줄 번호가 같다
-        let sz = if infer { line_sizes(p, lines.len()) } else { vec![None; lines.len()] };
+        let mut sz = if infer { line_sizes(p, lines.len()) } else { vec![None; lines.len()] };
+        ocr_from.push(lines.len());
+        // 글자층 줄 뒤에 OCR 줄을 붙인다 — 글자층(쪽 번호·제목)이 먼저, 그림 속 본문이 뒤
+        if let Some(rows) = ocr_rows.get(&pi) {
+            lines.extend(rows.iter().cloned());
+            sz.extend(std::iter::repeat(None).take(rows.len()));
+        }
         pages.push(lines);
         sizes.push(sz);
         anchors.push(at);
@@ -113,7 +147,8 @@ pub fn extract_keep(path: &str, title: &str, keep: Option<&dyn Fn(usize, usize) 
     let n_tables: usize = anchors.iter().map(|at| at.values().map(|v| v.len()).sum::<usize>()).sum();
     let total: usize = pages.iter().map(|p| p.iter().map(|l| l.chars().filter(|c| !pyutil::is_space(*c)).count()).sum::<usize>()).sum();
     // 글이 전부 표 안에 있는 쪽들도 텍스트층은 있는 것이다
-    if total < MIN_TEXT_CHARS && n_tables == 0 {
+    //   OCR 을 기다리는 쪽이 있으면 실패가 아니다 — 빈 문서로 돌려주고 색인이 대기열에 넣는다
+    if total < MIN_TEXT_CHARS && n_tables == 0 && info.pending.is_empty() {
         return Err("PDF 텍스트층 없음(스캔 PDF)".into());
     }
     let edge = edge_kinds(&pages);
@@ -129,6 +164,11 @@ pub fn extract_keep(path: &str, title: &str, keep: Option<&dyn Fn(usize, usize) 
             }
             let t = pyutil::strip(ln);
             if t.is_empty() {
+                continue;
+            }
+            // OCR 줄 — 제목 추론·머리말 판정 없이 본문 문단으로, 출처는 ocr
+            if j >= ocr_from[pi] {
+                doc.blocks.push(Block::new(B::PARAGRAPH, t).pg(Some(no)).src(B::SRC_OCR));
                 continue;
             }
             if let Some(lv) = heads.get(&(no, j)) {

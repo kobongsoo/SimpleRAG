@@ -320,6 +320,19 @@ PDF_INFER_HEADINGS = bool(_setting("extract.pdf_headings", False, "SIMPLERAG_PDF
 #   켜면 청크가 바뀌므로 전체 재인덱싱이 필요하다(청킹 설정 기록에 들어간다).
 PDF_TABLES = bool(_setting("extract.pdf_tables", True, "SIMPLERAG_PDF_TABLES",
                            lambda s: s.strip() not in ("0", "false", "no", "")))
+# 스캔 PDF OCR(OCR 설계서 2026-11-13) — 기본 켬. Rust 판과 같은 모델·같은 캐시(<데이터 루트>/ocr_cache)를 쓴다.
+#   Python 판은 대기열 없이 추출할 때 바로 OCR 한다(측정·대조용). rapidocr 가 없으면 꺼진 것처럼 동작한다.
+OCR = bool(_setting("extract.ocr", True, "SIMPLERAG_OCR",
+                    lambda s: s.strip() not in ("0", "false", "no", "")))
+# OCR 스레드 — P/E 혼합 CPU 에서 8 보다 4 가 빨랐다(2026-11-13 실측)
+OCR_THREADS = int(_setting("extract.ocr_threads", 4, "SIMPLERAG_OCR_THREADS"))
+# 한 문서에서 OCR 하는 쪽 상한(앞에서부터)
+OCR_MAX_PAGES = int(_setting("extract.ocr_max_pages", 100, "SIMPLERAG_OCR_MAX_PAGES"))
+# 그림 파일 OCR — Rust 판만 한다(Python 판은 설정만 읽는다)
+OCR_IMAGES = OCR and bool(_setting("extract.ocr_images", True, "SIMPLERAG_OCR_IMAGES",
+                                   lambda s: s.strip() not in ("0", "false", "no", "")))
+# OCR 모델 폴더 — 환경변수 > <MODELS_DIR>/ocr
+OCR_DIR = os.environ.get("SIMPLERAG_OCR_DIR") or os.path.join(MODELS_DIR, "ocr")
 # 문서별 블록 JSON 을 <데이터 루트>/blocks_dump 에 남긴다(진단용, 기본 끔)
 EXTRACT_DUMP = bool(_setting("extract.dump_blocks", False))
 # 약한 초과 허용 α — 단위(블록·표 행) 하나가 예산 × α 이하면 쪼개지 않고 통째로 둔다.

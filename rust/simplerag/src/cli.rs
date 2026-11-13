@@ -70,6 +70,9 @@ pub struct Args {
     pub no_llm: bool,
     pub group: bool,
     pub similar: bool,
+    // index 끝 OCR 대기열 건너뛰기 · ocr 시험 때 쪽 고르기("1,3-5")
+    pub no_ocr: bool,
+    pub pages: Option<String>,
 }
 
 fn model_mode(alias: &str) -> String {
@@ -163,6 +166,13 @@ pub fn cmd_index(a: &Args) -> i32 {
             }
         }
     };
+    // 스캔 문서·그림 파일 OCR — 인덱싱이 끝나 이미 검색할 수 있는 상태에서 이어 처리한다(OCR 설계서 §6)
+    if code != 1 && !a.no_ocr {
+        let mut lg2 = |m: &str| outln(m);
+        if let Err(e) = indexer::ocr_queue_and_bm25(&app.embedder, &app.store, &app.bm25, &mut lg2) {
+            log(&format!("⚠️ OCR 대기열 처리 실패: {}", e));
+        }
+    }
     app.close();
     code
 }
@@ -526,9 +536,11 @@ pub fn render_answer(app: &App, query: &str, top_k: Option<usize>, max_tokens: O
                     outln(&format!("      {}{}", pyutil::head(&body, 160), if pyutil::clen(&body) > 160 { "…" } else { "" }));
                     if full {
                         // 쪽 번호도 함께 — RAGSearchBox 탐색기 창이 AI 답의 [n] 을 누르면 그 쪽을 미리 보기에 띄운다
-                        let page = app.store.payloads(&[c.id]).ok().and_then(|m| m.get(&c.id).and_then(|p| p.get("page").cloned()))
-                            .unwrap_or(Value::Null);
-                        let v = json!({"no": i + 1, "path": c.doc_path, "text": c.text, "page": page});
+                        let pl = app.store.payloads(&[c.id]).ok().and_then(|m| m.get(&c.id).cloned());
+                        let page = pl.as_ref().and_then(|p| p.get("page").cloned()).unwrap_or(Value::Null);
+                        // OCR 로 읽은 근거 — 근거 카드가 "스캔 · 글자 인식" 표시를 단다(OCR 설계서 §9)
+                        let ocr = pl.as_ref().and_then(|p| p.get("ocr")).and_then(|v| v.as_bool()).unwrap_or(false);
+                        let v = json!({"no": i + 1, "path": c.doc_path, "text": c.text, "page": page, "ocr": ocr});
                         outln(&format!("  @ev {}", pyutil::json_ascii(&v, false)));
                     }
                 }
@@ -934,6 +946,127 @@ pub fn cmd_extract(a: &Args) -> i32 {
     let n = pyutil::clen(&text);
     if n > chars {
         outln(&format!("\n... (이하 {}자 생략)", pyutil::comma((n - chars) as i64)));
+    }
+    0
+}
+
+// ── ocr ───────────────────────────────────────────────────
+
+//------------------------------------------------------------------
+// "1,3-5" → 쪽 번호(1부터) 목록. 비면 None(전부)
+//------------------------------------------------------------------
+fn parse_pages(s: Option<&str>) -> Option<Vec<usize>> {
+    let s = s?;
+    let mut v = vec![];
+    for part in s.split(',').map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        match part.split_once('-') {
+            Some((a, b)) => {
+                if let (Ok(a), Ok(b)) = (a.trim().parse::<usize>(), b.trim().parse::<usize>()) {
+                    v.extend(a.max(1)..=b);
+                }
+            }
+            None => {
+                if let Ok(n) = part.parse::<usize>() {
+                    v.push(n.max(1));
+                }
+            }
+        }
+    }
+    if v.is_empty() { None } else { Some(v) }
+}
+
+//------------------------------------------------------------------
+// ocr 명령
+//=> 파일을 주면 그 파일만 OCR 해 쪽마다 시간·줄 수·글을 보여 준다(시험·RapidOCR 비교용).
+//   --out 을 주면 줄 상자·점수까지 JSON 으로 쓴다. 파일이 없으면 인덱스의 OCR 대기열을 처리한다.
+//
+// -in: a.path = 파일(없으면 대기열) / a.pages = 쪽 고르기 / a.out = JSON 경로 / a.chars = 쪽당 보일 글자 수
+//
+// -out: 종료 코드 0 = 성공, 1 = 실패, 2 = 파일 없음
+//------------------------------------------------------------------
+pub fn cmd_ocr(a: &Args) -> i32 {
+    let Some(path) = a.path.clone() else {
+        return crate::indexer::cmd_ocr_queue(a);
+    };
+    if !std::path::Path::new(&path).exists() {
+        log(&format!("파일 없음: {}", path));
+        return 2;
+    }
+    if let Err(e) = crate::ocr::models_present() {
+        log(&e);
+        return 1;
+    }
+    let chars = a.chars.unwrap_or(300);
+    let want = parse_pages(a.pages.as_deref());
+    let t_all = std::time::Instant::now();
+    let mut json_pages = serde_json::Map::new();
+    let (mut n_lines, mut n_pages, mut ocr_ms_sum) = (0usize, 0usize, 0f64);
+    // 쪽(또는 그림) 하나를 OCR 해 보여 주고 JSON 에 담는다
+    let mut one = |no: usize, img: &crate::ocr::Bgr, render_ms: f64| -> Result<(), String> {
+        let t0 = std::time::Instant::now();
+        let lines = crate::ocr::ocr_image(img)?;
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let rows = crate::ocr::group_rows(&lines.iter().map(|l| (l.text.clone(), l.bbox())).collect::<Vec<_>>());
+        outln(&format!("── {}쪽 · {}×{} · 그리기 {:.0}ms · OCR {:.0}ms · 상자 {} · 줄 {}", no, img.w, img.h, render_ms, ms, lines.len(), rows.len()));
+        let text = rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>().join("\n");
+        outln(pyutil::head(&text, chars));
+        json_pages.insert(no.to_string(), serde_json::json!({
+            "w": img.w, "h": img.h, "render_ms": render_ms, "ocr_ms": ms,
+            "lines": lines.iter().map(|l| serde_json::json!({"t": l.text, "s": l.score, "q": l.quad})).collect::<Vec<_>>(),
+        }));
+        n_lines += lines.len();
+        n_pages += 1;
+        ocr_ms_sum += ms;
+        Ok(())
+    };
+    let res: Result<(), String> = (|| {
+        // 폴더 — 안의 그림 파일을 이름 순으로(엔진을 한 번만 올려 비교 측정할 때)
+        if std::path::Path::new(&path).is_dir() {
+            let mut files: Vec<String> = std::fs::read_dir(&path).map_err(|e| e.to_string())?
+                .filter_map(|e| e.ok()).map(|e| e.path().to_string_lossy().into_owned())
+                .filter(|p| crate::ocr::image::is_image(p)).collect();
+            files.sort();
+            for (i, f) in files.iter().enumerate() {
+                let t0 = std::time::Instant::now();
+                let img = crate::ocr::image::load(f)?.remove(0);
+                outln(&format!("[{}] {}", i + 1, pyutil::basename(f)));
+                one(i + 1, &img, t0.elapsed().as_secs_f64() * 1000.0)?;
+            }
+            return Ok(());
+        }
+        if pyutil::ext_lower(&path) == ".pdf" {
+            let data = std::fs::read(&path).map_err(|e| format!("읽기 실패: {}", e))?;
+            let n = crate::pdfium::page_count(&data)?;
+            let pages = want.clone().unwrap_or_else(|| (1..=n).collect());
+            for no in pages.into_iter().filter(|&p| p <= n) {
+                let t0 = std::time::Instant::now();
+                let r = crate::pdfium::render_page(&data, no - 1, crate::ocr::DPI)?;
+                one(no, &r.img, t0.elapsed().as_secs_f64() * 1000.0)?;
+            }
+        } else {
+            let t0 = std::time::Instant::now();
+            let frames = crate::ocr::image::load(&path)?;
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            for (i, img) in frames.iter().enumerate() {
+                if want.as_ref().map_or(true, |w| w.contains(&(i + 1))) {
+                    one(i + 1, img, ms)?;
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(e) = res {
+        log(&format!("OCR 실패: {}", e));
+        return 1;
+    }
+    outln(&format!("합계: {}쪽 · 상자 {} · OCR 평균 {:.2}초/쪽 · 전체 {:.1}초", n_pages, n_lines,
+        if n_pages > 0 { ocr_ms_sum / n_pages as f64 / 1000.0 } else { 0.0 }, t_all.elapsed().as_secs_f64()));
+    if let Some(out) = &a.out {
+        let j = serde_json::json!({"file": path, "engine": crate::ocr::ENGINE, "dpi": crate::ocr::DPI, "pages": json_pages});
+        if let Err(e) = std::fs::write(out, serde_json::to_string_pretty(&j).unwrap_or_default()) {
+            log(&format!("JSON 쓰기 실패: {}", e));
+            return 1;
+        }
     }
     0
 }

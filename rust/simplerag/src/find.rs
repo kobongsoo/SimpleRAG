@@ -246,6 +246,8 @@ fn find_core(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
                 // 글 미리 보기(PDF 아닌 문서 · 설계서 §14-③ C)에 쓰는 청크 본문 — 이 쪽의 청크들을 이어서
                 "text": hs.iter().map(|h| clean_body(&split_prefix(pl_str(&h.payload, "text")).0)).collect::<Vec<_>>().join("\n…\n"),
                 "chunk_idx": best.payload.get("chunk_idx").cloned().unwrap_or(Value::Null),
+                // 스캔 쪽·그림 파일을 OCR 로 읽은 글 — 화면이 "스캔 · 글자 인식" 표시를 단다(OCR 설계서 §9)
+                "ocr": best.payload.get("ocr").and_then(|v| v.as_bool()).unwrap_or(false),
             });
             if all {
                 // 모두 찾기는 줄이 많아 본문 대신 청크 id 를 싣고, 쪽을 고를 때 /find-page 로 본문을 받는다
@@ -367,6 +369,7 @@ fn scan_page_line(no: usize, ids: &[i64], pls: &HashMap<i64, Payload>, kws: &[St
         "exact": exact, "section": section, "score": Value::Null, "low": false,
         "snippet": snip, "marks": marks, "more": ids.len() - 1,
         "chunk_idx": best.get("chunk_idx").cloned().unwrap_or(Value::Null),
+        "ocr": best.get("ocr").and_then(|v| v.as_bool()).unwrap_or(false),
         "ids": ids.iter().take(PAGE_IDS).copied().collect::<Vec<_>>(),
     })
 }

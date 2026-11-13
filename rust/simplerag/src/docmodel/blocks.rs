@@ -26,6 +26,8 @@ pub fn excluded(t: &str) -> bool {
 pub const SRC_PARSER: &str = "parser";
 pub const SRC_INFERRED: &str = "inferred";
 pub const SRC_REGEX: &str = "regex";
+// 스캔 쪽·그림 파일을 OCR 로 읽은 글 (OCR 설계서)
+pub const SRC_OCR: &str = "ocr";
 
 //------------------------------------------------------------------
 // 블록 하나

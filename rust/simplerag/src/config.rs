@@ -181,6 +181,12 @@ pub struct Config {
     pub extract_engine: String,
     pub pdf_infer_headings: bool,
     pub pdf_tables: bool,
+    // 스캔 문서·그림 파일 OCR (OCR 설계서) — 켬/끔, 스레드, 문서당 쪽 상한, 그림 파일 포함, 모델 폴더
+    pub ocr: bool,
+    pub ocr_threads: i64,
+    pub ocr_max_pages: i64,
+    pub ocr_images: bool,
+    pub ocr_dir: String,
     pub chunk_table_whole: i64,
     pub extract_dump: bool,
     pub chunk_overflow_ratio: f64,
@@ -375,6 +381,30 @@ fn build() -> Result<Config, ConfigError> {
         Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
         None => pick_bool(&y, "extract.pdf_tables", true),
     };
+    // 스캔 PDF·그림 파일 OCR — 기본 켬. 끄면 지금처럼 "PDF 텍스트층 없음"으로 실패한다(OCR 설계서 §8-1).
+    //   켜고 끄는 데 전체 재인덱싱은 필요 없다 — 실패한 스캔본이 OCR 대기열로 간다
+    let ocr = match env("SIMPLERAG_OCR") {
+        Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
+        None => pick_bool(&y, "extract.ocr", true),
+    };
+    // OCR 스레드 — P/E 혼합 CPU 에서 8 보다 4 가 빨랐다(2026-11-13 실측)
+    let ocr_threads = pick_int(&y, "extract.ocr_threads", 4, Some("SIMPLERAG_OCR_THREADS"))?.clamp(1, 64);
+    // 한 문서에서 OCR 하는 쪽 상한(앞에서부터). 370쪽짜리 한 건이 대기열을 오래 붙잡지 않게
+    let ocr_max_pages = pick_int(&y, "extract.ocr_max_pages", 100, Some("SIMPLERAG_OCR_MAX_PAGES"))?.max(1);
+    // 그림 파일(.png .jpg .jpeg .tif .tiff .bmp)도 인덱싱해 OCR — ocr 이 꺼지면 함께 꺼진다
+    let ocr_images = ocr && match env("SIMPLERAG_OCR_IMAGES") {
+        Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
+        None => pick_bool(&y, "extract.ocr_images", true),
+    };
+    // OCR 모델 폴더 — 환경변수 > <models_dir>/ocr > 프로그램 폴더 models/ocr (데이터 폴더를 따로 둔 앱 워커)
+    let ocr_dir = match env("SIMPLERAG_OCR_DIR") {
+        Some(d) => pyutil::abspath(&d),
+        None => {
+            let a = pyutil::join(&models_dir, "ocr");
+            let b = pyutil::join(&pyutil::join(&app_dir, "models"), "ocr");
+            if !std::path::Path::new(&a).is_dir() && std::path::Path::new(&b).is_dir() { b } else { a }
+        }
+    };
     // 작은 표 통째로 — 표 전체가 이 토큰 이하면 행으로 나누지 않고 한 청크에 둔다(0 = 끔, 기본 384).
     //   행마다 청크가 되면 같은 표의 형제 행들이 검색 상위를 독차지한다. 바꾸면 재인덱싱이 필요하다
     let chunk_table_whole = pick_int(&y, "chunk.table_whole", 384, Some("SIMPLERAG_CHUNK_TABLE_WHOLE"))?;
@@ -539,6 +569,11 @@ fn build() -> Result<Config, ConfigError> {
         extract_engine,
         pdf_infer_headings,
         pdf_tables,
+        ocr,
+        ocr_threads,
+        ocr_max_pages,
+        ocr_images,
+        ocr_dir,
         chunk_table_whole,
         extract_dump,
         chunk_overflow_ratio,
@@ -722,6 +757,10 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("dump_blocks", Check::Bool),
             ("pdf_headings", Check::Bool),
             ("pdf_tables", Check::Bool),
+            ("ocr", Check::Bool),
+            ("ocr_threads", Check::Int(1, 64)),
+            ("ocr_max_pages", Check::Int(1, 100_000)),
+            ("ocr_images", Check::Bool),
         ]),
         ("retrieval", vec![
             ("dense_top_k", Check::Int(1, 1000)),

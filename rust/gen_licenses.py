@@ -31,6 +31,11 @@ MODELS = [
     {"path": "bge-reranker-base-int8", "role": "리랭커(검색 결과 재정렬)", "name": "BAAI/bge-reranker-base (ONNX int8 변환)",
      "dev": "Beijing Academy of Artificial Intelligence (BAAI)", "license": "MIT", "url": "https://huggingface.co/BAAI/bge-reranker-base",
      "text": "FlagEmbedding-MIT.txt"},
+    # 2026-11-13 Hugging Face 모델 카드로 확인 — 검출 PP-OCRv6_tiny_det · 인식 korean_PP-OCRv5_mobile_rec (둘 다 ONNX)
+    {"path": "ocr", "role": "OCR(스캔 문서 · 그림 파일 글자 읽기)",
+     "name": "PaddlePaddle/PP-OCRv6_tiny_det_onnx + PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx",
+     "dev": "PaddlePaddle (Baidu)", "license": "Apache-2.0", "url": "https://huggingface.co/collections/PaddlePaddle/pp-ocrv6",
+     "text": "Qwen3-Apache-2.0.txt", "strip_copyright": True},
     {"path": "Qwen3-0.6B-Q4_K_M.gguf", "role": "생성(sLLM)", "name": "Qwen/Qwen3-0.6B (unsloth GGUF Q4_K_M)",
      "dev": "Alibaba Cloud (Qwen)", "license": "Apache-2.0", "url": "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF", "text": "Qwen3-Apache-2.0.txt"},
     {"path": "Qwen3-1.7B-Q4_K_M.gguf", "role": "생성(sLLM) — 기본", "name": "Qwen/Qwen3-1.7B (unsloth GGUF Q4_K_M)",

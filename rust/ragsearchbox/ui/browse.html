@@ -234,6 +234,7 @@
   .pgchip { display: inline-block; border: 1px solid var(--rule); border-radius: 5px; padding: 0 6px; font-family: Consolas, monospace;
     font-size: calc(var(--fs) * .82); background: var(--surface); white-space: nowrap; }
   .pgchip.approx { border-style: dashed; }
+  .ocrtag { display: inline-block; font-size: 11px; color: #b45309; background: rgba(217, 119, 6, .14); border-radius: 9px; padding: 0 6px; margin-left: 4px; white-space: nowrap; }
   .rel { display: inline-flex; gap: 2px; }
   .rel i { width: 8px; height: 8px; border-radius: 2px; background: var(--rule); }
   .rel i.f { background: var(--brand); }
@@ -900,7 +901,9 @@ function verLabel(m) {
 function pageLabel(p) {
   if (p.page == null) return "";
   const to = p.page_to != null && p.page_to > p.page && !p.exact ? "–" + p.page_to : "";
-  return `<span class="pgchip ${p.exact ? "" : "approx"}" title="${p.exact ? "" : "근사 쪽"}">p.${p.page}${to}</span>`;
+  // OCR 로 읽은 쪽 — 글자가 틀릴 수 있어 원본을 확인하게 알린다(OCR 설계서 §9)
+  const ocr = p.ocr ? `<span class="ocrtag" title="스캔한 그림에서 글자를 읽은 결과라 글자가 틀릴 수 있습니다 — 원본을 확인하세요">스캔</span>` : "";
+  return `<span class="pgchip ${p.exact ? "" : "approx"}" title="${p.exact ? "" : "근사 쪽"}">p.${p.page}${to}</span>${ocr}`;
 }
 function dateOf(m) {
   if (!m.mtime) return "";

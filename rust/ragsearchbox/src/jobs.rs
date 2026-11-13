@@ -51,6 +51,7 @@ enum Handler {
     Bm25,
     Bm25Mid,
     Pending,
+    Ocr,
 }
 
 struct Round {
@@ -97,6 +98,14 @@ pub struct IndexJobs {
     vec_total: usize,
     // 이름이 바뀌어 쉬는 동안 제목을 다시 만들 문서 수(워커 /embed-pending 이 한 건씩 처리)
     retitle_pending: usize,
+    // 스캔 문서 · 그림 파일 OCR 대기(OCR 설계서 §6) — (남은 문서, 남은 쪽). None 이면 아직 모름(한 번 물어본다)
+    ocr_left: Option<(usize, usize)>,
+    // [잠시 멈춤] — 앱을 끌 때까지
+    pub ocr_paused: bool,
+    // 마지막 /ocr-step 결과(설정 화면 "지금: … 3/4쪽" · 남은 시간) · 이번 실행에서 끝낸 문서 · 실패 수
+    ocr_last: Value,
+    ocr_done: usize,
+    ocr_failed: usize,
     // 폴더별 인덱싱 진행 — 폴더 → (끝낸 수, 전체). 탐색 창에 "Desktop (10/311)" 로 보이고, 끝나면 뺀다
     prog: HashMap<String, (usize, usize)>,
     // 진행 · 대기가 바뀔 때마다 늘어난다 — 메인이 보고 탐색 창 숫자를 고친다
@@ -134,6 +143,7 @@ impl IndexJobs {
             last_avail: None, outside_needed: true, approve_outside: false, waiting_new: HashMap::new(), waiting_delete: HashMap::new(),
             round: Round { done: 0, total: 0, changed: vec![], failed: vec![] },
             vec_pending: None, vec_total: 0, retitle_pending: 0, prog: HashMap::new(), prog_ver: 0, running_approved: HashSet::new(),
+            ocr_left: None, ocr_paused: false, ocr_last: json!({}), ocr_done: 0, ocr_failed: 0,
         }
     }
 
@@ -329,7 +339,9 @@ impl IndexJobs {
         if self.disabled_reason.is_some() {
             return "자동 인덱싱 멈춤".into();
         }
-        if self.inflight.is_some() || !self.docs.is_empty() {
+        // OCR 한 쪽을 읽는 중은 인덱싱이 아니다 — 설정 바꾸기를 막지 않고 OCR 진행을 보인다(아래)
+        let ocr_busy = self.inflight.as_deref() == Some("OCR") && self.docs.is_empty();
+        if !ocr_busy && (self.inflight.is_some() || !self.docs.is_empty()) {
             if self.round.total > 0 {
                 return format!("문서 처리 중 {}/{}", self.round.done, self.round.total);
             }
@@ -338,9 +350,19 @@ impl IndexJobs {
         if !self.waiting_new.is_empty() || !self.waiting_delete.is_empty() {
             return "'지금 인덱싱' 필요".into();
         }
-        match self.vec_progress() {
-            Some((done, total)) => format!("검색 정확도 높이는 중 {}/{}", comma(done), comma(total)),
-            None => String::new(),
+        if let Some((done, total)) = self.vec_progress() {
+            return format!("검색 정확도 높이는 중 {}/{}", comma(done), comma(total));
+        }
+        // 스캔 문서 OCR — 끝낸 건수 / (끝낸 + 남은) 건수 (OCR 설계서 §8-2)
+        match self.ocr_left {
+            Some((d, _)) if d > 0 && self.s.ocr => {
+                if self.ocr_paused {
+                    format!("스캔 문서 읽기 멈춤 (남은 {}건)", d)
+                } else {
+                    format!("스캔 문서 읽는 중 {}/{}", self.ocr_done, self.ocr_done + d)
+                }
+            }
+            _ => String::new(),
         }
     }
 
@@ -425,7 +447,75 @@ impl IndexJobs {
         if idle && (self.vec_pending.map(|n| n > 0).unwrap_or(true) || self.retitle_pending > 0) {
             let line = format!("/embed-pending {}", crate::worker::ascii_json(&json!({"max": PENDING_STEP})));
             self.send(line, Handler::Pending, "벡터 채우기");
+            return;
         }
+        // 스캔 문서 · 그림 파일 OCR — 벡터를 다 채운 뒤 질문이 없을 때 한 쪽씩(쪽당 1~3초, 질문이 오면 그 쪽 뒤에 비켜 준다)
+        if idle && self.s.ocr && !self.ocr_paused && self.ocr_left.map_or(true, |(d, _)| d > 0) {
+            let line = format!("/ocr-step {}", crate::worker::ascii_json(&json!({"pages": 1})));
+            self.send(line, Handler::Ocr, "OCR");
+        }
+    }
+
+    //------------------------------------------------------------------
+    // OCR 진행 상황 — 설정 > 기본 > 스캔 문서 묶음이 보인다(OCR 설계서 §8-2)
+    //=> {on, images, paused, known, docs_left, pages_left, name, page, of, sec_per_page, done, failed}
+    //------------------------------------------------------------------
+    pub fn ocr_status(&self) -> Value {
+        let (d, p) = self.ocr_left.unwrap_or((0, 0));
+        json!({
+            "on": self.s.ocr, "images": self.s.ocr_images, "paused": self.ocr_paused, "known": self.ocr_left.is_some(),
+            "docs_left": d, "pages_left": p,
+            "name": self.ocr_last["name"], "page": self.ocr_last["page"], "of": self.ocr_last["of"],
+            "sec_per_page": self.ocr_last["sec_per_page"], "done": self.ocr_done, "failed": self.ocr_failed,
+        })
+    }
+
+    // OCR 켬/끔 · 그림 파일 바꾼 뒤 — 워커가 다시 뜨면 대기열을 다시 물어본다
+    pub fn ocr_changed(&mut self, s: &Settings) {
+        self.s.ocr = s.ocr;
+        self.s.ocr_images = s.ocr_images;
+        self.ocr_left = None;
+        self.ocr_last = json!({});
+    }
+
+    //------------------------------------------------------------------
+    // /ocr-step 결과 — 남은 수를 기억하고, 문서를 끝냈으면 알리고, 다 끝나면 한 번 알린다
+    //------------------------------------------------------------------
+    fn on_ocr(&mut self, res: &Value) {
+        if Self::b(res, "stopped") {
+            return;
+        }
+        if !Self::b(res, "ok") {
+            // 실패하면 이번 워커에서는 더 보내지 않는다(다음에 워커가 뜨면 다시 본다)
+            crate::warn!("autoindex", "OCR 실패: {}", res["why"]);
+            self.ocr_left = Some((0, 0));
+            return;
+        }
+        if !Self::b(res, "enabled") {
+            self.ocr_left = Some((0, 0));
+            return;
+        }
+        let was = self.ocr_left.map(|x| x.0).unwrap_or(0);
+        let left = (res["docs_left"].as_u64().unwrap_or(0) as usize, res["pages_left"].as_u64().unwrap_or(0) as usize);
+        if self.ocr_left.is_none() && left.0 > 0 {
+            crate::info!("autoindex", "OCR 대기 {}건 · {}쪽 — 질문이 없을 때 한 쪽씩 읽는다", left.0, left.1);
+        }
+        let docs = res["docs"].as_u64().unwrap_or(0) as usize;
+        if docs > 0 {
+            self.ocr_done += docs;
+            crate::info!("autoindex", "OCR 반영 {}: 남은 {}건 · {}쪽", res["name"].as_str().unwrap_or(""), left.0, left.1);
+            (self.notify)("doc", &format!("방금 반영(스캔 문서 읽기): {}", res["name"].as_str().unwrap_or("")));
+        }
+        self.ocr_failed += res["failed"].as_u64().unwrap_or(0) as usize;
+        if res["pages"].as_u64().unwrap_or(0) > 0 {
+            self.ocr_last = res.clone();
+        }
+        if left.0 == 0 && was > 0 {
+            crate::info!("autoindex", "OCR 끝 — {}건", self.ocr_done);
+            (self.notify)("info", &format!("스캔 문서 읽기가 끝났습니다 — {}건을 검색에 넣었습니다", self.ocr_done));
+        }
+        self.ocr_left = Some(left);
+        self.prog_ver += 1;
     }
 
     // 명령 보내기 — 결과는 post 로 돌아온다
@@ -465,6 +555,7 @@ impl IndexJobs {
                     Handler::Bm25 => self.on_bm25(&res),
                     Handler::Bm25Mid => self.on_bm25_mid(&res),
                     Handler::Pending => self.on_pending(&res),
+                    Handler::Ocr => self.on_ocr(&res),
                 }
             }
             JobMsg::Cli(results) => self.on_cli(results),
@@ -610,6 +701,8 @@ impl IndexJobs {
             (self.notify)("doc", &format!("방금 반영(이동): {}", name));
         } else if Self::b(res, "ok") && ["added", "modified", "copied", "removed", "retitled"].contains(&result) {
             self.bm25_needed = true;
+            // 스캔 문서 · 그림 파일이면 OCR 대기열이 늘었을 수 있다 — 다음 쉬는 때 다시 물어본다
+            self.ocr_left = None;
             self.bm25_mid_docs += 1;
             self.round.changed.push(name.clone());
             // retitled = 이름이 바뀐 문서를 옮기고 새 제목으로 다시 청킹했다
@@ -770,17 +863,22 @@ impl IndexJobs {
         let post = self.post.clone();
         let exts = self.s.index_exts.join(" ");
         let exclude = self.s.exclude_folders.join(";");
+        let ocr_env = crate::settings::ocr_env(&self.s);
         let job = self.worker.as_ref().and_then(|w| w.job_handle());
         std::thread::spawn(move || {
             let mut results = vec![];
             for (root, args) in jobs {
                 let t0 = Instant::now();
                 let mut c = std::process::Command::new(&base[0]);
-                c.args(&base[1..]).args(&args).stdin(std::process::Stdio::null());
+                // OCR 대기열은 워커가 쉬는 동안 한 쪽씩 처리한다 — index 명령이 몇 시간 붙잡지 않게 건너뛴다
+                c.args(&base[1..]).args(&args).arg("--no-ocr").stdin(std::process::Stdio::null());
                 // 자동 인덱싱은 사용자가 다른 일을 하는 중에 돈다 — 임베딩 스레드를 4 로 둔다(설계서 §3-2)
                 c.env("SIMPLERAG_EMBED_THREADS", "4");
                 c.env("SIMPLERAG_INDEX_EXTS", &exts);
                 c.env("SIMPLERAG_INDEX_EXCLUDE", &exclude);
+                for (k, v) in &ocr_env {
+                    c.env(k, v);
+                }
                 if let Some(d) = std::path::Path::new(&base[0]).parent() {
                     c.current_dir(d);
                 }
