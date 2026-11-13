@@ -697,6 +697,18 @@ pub struct OcrProgress {
 }
 
 //------------------------------------------------------------------
+// 문서 항목의 OCR 할 쪽 표시(ocr_pending) 지우기 — OCR 을 포기한 문서(실패)가 대기열로 되살아나지 않게
+//
+// -in: state = 인덱스 상태 / key = 문서 경로 키
+// -out: 없음 / error = 없음(항목이 없으면 그냥 넘어간다)
+//------------------------------------------------------------------
+fn clear_ocr_pending(state: &mut State, key: &str) {
+    if let Some(m) = docs_mut(state).get_mut(key).and_then(|v| v.as_object_mut()) {
+        m.remove("ocr_pending");
+    }
+}
+
+//------------------------------------------------------------------
 // OCR 대기열 처리 (핵심 — 설계서 §6)
 //=> 1) 스캔 PDF 를 남은 쪽이 적은 것부터, 그다음 그림 파일 순서로 한 건씩 꺼낸다
 //   2) 파일이 없거나 바뀌었으면 대기열에서만 뺀다(다음 인덱싱이 다시 넣는다)
@@ -719,8 +731,14 @@ pub fn run_ocr_queue(state: &mut State, embedder: &Embedder, store: &VectorStore
         return Ok(run);
     }
     // OCR 을 껐다 켠 사이 대기열에서 빠진 문서를 되살린다 — 문서 항목의 ocr_pending 이 기준
+    //   같은 파일(지문 같음)이 이미 실패 목록에 있으면 되살리지 않는다 — 예전에는 OCR 에 실패한 문서
+    //   (예: 이름만 .bmp 인 파일 129개)를 걸음마다 되살려 다시 실패시키며 실패 수를 12,900 까지 셌다
+    let failed_fp: HashMap<String, String> = state.get("failed").and_then(|v| v.as_object())
+        .map(|f| f.iter().filter_map(|(k, v)| Some((k.clone(), v.get("fingerprint")?.as_str()?.to_string()))).collect())
+        .unwrap_or_default();
     let lost: Vec<(String, String, Vec<usize>, bool)> = docs(state).iter()
         .filter(|(k, _)| !ocr_queue(state).contains_key(*k))
+        .filter(|(k, m)| failed_fp.get(*k).map(|f| Some(f.as_str()) != m.get("fingerprint").and_then(|x| x.as_str())).unwrap_or(true))
         .filter_map(|(k, m)| {
             let p: Vec<usize> = m.get("ocr_pending")?.as_array()?.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect();
             if p.is_empty() { return None; }
@@ -825,6 +843,7 @@ pub fn run_ocr_queue(state: &mut State, embedder: &Embedder, store: &VectorStore
                 } else {
                     run.failed += 1;
                     ocr_queue_drop(state, &key);
+                    clear_ocr_pending(state, &key);
                     save_state(state)?;
                     log(&format!("  [OCR 실패] {} — {}", name, r.why));
                 }
@@ -836,6 +855,8 @@ pub fn run_ocr_queue(state: &mut State, embedder: &Embedder, store: &VectorStore
                 let why = why_of(&e);
                 failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name, "at": at, "kept_old": true}));
                 ocr_queue_drop(state, &key);
+                // 문서 항목의 '읽을 쪽' 표시도 지운다 — 남겨 두면 다음 걸음에 되살려 또 실패한다
+                clear_ocr_pending(state, &key);
                 save_state(state)?;
                 log(&format!("  [OCR 실패] {} — {}", name, why));
             }
@@ -1403,6 +1424,24 @@ pub struct Plan {
     pub retry_skip: usize,
 }
 
+//------------------------------------------------------------------
+// 예전 실패를 OCR 로 다시 읽어 볼 문서인가 (설계서 §6-1)
+//=> OCR 이 꺼져 있던 때(0.1.3 이하 포함) 글자층이 없어 실패한 문서는 OCR 을 켜면 대기열로 갈 수 있다.
+//    1) "텍스트층 없음" — 구조 추출(pdf.rs)이 남긴 글
+//    2) "pdf:empty" — 예전 추출 경로(legacy.rs)가 같은 실패를 "하이브리드 전엔진 실패(감지=pdf; pdf:empty)" 로 남긴 글
+//    3) 그림 파일 — OCR 자체가 실패(OCRError)한 것이 아니면
+//   폴더 대조(plan_changes)와 워커 /index-doc 이 같은 판단을 써야 한다 — 예전에는 대조만 다시 넣고
+//   /index-doc 이 '전에 실패함' 으로 돌려보내, "새 문서 117건 — 지금 인덱싱할까요?" 를 순찰마다 물었다.
+//
+// -in: key = 문서 경로 / why = 실패 목록의 사유 (OCR 이 켜져 있는지는 부르는 쪽이 본다)
+//
+// -out: true = 다시 해 볼 문서
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn ocr_retry_failed(key: &str, why: &str) -> bool {
+    why.contains("텍스트층 없음") || why.contains("pdf:empty") || (crate::ocr::image::is_image(key) && !why.starts_with("OCRError"))
+}
+
 pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete: bool, rebuild: bool) -> Result<Plan, String> {
     let (files, skipped) = list_files(doc_dir, recursive).map_err(|e| e.to_string())?;
     let failed_before = state.get("failed").and_then(|v| v.as_object()).cloned().unwrap_or_default();
@@ -1419,12 +1458,8 @@ pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete:
             continue;
         }
         if let Some(f) = failed_before.get(&key) {
-            // 0.1.3 이하에서 "텍스트층 없음"으로 실패한 스캔 PDF 는 OCR 이 켜져 있으면 다시 계획한다(설계서 §6-1)
-            //   — 이번에는 대기열로 간다. 그림 파일도 OCR 이 꺼져 있던 때 실패했으면 다시 본다
-            //   예전 추출 경로(legacy.rs)는 같은 실패를 "하이브리드 전엔진 실패(감지=pdf; pdf:empty)" 로 적는다 — 운영 PC 175건이 이 글
-            let scan_retry = ocr_on && f.get("why").and_then(|v| v.as_str()).map_or(false, |w| w.contains("텍스트층 없음")
-                || w.contains("pdf:empty")
-                || (crate::ocr::image::is_image(&key) && !w.starts_with("OCRError")));
+            // 0.1.3 이하에서 글자층이 없어 실패한 스캔 PDF · 그림 파일은 OCR 이 켜져 있으면 다시 계획한다(설계서 §6-1)
+            let scan_retry = ocr_on && f.get("why").and_then(|v| v.as_str()).map_or(false, |w| ocr_retry_failed(&key, w));
             if !scan_retry && f.get("fingerprint").and_then(|v| v.as_str()) == Some(fp.as_str()) {
                 n_retry += 1;
                 continue;

@@ -1643,10 +1643,9 @@ impl App {
     //=> 답을 만드는 중이면 막는다. 올리다 실패하면 on_worker 가 이전 모델로 되돌린다(model_switch).
     //------------------------------------------------------------------
     fn use_model(&mut self, alias: &str) -> String {
-        if let Some(w) = &self.worker {
-            if w.availability() == "up" && !w.is_idle() {
-                return "답을 만드는 중입니다 — 답이 끝난 뒤 다시 누르세요".into();
-            }
+        // 답을 만들거나 문서를 인덱싱하는 중이면 막는다(스캔 문서 한 쪽 읽기는 끊고 바꾼다 — Worker::switch_block)
+        if let Some(why) = self.worker.as_ref().and_then(|w| w.switch_block()) {
+            return why.into();
         }
         let dirs = self.model_dirs();
         let cat = self.models.catalog();
@@ -2466,7 +2465,8 @@ impl App {
         if self.info.models_open {
             let hw = self.hw_now();
             let dirs = self.model_dirs();
-            let locked = self.worker.as_ref().map(|w| w.availability() == "up" && !w.is_idle()).unwrap_or(false);
+            // [사용] 잠금 — 답 · 인덱싱 중일 때만(스캔 문서 읽기 중에는 바꿀 수 있다 — Worker::switch_block)
+            let locked = self.worker.as_ref().map(|w| w.switch_block().is_some()).unwrap_or(false);
             let with_info = !self.info.models_info_sent;
             info["models"] = self.models.state_json(&hw, &cur, &dirs, locked, with_info);
             self.info.models_info_sent = true;

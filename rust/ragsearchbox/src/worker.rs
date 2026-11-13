@@ -544,6 +544,31 @@ impl Worker {
         g.child.is_some() && g.state == READY && g.pending.is_none() && g.brief.is_none()
     }
 
+    //------------------------------------------------------------------
+    // 답변 모델을 지금 바꿀 수 없는 까닭 — 바꾸면 워커를 다시 띄우므로 끊으면 안 되는 일을 할 때만 막는다
+    //=> 1) 답 · AI 정리를 만드는 중이면 막는다
+    //   2) 문서 인덱싱(대조 · 추가 · BM25 등) 중이면 막는다 — 도중에 끊으면 인덱스 상태가 어긋날 수 있다
+    //   3) 스캔 문서 한 쪽 읽기(/ocr-step)는 막지 않는다 — 쉬는 동안 몇 초마다 이어져 사실상 늘 '인덱싱'이라
+    //      막으면 [사용] 을 누를 틈이 없다. 끊겨도 그 쪽만 다음에 다시 읽는다
+    //
+    // -in: 없음
+    // -out: None = 바꿔도 됨 / Some(안내 글) = 막음
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn switch_block(&self) -> Option<&'static str> {
+        let g = self.inner.lock().unwrap();
+        if g.child.is_none() {
+            return None;
+        }
+        if g.pending.is_some() || g.brief.is_some() || g.state == BUSY {
+            return Some("답을 만드는 중입니다 — 답이 끝난 뒤 다시 누르세요");
+        }
+        if g.state == INDEXING && !g.detail.contains("/ocr-step") {
+            return Some("문서를 인덱싱하는 중입니다 — 끝난 뒤 다시 누르세요");
+        }
+        None
+    }
+
     pub fn seconds_since_ask(&self) -> f64 {
         self.inner.lock().unwrap().t_last_ask.elapsed().as_secs_f64()
     }

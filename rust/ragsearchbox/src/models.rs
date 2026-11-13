@@ -185,7 +185,12 @@ impl Models {
             g.queue.remove(i);
             return "대기에서 뺐습니다".into();
         }
-        if g.cur.as_ref().map(|j| j.alias == alias && j.phase != "install").unwrap_or(false) {
+        // 설치 단계 [중지] — 설치 프로세스를 끝내고 쓰다 만 파일을 지운다(run_job 의 설치 고리가 본다)
+        if g.cur.as_ref().map(|j| j.alias == alias && j.phase == "install").unwrap_or(false) {
+            g.cancel = true;
+            return "설치를 멈추는 중입니다".into();
+        }
+        if g.cur.as_ref().map(|j| j.alias == alias).unwrap_or(false) {
             g.cancel = true;
             return "멈추는 중입니다 — 받은 부분은 남겨 두어 이어 받을 수 있습니다".into();
         }
@@ -322,7 +327,7 @@ impl Models {
             if let Some(j) = g.cur.as_ref().filter(|j| j.alias == alias) {
                 state = match j.phase.as_str() { "verify" => "verifying", "install" => "installing", _ => "downloading" };
                 let left = j.total.saturating_sub(j.done) as f64;
-                row["pct"] = json!(if j.total > 0 { (j.done * 100 / j.total) as i64 } else { 0 });
+                row["pct"] = json!(if j.total > 0 { ((j.done * 100 / j.total) as i64).min(100) } else { 0 });
                 row["done_mb"] = json!(j.done / 1_048_576);
                 row["total_mb"] = json!(j.total / 1_048_576);
                 row["speed"] = json!((j.speed / 1_048_576.0 * 10.0).round() / 10.0);
@@ -498,6 +503,10 @@ fn run_queue(st: Arc<Mutex<State>>, root: PathBuf, models_dir: String) {
                 g.msgs.insert(alias.clone(), "설치했습니다 — [사용] 을 누르면 이 모델로 답합니다".into());
                 g.finished.push((alias, true, format!("{} 를 설치했습니다 — 설정 > 모델에서 [사용] 을 누르세요", name)));
             }
+            Err(e) if e == INSTALL_STOPPED => {
+                crate::info!("models", "설치 멈춤: {}", alias);
+                g.msgs.insert(alias, "설치를 멈췄습니다 — [이어 받기] 로 다시 설치합니다(받은 파일은 남아 있습니다)".into());
+            }
             Err(e) if e == CANCELLED => {
                 crate::info!("models", "받기 멈춤: {}", alias);
                 g.msgs.insert(alias, "멈췄습니다 — [이어 받기] 로 받은 데서부터 다시 받습니다".into());
@@ -512,6 +521,55 @@ fn run_queue(st: Arc<Mutex<State>>, root: PathBuf, models_dir: String) {
 }
 
 const CANCELLED: &str = "취소됨";
+// 설치 단계에서 [중지] — 받은 설치 파일은 남겨 [이어 받기] 로 다시 설치한다
+const INSTALL_STOPPED: &str = "설치 멈춤";
+
+//------------------------------------------------------------------
+// 설치 중 진행 크기 — 설치 파일이 models 폴더에 쓰는 바이트
+//=> Inno 는 대상 폴더에 is-*.tmp 로 쓴 뒤 이름을 바꾼다. 쓰는 중이면 그 임시 파일 크기를,
+//   다 쓴 뒤면(이번 설치에서 고친) 모델 파일 크기를 본다
+//
+// -in: models_dir = 모델 폴더 / target = 모델 파일 경로 / since = 설치 시작 시각
+// -out: 바이트 (모르면 0) / error = 없음
+//------------------------------------------------------------------
+fn installing_bytes(models_dir: &str, target: &Path, since: std::time::SystemTime) -> u64 {
+    let fresh = |p: &Path| std::fs::metadata(p).ok().filter(|md| md.modified().map(|t| t >= since).unwrap_or(false)).map(|md| md.len());
+    let tmp = std::fs::read_dir(models_dir).ok().map(|rd| rd.flatten()
+        .filter(|e| { let n = e.file_name().to_string_lossy().to_lowercase(); n.starts_with("is-") && n.ends_with(".tmp") })
+        .filter_map(|e| fresh(&e.path())).max().unwrap_or(0)).unwrap_or(0);
+    tmp.max(fresh(target).unwrap_or(0))
+}
+
+//------------------------------------------------------------------
+// 멈춘 설치의 쓰다 만 파일 지우기 — 이번 설치가 만든(시작 뒤에 고친) 것만
+//
+// -in: models_dir = 모델 폴더 / target = 모델 파일 / alias = 별칭(설명 파일 이름) / since = 설치 시작 시각
+// -out: 없음 / error = 없음(지우지 못해도 넘어간다)
+//------------------------------------------------------------------
+fn clean_partial_install(models_dir: &str, target: &Path, alias: &str, since: std::time::SystemTime) {
+    let fresh = |p: &Path| std::fs::metadata(p).ok().and_then(|md| md.modified().ok()).map(|t| t >= since).unwrap_or(false);
+    if let Ok(rd) = std::fs::read_dir(models_dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_lowercase();
+            if n.starts_with("is-") && n.ends_with(".tmp") && fresh(&e.path()) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    // 모델 파일 · 설명 파일 — 설명 파일이 남으면 워커가 없는 모델을 목록에 올린다
+    for p in [target.to_path_buf(), Path::new(models_dir).join(format!("{}.model.json", safe(alias)))] {
+        if fresh(&p) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+// 작업 개체 닫기 — KILL_ON_JOB_CLOSE 라 묶인 프로세스가 함께 끝난다
+fn close_job(h: windows::Win32::Foundation::HANDLE) {
+    unsafe {
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+    }
+}
 
 // 진행 고치기
 fn set_job(st: &Arc<Mutex<State>>, f: impl FnOnce(&mut Job)) {
@@ -594,20 +652,49 @@ fn run_job(st: &Arc<Mutex<State>>, root: &Path, models_dir: &str, alias: &str, m
         }
     }
     // 3) 설치 — 사용자 권한으로 조용히. 모델 파일이 생겼는지로 끝을 판단한다
-    set_job(st, |j| j.phase = "install".into());
+    //    진행 = 설치 파일이 models 폴더에 쓰는 크기 / 모델 크기, [중지] 면 설치 프로세스들을 끝내고 쓰다 만 파일을 지운다
+    let file = m["file"].as_str().unwrap_or("");
+    let target = Path::new(models_dir).join(file);
+    let want = m["file_bytes"].as_u64().unwrap_or(0);
+    set_job(st, |j| { j.phase = "install".into(); j.done = 0; j.total = want; j.speed = 0.0; });
     let exe = dir.join(parts[0]["name"].as_str().unwrap_or(""));
-    let code = std::process::Command::new(&exe)
+    let t_start = std::time::SystemTime::now();
+    let mut child = std::process::Command::new(&exe)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"])
         .current_dir(&dir)
-        .status()
-        .map_err(|e| format!("설치 파일을 실행하지 못했습니다: {}", e))?
-        .code()
-        .unwrap_or(-1);
+        .spawn()
+        .map_err(|e| format!("설치 파일을 실행하지 못했습니다: {}", e))?;
+    // Inno 설치 파일은 Setup.tmp 를 하나 더 띄워 그쪽이 복사한다 — 작업 개체로 묶어 [중지] 때 함께 끝낸다
+    let job = crate::win::create_kill_job();
+    if let Some(h) = job {
+        crate::win::assign_job(h, &child);
+    }
+    let code = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s.code().unwrap_or(-1),
+            Ok(None) => {}
+            Err(e) => break { crate::warn!("models", "설치 기다리기 실패: {}", e); -1 },
+        }
+        if cancelled(st) {
+            // 작업 개체를 닫으면 묶인 프로세스(설치 파일 · Setup.tmp)가 모두 끝난다
+            if let Some(h) = job {
+                close_job(h);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            clean_partial_install(models_dir, &target, alias, t_start);
+            return Err(INSTALL_STOPPED.into());
+        }
+        let now = installing_bytes(models_dir, &target, t_start);
+        set_job(st, |j| j.done = now);
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    if let Some(h) = job {
+        close_job(h);
+    }
     if code != 0 {
         return Err(format!("설치하지 못했습니다(코드 {}) — MoAI Search 가 설치된 PC 인지 확인하세요", code));
     }
-    let file = m["file"].as_str().unwrap_or("");
-    let target = Path::new(models_dir).join(file);
     if !target.is_file() {
         return Err(format!("설치는 끝났지만 {} 가 models 폴더에 없습니다", file));
     }

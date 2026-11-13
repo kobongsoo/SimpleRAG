@@ -196,7 +196,7 @@
 </div>
 <div id="tab_index" class="hidden">
 <fieldset><legend>검색 폴더</legend>
-  <div class="row"><div class="grow"><select id="folders" size="3"></select></div>
+  <div class="row"><div class="grow"><select id="folders" size="5"></select></div>
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
   <label><input type="checkbox" id="folder_icon"> 검색 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
   <div class="note" id="foldernote"></div>
@@ -456,19 +456,21 @@ function drawOcr(o, msg) {
   const b = $("b_ocr_pause");
   b.textContent = ocrPaused ? "이어 하기" : "잠시 멈춤";
   b.disabled = !o.on || !(o.docs_left > 0);
+  // 건수(대기 · 끝난 문서 · 실패)는 굵게 — 한눈에 보이게. 문서 이름은 esc 로 막는다
+  const N = (n) => "<b>" + Number(n || 0).toLocaleString() + "</b>";
   let t;
   if (!o.on) t = "꺼짐 — 스캔한 PDF 는 '텍스트층 없음'으로 실패로 남습니다";
   else if (!o.known) t = "대기열 확인 전 — 인덱싱이 끝나고 질문이 없을 때 확인합니다";
-  else if (!(o.docs_left > 0)) t = "대기 없음" + (o.done ? " · 이번에 " + o.done + "건 읽음" : "");
+  else if (!(o.docs_left > 0)) t = "대기 없음" + (o.done ? " · 이번에 " + N(o.done) + "건 읽음" : "");
   else {
-    t = "대기 " + o.docs_left + "건 · " + Number(o.pages_left).toLocaleString() + "쪽";
+    t = "대기 " + N(o.docs_left) + "건 · " + Number(o.pages_left).toLocaleString() + "쪽";
     // 남은 시간 — 최근 20쪽 평균 속도(처음에는 계산 중)
     t += o.sec_per_page > 0 ? " · 약 " + fmtMin(o.pages_left * o.sec_per_page) + " 남음" : " · 남은 시간 계산 중";
     if (ocrPaused) t += " · 멈춤";
-    else if (o.name) t += "\n지금: " + o.name + " " + o.page + "/" + o.of + "쪽";
-    if (o.done || o.failed) t += "\n끝난 문서 " + (o.done || 0) + "건 · 실패 " + (o.failed || 0) + "건";
+    else if (o.name) t += "\n지금: " + esc(o.name) + " " + o.page + "/" + o.of + "쪽";
+    if (o.done || o.failed) t += "\n끝난 문서 " + N(o.done) + "건 · 실패 " + N(o.failed) + "건";
   }
-  $("ocrstat").textContent = t;
+  $("ocrstat").innerHTML = t;
   $("ocrnote").textContent = msg;
 }
 // 초 → "1시간 30분" · "12분" · "1분 미만"
@@ -833,7 +835,10 @@ function stateCell(r) {
     case "installed": return "설치됨";
     case "queued": return "대기 중";
     case "verifying": return "확인 중…";
-    case "installing": return "설치 중…";
+    // 설치 — models 폴더에 쓴 크기로 잰 진행(설치 파일이 압축을 풀며 복사한다)
+    case "installing":
+      return `설치 중 <span class="prog"><i style="width:${r.pct || 0}%"></i></span> ${r.pct || 0}%<br>` +
+             `<span class="sub">${fmtGB(r.done_mb || 0)} / ${fmtGB(r.total_mb || 0)}</span>`;
     case "paused": return "멈춤";
     case "downloading": {
       const eta = r.eta >= 0 ? ` · 약 ${r.eta >= 60 ? Math.ceil(r.eta / 60) + "분" : r.eta + "초"} 남음` : "";
@@ -854,13 +859,15 @@ function actButtons(r, detail) {
   if (!detail) b.push(B("상세", "detail"));
   switch (r.state) {
     case "builtin": case "installed":
-      b.push(B("사용", "use", r.locked ? 'disabled title="답을 만드는 중"' : ""));
+      b.push(B("사용", "use", r.locked ? 'disabled title="답을 만들거나 문서를 인덱싱하는 중 — 끝나면 누를 수 있습니다"' : ""));
       if (r.state === "installed") b.push(B("삭제", "delete"));
       break;
     case "none":
       b.push(B(detail ? `받기 ${fmtGB(r.size_mb)}` : "받기", "get", (r.available && r.app_ok ? "" : "disabled") + (detail ? ' class="pri"' : "")));
       break;
     case "queued": case "downloading": case "verifying": b.push(B("취소", "cancel")); break;
+    // 설치 중 [중지] — 설치를 끝내고 쓰다 만 파일을 지운다(받은 설치 파일은 남아 [이어 받기] 로 다시 설치)
+    case "installing": b.push(B("중지", "cancel")); break;
     case "paused": b.push(B("이어 받기", "get")); b.push(B("지우기", "discard")); break;
   }
   return b.join("");
