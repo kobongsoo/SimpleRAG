@@ -164,7 +164,10 @@
 <div id="tab_basic">
 <fieldset><legend>모델</legend>
 <table>
-  <tr><th>생성 모델</th><td id="v_model"></td></tr>
+  <tr><th>답변 모델</th><td>
+    <div class="row" style="align-items:center"><span id="am_icon"></span><b id="am_name" class="grow"></b><button id="b_am" style="margin:0">모델 바꾸기…</button></div>
+    <div class="note" id="am_note">기본 · 정밀 모델을 받거나 바꾸려면 [모델 바꾸기…] 를 누르세요. 정밀 모드는 설정 &gt; 모델로 옮겨졌습니다.</div>
+  </td></tr>
   <tr><th>임베딩 모델</th><td id="v_embed"></td></tr>
   <tr><th>리랭킹 모델</th><td id="v_rerank"></td></tr>
   <tr><th>생성 백엔드</th><td id="v_gen"></td></tr>
@@ -191,10 +194,6 @@
 <fieldset><legend>대화</legend>
   <label><input type="checkbox" id="multiturn"> 이어서 묻기 (멀티턴 — 같은 대화의 앞 질문 이어 받기 · 기본 켬)</label>
   <div class="note ind" id="mtnote"></div>
-</fieldset>
-<fieldset><legend>답변 모델</legend>
-  <div class="row" style="align-items:center"><span id="am_icon"></span><b id="am_name" class="grow"></b><button id="b_am" style="margin:0">모델 바꾸기…</button></div>
-  <div class="note" id="am_note">기본 · 정밀 모델을 받거나 바꾸려면 [모델 바꾸기…] 를 누르세요. 정밀 모드는 설정 &gt; 모델로 옮겨졌습니다.</div>
 </fieldset>
 </div>
 <div id="tab_index" class="hidden">
@@ -313,7 +312,6 @@ window.rsb = {
     // 올리는 중이면 "없음" 대신 그렇다고 적고 진행 막대를 보인다(Python info_window.loading_note 와 같은 글)
     const st = info.starting;
     const none = st ? "올리는 중…" : UP;
-    $("v_model").textContent = info.model || none;
     $("v_embed").textContent = info.embed_model || none;
     $("v_rerank").textContent = [info.rerank_model, info.rerank].filter(Boolean).join(" · ") || none;
     // 생성 백엔드 — CPU 면 빨간 글씨와 '답이 느리다' 설명(iGPU 로 답할 때보다 첫 글자 · 답이 늦다)
