@@ -69,9 +69,11 @@ pub const NEIGHBOR_MODELS: &[&str] = &[PRECISION_GEN_MODEL];
 // 모델 옆 설명 파일(<별칭>.model.json)로 늘린 생성 모델 — 모델 설치 파일이 함께 넣는다(모델 받기 설계서 §7-3)
 //=> 이미 있는 대화 형식을 쓰는 모델은 프로그램을 다시 배포하지 않고 늘릴 수 있게.
 //   한 번만 읽어 프로세스 끝까지 쓴다(문자열은 'static 으로 남긴다 — 몇 개뿐이라 괜찮다)
-//   항목: (별칭, 파일, 형식, 이웃 청크)
+//   항목: (별칭, 파일, 형식, 이웃 청크, 런타임)
+//   런타임 = 그 모델만 쓰는 llama.cpp 판 폴더 이름(runtime\<이름>) — 지금 판이 모르는 구조의 모델(예: Kanana-2 의
+//            kanana2tiny)을 패치한 DLL 로 돌린다. 비면 기본 판(runtime\llama_vulkan · llama_cpu)
 //------------------------------------------------------------------
-type ExtraModel = (&'static str, &'static str, &'static str, bool);
+type ExtraModel = (&'static str, &'static str, &'static str, bool, &'static str);
 static EXTRA_MODELS: OnceLock<Vec<ExtraModel>> = OnceLock::new();
 const KNOWN_FORMATS: &[&str] = &["qwen3", "midm", "kanana", "lfm2", "llama3"];
 
@@ -115,8 +117,14 @@ fn scan_model_sidecars(dirs: &[String]) -> (Vec<ExtraModel>, Vec<String>) {
                 continue;
             }
             let neighbors = v.get("neighbors").and_then(|x| x.as_bool()).unwrap_or(false);
+            // 런타임 폴더 이름 — 경로를 벗어나지 못하게 영숫자 · - · _ 만 받는다
+            let runtime = s("runtime");
+            if !runtime.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                skipped.push(format!("{}: 런타임 이름이 이상함 {:?}", p.display(), runtime));
+                continue;
+            }
             out.push((Box::leak(alias.into_boxed_str()), Box::leak(file.into_boxed_str()),
-                      Box::leak(format.into_boxed_str()), neighbors));
+                      Box::leak(format.into_boxed_str()), neighbors, Box::leak(runtime.into_boxed_str())));
         }
     }
     (out, skipped)
@@ -127,6 +135,13 @@ fn scan_model_sidecars(dirs: &[String]) -> (Vec<ExtraModel>, Vec<String>) {
 //------------------------------------------------------------------
 pub fn model_wants_neighbors(alias: &str) -> bool {
     NEIGHBOR_MODELS.contains(&alias) || extra_models().iter().any(|m| m.0 == alias && m.3)
+}
+
+//------------------------------------------------------------------
+// 이 모델만 쓰는 llama.cpp 판 폴더 이름 (설명 파일의 runtime) — 없으면 None(기본 판)
+//------------------------------------------------------------------
+pub fn model_runtime(alias: &str) -> Option<&'static str> {
+    extra_models().iter().find(|m| m.0 == alias).map(|m| m.4).filter(|r| !r.is_empty())
 }
 
 // 고정 상수(Python config.py 와 같은 값 — 실측 근거는 원본 주석 참고)
@@ -545,10 +560,21 @@ fn build() -> Result<Config, ConfigError> {
 
     let gen_backend = std::env::var("SIMPLERAG_GEN_BACKEND").unwrap_or_else(|_| "auto".into()).trim().to_lowercase();
     // Vulkan / CPU 판 llama.cpp DLL 폴더(프로그램 폴더 기준) — 데이터 루트를 옮겨도 iGPU 가 꺼지지 않게
-    let vulkan_lib_dir = env("SIMPLERAG_VULKAN_LIB")
+    let mut vulkan_lib_dir = env("SIMPLERAG_VULKAN_LIB")
         .unwrap_or_else(|| pyutil::join(&pyutil::join(&app_dir, "runtime"), "llama_vulkan"));
-    let cpu_lib_dir = env("SIMPLERAG_CPU_LIB")
+    let mut cpu_lib_dir = env("SIMPLERAG_CPU_LIB")
         .unwrap_or_else(|| pyutil::join(&pyutil::join(&app_dir, "runtime"), "llama_cpu"));
+    // 답변 모델이 자기 llama.cpp 판을 쓰면(설명 파일의 runtime) Vulkan · CPU 둘 다 그 폴더로 — 그 폴더의 DLL 하나로
+    //   iGPU(전 레이어) · CPU(레이어 0) 를 다 돌린다. 폴더가 없으면 기본 판으로 두고 알린다(모델 적재가 실패해 되돌아간다)
+    if let Some(rt) = model_runtime(&default_gen_model) {
+        let d = pyutil::join(&pyutil::join(&app_dir, "runtime"), rt);
+        if std::path::Path::new(&d).join("llama.dll").is_file() {
+            vulkan_lib_dir = d.clone();
+            cpu_lib_dir = d;
+        } else {
+            warnings.push(format!("답변 모델 {} 의 llama.cpp 판이 없습니다: {}", default_gen_model, d));
+        }
+    }
 
     Ok(Config {
         index_dir: pyutil::join(&root, "rag_index"),
@@ -1140,9 +1166,12 @@ mod tests {
         std::fs::write(d.join("odd.model.json"), r#"{"alias":"odd-1b-q4","file":"Odd.gguf","format":"odd9"}"#).unwrap();
         std::fs::write(d.join("dup.model.json"), r#"{"alias":"qwen3-1.7b-q4","file":"x.gguf","format":"qwen3"}"#).unwrap();
         std::fs::write(d.join("bad.model.json"), "{").unwrap();
+        // 자기 llama.cpp 판을 쓰는 모델 · 경로를 벗어나려는 런타임 이름(건너뜀)
+        std::fs::write(d.join("rt.model.json"), r#"{"alias":"rt-1b-q5","file":"rt.gguf","format":"qwen3","runtime":"llama_rt2"}"#).unwrap();
+        std::fs::write(d.join("rtbad.model.json"), r#"{"alias":"rtbad-1b-q5","file":"rt.gguf","format":"qwen3","runtime":"..\x"}"#).unwrap();
         let (got, skipped) = scan_model_sidecars(&[d.to_string_lossy().into_owned()]);
-        assert_eq!(got, vec![("new-1b-q4", "New-1B.gguf", "qwen3", true)]);
-        assert_eq!(skipped.len(), 2);
+        assert_eq!(got, vec![("new-1b-q4", "New-1B.gguf", "qwen3", true, ""), ("rt-1b-q5", "rt.gguf", "qwen3", false, "llama_rt2")]);
+        assert_eq!(skipped.len(), 3);
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -143,6 +143,10 @@
   /* [+] 옆 검색 폴더 — 고른 폴더 이름이 길면 줄인다 */
   #scopebtn { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .menu .cnt { color: var(--muted); margin-left: 6px; }
+  /* 답변 모델 — 검색 폴더 옆. 누르면 설정 > 모델 */
+  #modelbtn { color: var(--muted); cursor: pointer; padding: 4px 6px; border-radius: 8px; white-space: nowrap; user-select: none; }
+  #modelbtn:hover { background: var(--hover); color: var(--ink2); }
+  #modelbtn b { font-weight: 600; color: var(--ink2); }
   #state { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #send { background: var(--brand); color: #fff; border: 0; border-radius: 50%; width: 34px; height: 34px;
     cursor: pointer; display: grid; place-items: center; box-shadow: 0 3px 10px rgba(229, 22, 63, .3); transition: transform .1s, background .15s; }
@@ -231,11 +235,12 @@
     <div class="bar">
       <span id="plus" data-tip="문서 올리기 — 올린 문서에서만 찾아 답합니다"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
       <span id="scopebtn" title="질문할 검색 폴더 고르기">📁 모든 검색 폴더 ▾</span>
+      <span id="modelbtn" style="display:none" title="답변 모델 — 누르면 설정 > 모델에서 바꿀 수 있습니다"></span>
       <span id="state"></span>
       <button id="send" title="보내기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg></button>
     </div>
   </div>
-  <div class="powered">MoAI-S · 내 PC 안에서만 찾고 답합니다</div>
+  <div class="powered">MoAI-S<span id="appver"></span> · 내 PC 안에서만 찾고 답합니다</div>
 </footer>
 <div id="pop"><div class="box"><div class="pt"></div><div class="ph"></div><div class="pb"></div>
   <div class="pf"><button id="popClose">닫기</button></div></div></div>
@@ -609,6 +614,8 @@ $("btnDock").onclick = () => send({ type: "dock", on: !dockOn });
 // 📌 항상 위 — 반대로 바꿔 달라고 보내고, Rust 가 창에 적용한 뒤 setOnTop 으로 되돌려 준다
 let topOn = true;
 $("btnTop").onclick = () => send({ type: "ontop", on: !topOn });
+// 답변 모델 이름 → 설정 > 모델
+$("modelbtn").onclick = () => send({ type: "models" });
 // 빈 화면 예시 질문 — 누르면 그 질문으로 바로 묻는다(시연용)
 for (const c of $("chips").children) c.onclick = () => { $("input").value = c.textContent; doSend(); };
 $("scopebtn").onclick = (e) => {
@@ -689,6 +696,18 @@ window.rsb = {
   },
   // 옛 범위 방식(이 폴더 · 지정 폴더 전체) — 이제 [+] 옆 검색 폴더 단추가 대신한다. 값만 받아 둔다
   setScopeMode(k) { scopeMode = k; },
+  // 답변 모델 이름 · 앱 버전 — 입력란 아래 줄(검색 폴더 옆)
+  setModel(v) {
+    if (!v || !v.name) return;
+    const b = $("modelbtn");
+    b.textContent = "";
+    b.append("AI ");
+    const n = document.createElement("b"); n.textContent = v.name; b.append(n);
+    b.title = `답변 모델 ${v.name} · MoAI-S ${v.ver || ""} — 누르면 설정 > 모델에서 바꿀 수 있습니다`;
+    b.style.display = "";
+    // 아래 안내 줄에 지금 버전
+    if (v.ver) $("appver").textContent = " " + v.ver;
+  },
   setHistory(list) { history = list || []; },
   setState(t) { setState(t); },
   notice(t) { setState(t); },

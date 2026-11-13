@@ -119,6 +119,7 @@ def pick_models(catalog, only):
 # 모델 하나의 설치 파일 만들기
 #=> 1) 워커가 읽을 설명 파일(<별칭>.model.json)을 쓴다
 #    2) ISCC 로 installer_model.iss 를 묶는다(1.9GB 를 넘으면 조각으로)
+#       목록 항목에 runtime(그 모델만 쓰는 llama.cpp 판 폴더 이름)이 있으면 저장소 runtime\<이름> 도 함께 넣는다
 #    3) 나온 파일들(.exe · -N.bin)의 크기와 SHA256 을 목록 항목 parts 에 적는다
 #
 # -in: m     = 목록 파일의 모델 항목(dict) — parts · file_bytes 를 고친다
@@ -128,7 +129,7 @@ def pick_models(catalog, only):
 # -in: src   = GGUF 가 있는 폴더
 #
 # -out: 없음 (m 을 고친다)
-# -out: error = 라이선스 글이 없거나 ISCC 가 실패하면 SystemExit
+# -out: error = 라이선스 글이 없거나 · runtime 폴더(llama.dll)가 없거나 · ISCC 가 실패하면 SystemExit
 #------------------------------------------------------------------
 def build_one(m, iscc, out, rev, src):
     alias, file = m["alias"], m["file"]
@@ -145,7 +146,7 @@ def build_one(m, iscc, out, rev, src):
     os.makedirs(side_dir, exist_ok=True)
     side = os.path.join(side_dir, f"{alias}.model.json")
     with open(side, "w", encoding="utf-8") as f:
-        json.dump({k: m.get(k) for k in ("alias", "file", "format", "tier", "neighbors", "min_app")}, f, ensure_ascii=False, indent=2)
+        json.dump({k: m.get(k) for k in ("alias", "file", "format", "tier", "neighbors", "min_app", "runtime") if k != "runtime" or m.get(k)}, f, ensure_ascii=False, indent=2)
     # 지난 판 파일이 남아 있으면 조각 수가 섞인다 — 같은 이름은 먼저 지운다
     base = f"MoAISearch_Model_{alias}_r{rev}"
     for n in os.listdir(out):
@@ -153,7 +154,15 @@ def build_one(m, iscc, out, rev, src):
             os.remove(os.path.join(out, n))
     split = "1" if size > SPLIT_OVER else "0"
     args = [iscc, f"/DAlias={alias}", f"/DModelFile={file}", f"/DModelName={m['name']}", f"/DRev={rev}",
-            f"/DSrc={src}", f"/DSidecar={side}", f"/DLicense={lic}", f"/DOut={out}", f"/DSplit={split}", "installer_model.iss"]
+            f"/DSrc={src}", f"/DSidecar={side}", f"/DLicense={lic}", f"/DOut={out}", f"/DSplit={split}"]
+    # 자기 llama.cpp 판을 쓰는 모델(예: Kanana-2) — 그 DLL 폴더를 설치 파일에 함께 넣는다
+    rt = m.get("runtime") or ""
+    if rt:
+        rt_dir = os.path.join(ROOT, "runtime", rt)
+        if not os.path.isfile(os.path.join(rt_dir, "llama.dll")):
+            raise SystemExit(f"{alias}: llama.cpp 판 폴더가 없습니다 — {rt_dir} (rust\\patches 의 패치로 빌드)")
+        args += [f"/DRuntime={rt_dir}", f"/DRuntimeName={rt}"]
+    args.append("installer_model.iss")
     print(f"  ISCC {alias} ({size / 1e9:.2f}GB{', 조각' if split == '1' else ''})")
     # 아이콘 · 언어 파일 경로가 rust 폴더 기준이라 거기서 돌린다
     r = subprocess.run(args, cwd=RUST, capture_output=True)
@@ -213,7 +222,8 @@ def main():
     for m in todo:
         build_one(m, iscc, a.out, a.rev, srcs[m["alias"]])
     # 목록 파일 저장 — 날짜가 바뀌어야 앱이 캐시보다 새것으로 본다
-    catalog["updated"] = datetime.date.today().isoformat()
+    # 날짜에 시각까지 — 같은 날 다시 만들어도 배포 사이트의 옛 목록(같은 날짜)이 앱에 든 새 목록을 덮지 않게(앱은 >= 로 비교)
+    catalog["updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     text = json.dumps(catalog, ensure_ascii=False, indent=2) + "\n"
     for p in (CATALOG, os.path.join(a.out, "models.json")):
         with open(p, "w", encoding="utf-8", newline="\n") as f:

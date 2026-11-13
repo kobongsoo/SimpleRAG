@@ -271,6 +271,19 @@ impl Models {
                 let _ = std::fs::remove_file(app.join("licenses").join("models").join(format!("{}.txt", safe(alias))));
             }
         }
+        // 이 모델만 쓰는 llama.cpp 판(runtime\<이름>, 예: Kanana-2 의 패치판) — 같은 판을 쓰는 다른 설치 모델이 없으면 함께 지운다
+        let rt = m["runtime"].as_str().unwrap_or("");
+        if !rt.is_empty() && !rt.contains(['\\', '/', '.']) {
+            let shared = self.catalog()["models"].as_array().map(|a| a.iter().any(|o| o["alias"] != alias
+                && o["runtime"].as_str() == Some(rt) && installed(o, dirs))).unwrap_or(false);
+            if !shared {
+                for d in dirs {
+                    if let Some(app) = d.parent() {
+                        let _ = std::fs::remove_dir_all(app.join("runtime").join(rt));
+                    }
+                }
+            }
+        }
         crate::info!("models", "모델 지움: {} ({}개)", alias, n);
         if n == 0 { Err("설치된 파일이 없습니다".into()) } else { Ok(format!("{} 를 지웠습니다", m["name"].as_str().unwrap_or(alias))) }
     }

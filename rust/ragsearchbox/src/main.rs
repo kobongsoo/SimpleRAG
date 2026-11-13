@@ -585,9 +585,18 @@ impl App {
         self.browse.call("setVecStatus", json!(t));
     }
 
+    // 탐색기 창 · 패널에 답변 모델 이름과 앱 버전을 알린다 — 설정 > 모델에서 바꿀 수 있어 어느 모델이 답하는지 보이게
+    fn push_model(&mut self) {
+        let cur = cfgline::read_model(self.config_path().as_deref());
+        let v = json!({"alias": cur, "name": self.models.name(&cur), "ver": env!("CARGO_PKG_VERSION")});
+        self.browse.call("setModel", v.clone());
+        self.panel.call("setModel", v);
+    }
+
     fn push_roots(&mut self) {
         let roots = self.roots_value();
         self.push_vec_status();
+        self.push_model();
         self.browse.call("setExcluded", json!(self.s.exclude_folders));
         self.browse.call("setRoots", roots.clone());
         self.browse.call("setPageClick", json!(self.s.page_click));
@@ -1104,7 +1113,10 @@ impl App {
         }
         // 명령줄 오른쪽 [⚙ 설정] — 트레이 메뉴의 설정과 같은 창. 고를 후보가 있으면 그 탭으로
         if m["type"] == "settings" {
-            if m["cand"].as_bool().unwrap_or(false) {
+            // 맨 아래 줄의 답변 모델 이름을 눌렀으면 모델 탭으로
+            if m["tab"] == "model" {
+                self.open_models_tab();
+            } else if m["cand"].as_bool().unwrap_or(false) {
                 self.open_candidates();
             } else {
                 self.show_info();
@@ -1409,6 +1421,10 @@ impl App {
                     self.panel.set_state(&detail);
                 } else if state == worker::BUSY {
                     self.panel.set_state("검색 중");
+                }
+                // 답변 모델이 바뀌었을 수 있다(설정 > 모델 · 되돌리기) — 워커가 준비되면 화면의 모델 이름을 맞춘다
+                if state == worker::READY {
+                    self.push_model();
                 }
                 self.update_tooltip();
             }
@@ -1878,6 +1894,9 @@ impl App {
                 self.push_panel_folders();
                 if self.panel_mode == "explorer" {
                     self.push_roots();
+                } else {
+                    // 채팅 모드 머리의 답변 모델 이름 · 버전(탐색기 모드는 push_roots 가 보낸다)
+                    self.push_model();
                 }
                 // [나란히 보기] 단추 상태
                 let dock = self.s.panel_enabled;
@@ -1915,6 +1934,8 @@ impl App {
                     }
                 }
             }
+            // 채팅 창 머리의 답변 모델 이름을 눌렀다 — 설정 > 모델 탭으로
+            "models" => self.open_models_tab(),
             "typing" => {
                 // 질문을 치기 시작했다 — 쉬느라 내린 답변 모델·리랭커를 미리 올리게 한다(메모리 절감 설계서 C안)
                 if let Some(w) = &self.worker {
@@ -3175,7 +3196,7 @@ fn main() {
         .with_resizable(false).with_inner_size(tao::dpi::LogicalSize::new(INFO_W, INFO_H)).build(&event_loop).expect("설정 창");
     let p2 = proxy.clone();
     let iview = WebViewBuilder::with_web_context(unsafe { &mut *(ctx as *mut WebContext) })
-        .with_html(INFO_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai))
+        .with_html(INFO_HTML.replace("__FONT_PX__", &font).replace("__MOAI__", &moai).replace("__VER__", env!("CARGO_PKG_VERSION")))
         .with_ipc_handler(move |req| post(&p2, UserEvent::InfoIpc(req.into_body())))
         .build(&iwin).expect("설정 화면");
 

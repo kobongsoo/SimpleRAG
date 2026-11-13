@@ -31,6 +31,8 @@
   .nav .logo img { width: 30px; height: 30px; object-fit: contain; background: #fff; border-radius: 8px; padding: 2px;
     box-shadow: 0 0 0 1px var(--line); }
   .nav .logo span { color: #e5163f; }
+  /* 지금 버전 — 로고 옆 작게 */
+  .nav .logo .ver { align-self: flex-end; margin-bottom: 3px; color: var(--sub); font-size: calc(var(--fs) - 2px); font-weight: normal; }
   input[type=checkbox] { accent-color: #e5163f; }
   .nav .ic { display: inline-block; width: 1.6em; }
   /* 오른쪽 판 — 얇은 테두리의 흰 판. 넘치면 판 안에서만 스크롤 */
@@ -152,7 +154,7 @@
 </head>
 <body>
 <div class="main">
-<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_model"><span class="ic">&#x25a3;</span>모델</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div><div id="t_log"><span class="ic">&#x2630;</span><span id="t_log_text">로그</span></div></div>
+<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b><small class="ver" title="지금 설치된 MoAI-S 버전">v__VER__</small></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_model"><span class="ic">&#x25a3;</span>모델</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div><div id="t_log"><span class="ic">&#x2630;</span><span id="t_log_text">로그</span></div></div>
 <div class="panel">
 <div id="tab_basic">
 <fieldset><legend>모델</legend>

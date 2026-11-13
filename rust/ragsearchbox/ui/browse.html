@@ -305,6 +305,10 @@
   .st #stvec::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; vertical-align: 1px;
     background: var(--brand); animation: busy-blink 1s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .st #stvec::before { animation: none; } }
+  /* 답변 모델 · 앱 버전 — 맨 아래 줄 오른쪽. 누르면 설정 > 모델 */
+  .st .model { border: 0; background: none; padding: 0; font: inherit; color: var(--muted); cursor: pointer; }
+  .st .model:hover { color: var(--link); text-decoration: underline; }
+  .st .model b { font-weight: 600; color: var(--ink2); }
   /* 모델 준비 진행 — 목록 위 띠. 검색 결과를 그려도 지워지지 않고, 맨 아래 줄과 달리 놓치지 않는다 */
   #loadband { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--rule); background: var(--surface); }
   #loadband.hidden { display: none; }
@@ -499,7 +503,7 @@
     <tr><td>쪽 한 번 · 두 번 누르기</td><td>미리 보기 · 문서 열기</td></tr>
     <tr><td>오른쪽 클릭</td><td>문서 · 폴더 메뉴</td></tr>
   </table><div class="bt"><button id="keysx">닫기</button></div></div>
-  <div class="st"><span id="st1">찾을 내용을 쓰고 Enter</span><span id="st2"></span><span id="st3"></span><span id="stvec" class="hidden"></span><span class="sp"></span><span id="st4"></span></div>
+  <div class="st"><span id="st1">찾을 내용을 쓰고 Enter</span><span id="st2"></span><span id="st3"></span><span id="stvec" class="hidden"></span><span class="sp"></span><span id="st4"></span><button class="model hidden" id="stmodel" title="답변 모델 — 누르면 설정 > 모델에서 바꿀 수 있습니다"></button></div>
 </div>
 
 <!-- ───────── 탐색기 옆 패널 배치 ───────── -->
@@ -516,7 +520,7 @@
   <div class="chips hidden" id="pchips"></div>
   <div class="cards" id="cards"></div>
   <div class="aip hidden" id="paip"></div>
-  <div class="st"><span id="pst1">모든 검색 폴더에서 찾습니다</span><span class="sp"></span><button id="pask" style="color:var(--link)" title="찾은 문서를 정리해 줍니다">✦ AI 답변창</button></div>
+  <div class="st"><span id="pst1">모든 검색 폴더에서 찾습니다</span><span class="sp"></span><button class="model hidden" id="pstmodel" title="답변 모델 — 누르면 설정 > 모델에서 바꿀 수 있습니다"></button><button id="pask" style="color:var(--link)" title="찾은 문서를 정리해 줍니다">✦ AI 답변창</button></div>
 </div>
 
 <div id="menu" class="hidden"></div>
@@ -1864,11 +1868,13 @@ function bindColGrip(g) {
 const TOUR_STEPS = [
   { sel: "#side button:has([data-cnt])", title: "문서를 읽는 중", text: "고른 폴더의 문서를 읽고 있습니다. 폴더 옆 숫자(<b>읽은 문서 / 전체</b>)로 진행을 볼 수 있고, <b>끝나기 전에도</b> 읽은 문서부터 찾을 수 있습니다." },
   { sel: ".search", title: "문장으로 찾기", text: "낱말뿐 아니라 <b>문장</b>으로 써도 됩니다. 예: “작년 내가 작성한 AI 제안서”, “출장비 정산 기준”." },
+  { sel: "#add", title: "비슷한 문서 찾기", text: "<b>[＋]</b> 로 문서를 고르거나 입력란에 파일을 <b>끌어 놓으면</b> 내용이 비슷한 문서를 찾습니다. 결과 줄을 오른쪽 클릭해 <b>이 문서와 비슷한 문서 찾기</b>를 눌러도 됩니다." },
   { sel: "#fawrap", title: "모두 찾기", text: "검색어가 들어 있는 문서를 모두, <b>문서 › 쪽 › 발췌</b>로 보여 줍니다. 끄면 관련도 높은 문서만 봅니다." },
   { sel: "#pvtoggle", title: "미리 보기", text: "쪽을 <b>한 번</b> 누르면 미리 보기 창에 그 쪽이 보이고, <b>두 번</b> 누르면 문서가 열립니다. (Alt+P)" },
   { sel: "#aitoggle", title: "AI 정리", text: "찾은 문서 중 상위 3건을 AI 가 한 줄씩 정리합니다. 문서 이름 옆 아이콘으로 원문을 바로 엽니다. (Alt+A)" },
   { sel: "#toai", title: "AI 에게 묻기", text: "문서를 근거로 AI 에게 질문하고 답을 받는 <b>채팅 모드</b>입니다. 답 아래에 근거 문서가 함께 나옵니다." },
-  { sel: "#toset", title: "설정 · 폴더", text: "검색 폴더 추가 · 빼기와 동의어 · 이름 별칭 사전은 [⚙ 설정] 과 왼쪽 아래 [＋ 폴더 추가] 에서. 창을 닫아도 <b>트레이 아이콘</b>에 남고, 두 번 누르면 다시 열립니다. 이 안내는 [?] 에서 다시 볼 수 있습니다." },
+  { sel: "#stmodel", title: "답변 모델 · 버전", text: "지금 답하는 AI 모델과 MoAI-S 버전입니다. 누르면 <b>설정 › 모델</b>이 열려, PC 사양에 맞는 추천을 보고 다른 모델을 받아 바꿀 수 있습니다." },
+  { sel: "#toset", title: "설정 · 폴더", text: "검색 폴더 추가 · 빼기와 동의어 · 이름 별칭 사전은 [⚙ 설정] 과 왼쪽 아래 [＋ 폴더 추가] 에서. 스캔한 PDF · 그림 파일의 글자 읽기(<b>OCR</b>)는 설정 › 기본의 <b>스캔 문서</b>에서 켜고 끕니다(기본 켬, 쉬는 동안 차례로 읽음). 창을 닫아도 <b>트레이 아이콘</b>에 남고, 두 번 누르면 다시 열립니다. 이 안내는 [?] 에서 다시 볼 수 있습니다." },
 ];
 let tourAt = -1;         // 지금 단계(-1 = 안내 중 아님)
 function tourEl(i) {
@@ -2133,6 +2139,15 @@ const api = {
   },
   setState(t) { if (t) setStatus(t); },
   notice(t) { setStatus(t); },
+  // 답변 모델 이름 · 앱 버전 — 맨 아래 줄 오른쪽(창은 둘 다, 좁은 패널은 모델 이름만)
+  setModel(v) {
+    if (!v || !v.name) return;
+    $("stmodel").innerHTML = `AI <b>${esc(v.name)}</b> · v${esc(v.ver || "")}`;
+    $("pstmodel").innerHTML = `AI <b>${esc(v.name)}</b>`;
+    $("stmodel").title = $("pstmodel").title = `답변 모델 ${v.name} · MoAI-S ${v.ver || ""} — 누르면 설정 > 모델에서 바꿀 수 있습니다`;
+    $("stmodel").classList.remove("hidden");
+    $("pstmodel").classList.remove("hidden");
+  },
   // 벡터 채우기 진행 — 빈 글이면 감춘다(좁은 패널에는 자리가 없어 탐색기 창에만)
   setVecStatus(t) {
     if (LAYOUT !== "window") return;
@@ -2224,6 +2239,8 @@ api.setOnTop = (on) => {
 for (const id of ["wtop", "ptop"]) { const b = $(id); if (b) b.onclick = () => send({ type: "ontop", on: !topOn }); }
 window.rsb = new Proxy(api, { get: (t, k) => (k in t ? t[k] : () => {}) });
 
+// 좁은 패널 배치의 맨 아래 줄 답변 모델 → 설정 > 모델 (패널 쪽 처리기가 받는다)
+$("pstmodel").onclick = () => send({ type: "models" });
 // ── 시작 ─────────────────────────────────────────────────
 if (LAYOUT === "window") {
   $("win").classList.remove("hidden");
@@ -2237,6 +2254,8 @@ if (LAYOUT === "window") {
   // 고른 폴더(없으면 맨 처음 인덱싱 폴더)를 열면서 채팅 모드로
   $("toai").onclick = () => send({ type: "switch_mode", mode: "rag", folder: scope });
   $("toset").onclick = () => send({ type: "settings", cand: candN > 0 });
+  // 맨 아래 줄 답변 모델 → 설정 > 모델 (패널 배치는 패널 쪽 처리기가 받는다)
+  $("stmodel").onclick = () => send({ type: "settings", tab: "model" });
   // 문서 클릭(메뉴 닫기)보다 먼저 받아, 띄운 메뉴가 바로 닫히지 않게 한다
   $("tohelp").onclick = (e) => { e.stopPropagation(); showHelpMenu(); };
   $("keysx").onclick = () => $("keys").classList.add("hidden");

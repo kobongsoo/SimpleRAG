@@ -8,6 +8,7 @@
 ;    build_model_installers.py 가 부른다. 인자:
 ;      /DAlias= /DModelFile= /DModelName= /DRev= /DSrc=<gguf 폴더> /DSidecar=<model.json> /DLicense=<라이선스 글> /DOut=<출력 폴더>
 ;      /DSplit=1 이면 1.9GB 조각(.bin)으로 나눈다 — GitHub 릴리스 첨부 한도 2GB
+;      /DRuntime=<llama.cpp 판 폴더> /DRuntimeName=<이름> 이면 runtime\<이름> 에 그 DLL 들도 넣는다(없으면 안 넣음)
 ; ------------------------------------------------------------------
 ; installer.iss 의 AppId 뒤에 Inno 가 _is1 을 붙인 제거 정보 키
 #define MainKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{7E0C6F0A-3B1D-4C55-9A61-5D2B7C1E4F10}_is1"
@@ -49,6 +50,10 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Source: "{#Src}\{#ModelFile}"; DestDir: "{app}\models"; Flags: ignoreversion nocompression
 Source: "{#Sidecar}"; DestDir: "{app}\models"; DestName: "{#Alias}.model.json"; Flags: ignoreversion
 Source: "{#License}"; DestDir: "{app}\licenses\models"; DestName: "{#Alias}.txt"; Flags: ignoreversion
+#ifdef Runtime
+; 이 모델만 쓰는 llama.cpp 판(예: Kanana-2 의 kanana2tiny 패치판) — 워커가 설명 파일의 runtime 을 보고 이 폴더의 DLL 을 쓴다
+Source: "{#Runtime}\*"; DestDir: "{app}\runtime\{#RuntimeName}"; Flags: ignoreversion
+#endif
 
 [Code]
 //------------------------------------------------------------------
