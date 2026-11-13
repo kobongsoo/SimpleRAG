@@ -266,7 +266,7 @@ impl Retriever {
         // 업로드 문서만 — 폴더 한정은 의미가 없다
         let folder = if corpus.is_some() { None } else { folder };
         // 메타데이터 조건(사람 · 기간 · 형식 · 출처 · 스캔) — 조건이 없는 질의는 mp 가 None 이라 예전과 똑같다
-        let mp = if corpus.is_none() { meta_plan(query, folder) } else { None };
+        let mp = if corpus.is_none() { self.meta_plan_text(query, folder, &crate::meta::query::PlanOpts::default()) } else { None };
         if let Some(p) = &mp {
             if p.meta_only {
                 // 본문 검색어가 남지 않았다 — 조건에 맞는 문서를 가산 · 수정일 순으로(§13-2)
@@ -492,6 +492,25 @@ pub fn meta_timing(mut timing: Timing, mp: Option<&crate::meta::query::Plan>) ->
 }
 
 impl Retriever {
+    //------------------------------------------------------------------
+    // 메타데이터 계획 — 사람 조건이 본문에 그 이름이 나오는 문서까지 보게
+    //=> meta_plan_opts 와 같고, 이름 → '본문에 그 이름이 글자 그대로 든 문서' 를 메모리 본문에서 찾아 넘긴다
+    //   (store.scan_words, 폴더 범위 안). 이름만 든 사람 조건이 속성뿐 아니라 본문에 나오는 문서도 남긴다.
+    //
+    // -in: query = 질의 / folder = 범위 폴더 / opts = 끈 조건 · 넓힌 기간
+    // -out: Some(계획) / 조건이 없으면 None
+    // -out: error = 없음(본문 찾기가 실패하면 그 이름은 속성만 본다)
+    //------------------------------------------------------------------
+    pub fn meta_plan_text(&self, query: &str, folder: Option<&str>, opts: &crate::meta::query::PlanOpts) -> Option<crate::meta::query::Plan> {
+        let home = crate::meta::hook::data_dir();
+        let allow = folder.and_then(|f| self.store.folder_scope(f).ok().map(|s| s.1));
+        let text = |name: &str| -> HashSet<String> {
+            self.store.scan_words(&[name.to_string()], allow.as_ref()).map(|v| v.into_iter().map(|(_, _, doc)| doc).collect())
+                .unwrap_or_default()
+        };
+        crate::meta::query::plan_with_text(query, &crate::meta::store::default_path(&home), &home, folder, None, opts, Some(&text))
+    }
+
     //------------------------------------------------------------------
     // 본문 검색어가 남지 않은 질의 — 조건에 맞는 문서를 근거로 (§13-2)
     //=> "작년에 고봉수님이 만든 문서" 처럼 조건만 있으면 본문 검색을 하지 않는다. 계획의 순서(가산 · 수정일)로

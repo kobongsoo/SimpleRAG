@@ -118,7 +118,7 @@ fn find_core(r: &Retriever, query: &str, folder: Option<&str>, limit: usize,
     let cap = |n: usize| if all { usize::MAX } else { n };
     let pool = if limit == 0 { POOL } else { limit };
     // 메타데이터 조건(메타데이터 검색 설계서 §13) — 조건이 없는 질의는 mp 가 None 이라 예전과 똑같다
-    let mp = crate::retrieve::meta_plan_opts(query, folder, opts);
+    let mp = r.meta_plan_text(query, folder, opts);
     let meta_rows = mp.as_ref().and_then(|_| {
         let home = crate::meta::hook::data_dir();
         crate::meta::query::rows(&crate::meta::store::default_path(&home)).ok()
@@ -420,7 +420,7 @@ pub fn find_all_docs(r: &Retriever, query: &str, folder: Option<&str>,
     if done["meta"]["meta_only"].as_bool() == Some(true) {
         return Ok((lines, done));
     }
-    let mp = crate::retrieve::meta_plan_opts(query, folder, opts);
+    let mp = r.meta_plan_text(query, folder, opts);
     let q2 = mp.as_ref().map(|p| p.query.clone()).unwrap_or_else(|| query.to_string());
     let kws = keywords(&q2);
     done["kws"] = json!(kws);

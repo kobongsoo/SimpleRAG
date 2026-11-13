@@ -633,6 +633,23 @@ impl PlanOpts {
 // -out: Some(계획) / 메타가 없거나 질의에 조건이 없으면 None
 //------------------------------------------------------------------
 pub fn plan_with(q: &str, db: &str, root: &str, folder: Option<&str>, today: Option<NaiveDate>, opts: &PlanOpts) -> Option<Plan> {
+    plan_with_text(q, db, root, folder, today, opts, None)
+}
+
+// 이름이 본문에 글자 그대로 나오는 문서 경로들을 돌려주는 함수 — 검색기(메모리 본문)가 넘긴다
+pub type TextDocs<'a> = &'a dyn Fn(&str) -> HashSet<String>;
+
+//------------------------------------------------------------------
+// 계획 — 본문 찾기 함수와 함께
+//=> plan_with 와 같고, 역할 동사 없이 이름만 든 사람 조건("장진영 대표")의 거르기 대상을
+//   '속성(작성자 · 수정자 등)에 그 사람이 있는 문서' 에 '본문에 그 이름이 나오는 문서' 를 더한 것으로 넓힌다.
+//
+// -in: plan_with 와 같음 + text = 이름 → 본문에 그 이름이 든 문서 경로(None 이면 속성만)
+// -out: Some(계획) / 메타가 없거나 질의에 조건이 없으면 None
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn plan_with_text(q: &str, db: &str, root: &str, folder: Option<&str>, today: Option<NaiveDate>, opts: &PlanOpts,
+                      text: Option<TextDocs>) -> Option<Plan> {
     if std::env::var("SIMPLERAG_META_QUERY").map(|v| ["0", "off", "false"].contains(&v.trim())).unwrap_or(false) {
         return None;
     }
@@ -664,7 +681,7 @@ pub fn plan_with(q: &str, db: &str, root: &str, folder: Option<&str>, today: Opt
         // 조건을 다 껐는데 본문 검색어도 없다 — 원래 질의 그대로 본문 검색
         p.query = q.trim().to_string();
     }
-    let mut res = make_plan(&cached, &p, folder);
+    let mut res = make_plan(&cached, &p, folder, text);
     res.off = opts.off.clone();
     res.widen = opts.widen;
     res.ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -676,7 +693,7 @@ fn chip(kind: &str, label: String, mode: &str) -> Chip {
 }
 
 // 조건별 문서 집합 · 가산 → 교집합 · 완화
-fn make_plan(c: &Cached, p: &Parsed, folder: Option<&str>) -> Plan {
+fn make_plan(c: &Cached, p: &Parsed, folder: Option<&str>, text: Option<TextDocs>) -> Plan {
     let fprefix = folder.map(|f| format!("{}\\", pyutil::rstrip_chars(&pyutil::normcase(&pyutil::abspath(f)), "\\/")));
     let rows: HashMap<&String, &Row> = c.rows.iter()
         .filter(|(k, _)| fprefix.as_ref().map_or(true, |f| pyutil::normcase(k).starts_with(f.as_str()))).collect();
@@ -706,10 +723,32 @@ fn make_plan(c: &Cached, p: &Parsed, folder: Option<&str>) -> Plan {
         chips.push(chip("date", format!("{} · {}", d.label, fl), "filter"));
     }
     if !p.people.is_empty() {
-        let (k, b) = people_sets(c, &p.people, &allp);
+        let (mut k, b) = people_sets(c, &p.people, &allp);
+        // 역할 동사 없이 이름만 든 조건("장진영 대표") — 속성에 그 사람이 있는 문서 + 본문에 그 이름이 나오는 문서.
+        //   예전에는 속성만 봐서 본문에 이름이 나오는 문서가 모두 빠졌다(2026-11-13 '장진영 대표' → 2건). 이름끼리는 교집합
+        let related = p.people.iter().all(|(_, role, me)| role.is_none() && !*me);
+        let mut with_text = false;
+        if let (true, Some(t)) = (related, text) {
+            let in_folder = |d: &String| fprefix.as_ref().map_or(true, |f| pyutil::normcase(d).starts_with(f.as_str()));
+            let mut keep: Option<HashSet<String>> = None;
+            for (n, _, _) in &p.people {
+                let mut s: HashSet<String> = c.by_name.get(n).map(|v| v.iter().map(|(path, _)| path.clone())
+                    .filter(|x| allp.contains(x)).collect()).unwrap_or_default();
+                let before = s.len();
+                s.extend(t(n).into_iter().filter(|d| in_folder(d)));
+                with_text |= s.len() > before;
+                keep = Some(match keep { None => s, Some(prev) => prev.intersection(&s).cloned().collect() });
+            }
+            k = keep.unwrap_or_default();
+        }
         let has = !k.is_empty();
         for (n, role, me) in &p.people {
-            let r = match role.as_deref() { Some("author") => "작성", Some("editor") => "수정", _ => "관련" };
+            let r = match role.as_deref() {
+                Some("author") => "작성",
+                Some("editor") => "수정",
+                _ if with_text => "관련 · 본문",
+                _ => "관련",
+            };
             chips.push(chip("person", format!("{}{} ({})", n, if *me { " · 나" } else { "" }, r), if has { "filter" } else { "boost" }));
         }
         if has {
