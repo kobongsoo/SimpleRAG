@@ -485,9 +485,12 @@ function drawOcr(o, msg) {
 function docsLine(info) {
   const n = (x) => Number(x || 0).toLocaleString();
   let t = "인덱싱된 문서 " + n(info.docs) + "건";
-  if (info.docs_chunks != null) t += " · 청크 " + n(info.docs_chunks) + "개";
   if (info.docs_pages) t += " · 쪽 " + n(info.docs_pages) + "쪽 (PDF · PPT 등 쪽이 있는 문서)";
-  if (info.chunk_tokens) t += "\n청킹: 청크 " + info.chunk_tokens + "토큰 · 겹침 " + info.chunk_overlap + "토큰";
+  // 아래 줄 — 청크 수와 청킹 설정
+  const ck = [];
+  if (info.docs_chunks != null) ck.push("청크 " + n(info.docs_chunks) + "개");
+  if (info.chunk_tokens) ck.push(info.chunk_tokens + "토큰", "겹침 " + info.chunk_overlap + "토큰");
+  if (ck.length) t += "\n청킹: " + ck.join(" · ");
   return t;
 }
 // 초 → "1시간 30분" · "12분" · "1분 미만"
