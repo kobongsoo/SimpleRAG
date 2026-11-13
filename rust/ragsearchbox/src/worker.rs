@@ -644,6 +644,16 @@ impl Worker {
         self.inner.lock().unwrap().llm_error.clone()
     }
 
+    // 답변 모델이 CPU 로 도나 — 워커 준비 줄("생성 CPU / …")로 본다. 아직 모르면 None
+    pub fn gen_is_cpu(&self) -> Option<bool> {
+        let g = self.inner.lock().unwrap();
+        let line = g.backend.trim();
+        if line.is_empty() {
+            return None;
+        }
+        Some(line.trim_start_matches("생성 ").starts_with("CPU"))
+    }
+
     pub fn info(&self) -> Value {
         let g = self.inner.lock().unwrap();
         let line = g.backend.trim();

@@ -588,7 +588,9 @@ impl App {
     // 탐색기 창 · 패널에 답변 모델 이름과 앱 버전을 알린다 — 설정 > 모델에서 바꿀 수 있어 어느 모델이 답하는지 보이게
     fn push_model(&mut self) {
         let cur = cfgline::read_model(self.config_path().as_deref());
-        let v = json!({"alias": cur, "name": self.models.name(&cur), "ver": env!("CARGO_PKG_VERSION")});
+        // cpu — 답변 모델이 CPU 로 돌면 이름 옆에 'CPU(느림)' 을 붙인다(모르면 null)
+        let cpu = self.worker.as_ref().and_then(|w| w.gen_is_cpu());
+        let v = json!({"alias": cur, "name": self.models.name(&cur), "ver": env!("CARGO_PKG_VERSION"), "cpu": cpu});
         self.browse.call("setModel", v.clone());
         self.panel.call("setModel", v);
     }

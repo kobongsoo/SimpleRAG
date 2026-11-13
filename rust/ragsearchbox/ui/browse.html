@@ -309,6 +309,7 @@
   .st .model { border: 0; background: none; padding: 0; font: inherit; color: var(--muted); cursor: pointer; }
   .st .model:hover { color: var(--link); text-decoration: underline; }
   .st .model b { font-weight: 600; color: var(--ink2); }
+  .st .model .cpu { color: #c62828; font-weight: 600; }
   /* 모델 준비 진행 — 목록 위 띠. 검색 결과를 그려도 지워지지 않고, 맨 아래 줄과 달리 놓치지 않는다 */
   #loadband { display: flex; align-items: center; gap: 14px; padding: 10px 16px; border-bottom: 1px solid var(--rule); background: var(--surface); }
   #loadband.hidden { display: none; }
@@ -2142,9 +2143,12 @@ const api = {
   // 답변 모델 이름 · 앱 버전 — 맨 아래 줄 오른쪽(창은 둘 다, 좁은 패널은 모델 이름만)
   setModel(v) {
     if (!v || !v.name) return;
-    $("stmodel").innerHTML = `AI <b>${esc(v.name)}</b> · v${esc(v.ver || "")}`;
-    $("pstmodel").innerHTML = `AI <b>${esc(v.name)}</b>`;
-    $("stmodel").title = $("pstmodel").title = `답변 모델 ${v.name} · MoAI-S ${v.ver || ""} — 누르면 설정 > 모델에서 바꿀 수 있습니다`;
+    // CPU 로 답하면 이름 옆에 빨간 'CPU(느림)' — iGPU 보다 답이 느린 까닭을 바로 알 수 있게
+    const cpu = v.cpu === true ? ` <span class="cpu">CPU(느림)</span>` : "";
+    $("stmodel").innerHTML = `AI <b>${esc(v.name)}</b>${cpu} · v${esc(v.ver || "")}`;
+    $("pstmodel").innerHTML = `AI <b>${esc(v.name)}</b>${cpu}`;
+    $("stmodel").title = $("pstmodel").title = `답변 모델 ${v.name} · MoAI-S ${v.ver || ""}` +
+      (v.cpu === true ? " · CPU 로 답합니다(iGPU 보다 느림)" : "") + " — 누르면 설정 > 모델에서 바꿀 수 있습니다";
     $("stmodel").classList.remove("hidden");
     $("pstmodel").classList.remove("hidden");
   },

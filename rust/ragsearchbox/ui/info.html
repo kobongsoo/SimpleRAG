@@ -31,6 +31,9 @@
   .nav .logo img { width: 30px; height: 30px; object-fit: contain; background: #fff; border-radius: 8px; padding: 2px;
     box-shadow: 0 0 0 1px var(--line); }
   .nav .logo span { color: #e5163f; }
+  /* 생성 백엔드가 CPU 일 때 — 빨간 글씨 + 설명 */
+  .cpuwarn { color: #c62828; font-weight: bold; }
+  .cpuwhy { margin-top: 2px; }
   /* 이름 · 지금 버전 — 이름 아래 작게(옆에 두면 좁은 메뉴에서 이름이 두 줄로 꺾인다) */
   .nav .logo .nm { display: flex; flex-direction: column; padding: 0; line-height: 1.15; white-space: nowrap; }
   .nav .logo .nm:hover { background: transparent; }
@@ -313,7 +316,14 @@ window.rsb = {
     $("v_model").textContent = info.model || none;
     $("v_embed").textContent = info.embed_model || none;
     $("v_rerank").textContent = [info.rerank_model, info.rerank].filter(Boolean).join(" · ") || none;
-    $("v_gen").textContent = info.gen || none;
+    // 생성 백엔드 — CPU 면 빨간 글씨와 '답이 느리다' 설명(iGPU 로 답할 때보다 첫 글자 · 답이 늦다)
+    const gen = info.gen || "";
+    if (/^CPU/.test(gen)) {
+      $("v_gen").innerHTML = `<span class="cpuwarn">${esc(gen)}</span><div class="note cpuwhy">CPU 로 답하고 있어 iGPU 로 답할 때보다 첫 글자와 답이 느립니다. ` +
+        `이 PC 에 쓸 수 있는 iGPU 가 없거나, 지금 답변 모델이 이 PC 의 iGPU 에서 충분히 빠르지 않은 경우입니다. 설정 &gt; 모델에서 다른 모델을 고르면 달라질 수 있습니다.</div>`;
+    } else {
+      $("v_gen").textContent = gen || none;
+    }
     showLoading(st);
     const up = info.model_up;
     $("b_unload").disabled = !(up === true);

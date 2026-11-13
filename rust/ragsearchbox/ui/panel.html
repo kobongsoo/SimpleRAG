@@ -147,6 +147,7 @@
   #modelbtn { color: var(--muted); cursor: pointer; padding: 4px 6px; border-radius: 8px; white-space: nowrap; user-select: none; }
   #modelbtn:hover { background: var(--hover); color: var(--ink2); }
   #modelbtn b { font-weight: 600; color: var(--ink2); }
+  #modelbtn .cpu { color: #c62828; font-weight: 600; }
   #state { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #send { background: var(--brand); color: #fff; border: 0; border-radius: 50%; width: 34px; height: 34px;
     cursor: pointer; display: grid; place-items: center; box-shadow: 0 3px 10px rgba(229, 22, 63, .3); transition: transform .1s, background .15s; }
@@ -703,7 +704,10 @@ window.rsb = {
     b.textContent = "";
     b.append("AI ");
     const n = document.createElement("b"); n.textContent = v.name; b.append(n);
-    b.title = `답변 모델 ${v.name} · MoAI-S ${v.ver || ""} — 누르면 설정 > 모델에서 바꿀 수 있습니다`;
+    // CPU 로 답하면 이름 옆에 빨간 'CPU(느림)'
+    if (v.cpu === true) { const c = document.createElement("span"); c.className = "cpu"; c.textContent = " CPU(느림)"; b.append(c); }
+    b.title = `답변 모델 ${v.name} · MoAI-S ${v.ver || ""}` + (v.cpu === true ? " · CPU 로 답합니다(iGPU 보다 느림)" : "") +
+      " — 누르면 설정 > 모델에서 바꿀 수 있습니다";
     b.style.display = "";
     // 아래 안내 줄에 지금 버전
     if (v.ver) $("appver").textContent = " " + v.ver;

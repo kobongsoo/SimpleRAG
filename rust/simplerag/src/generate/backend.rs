@@ -45,8 +45,14 @@ pub fn rerank_enabled(backend: &str) -> bool {
 // 이 PC(같은 호스트)의 백엔드 측정 가운데 iGPU 를 고른 것이 있나 — 빠른 iGPU 가 있는 PC
 fn pc_has_fast_igpu() -> bool {
     let host = host();
-    load_entries().iter().any(|e| e["backend"] == "vulkan"
-        && e["key"]["host"].as_str().map(|h| h.eq_ignore_ascii_case(&host)).unwrap_or(true))
+    load_entries().iter().any(|e| {
+        // 저장된 측정값이 있으면 지금 규칙(decide)으로 다시 판정한다
+        let b = match (e.get("cpu"), e.get("vulkan")) {
+            (Some(c), Some(g)) if c.is_object() && g.is_object() => decide(c, g).0,
+            _ => e["backend"].as_str().unwrap_or("").to_string(),
+        };
+        b == "vulkan" && e["key"]["host"].as_str().map(|h| h.eq_ignore_ascii_case(&host)).unwrap_or(true)
+    })
 }
 
 // 동봉 DLL 의 llama-cpp-python 버전(VERSION.txt)
@@ -90,6 +96,12 @@ pub fn decide(cpu: &Value, gpu: &Value) -> (String, String) {
     }
     if !ok(cpu) {
         return ("vulkan".into(), format!("CPU 측정 실패 — iGPU 사용 ({})", cpu.get("error").and_then(|x| x.as_str()).unwrap_or("")));
+    }
+    // CPU 측정을 GPU 가 되는 DLL 로 했으면(모델 전용 llama.cpp 판 — 예: Kanana-2) 레이어를 CPU 에 둬도
+    //   큰 행렬 계산이 iGPU 로 넘어가 'CPU' 값이 부풀어(152 vs iGPU 162 t/s) iGPU 와 iGPU 를 비교한 셈이 된다.
+    //   그 비교는 믿을 수 없으므로 iGPU 가 되면 iGPU 를 쓴다(2026-11-13)
+    if cpu.get("gpu_offload").and_then(|x| x.as_bool()).unwrap_or(false) {
+        return ("vulkan".into(), format!("iGPU prefill {:.0} t/s — CPU 측정에 iGPU 가 섞여(전용 DLL) 비교 대신 iGPU 사용", tps(gpu)));
     }
     let ratio = tps(gpu) / tps(cpu).max(1e-6);
     if ratio >= config::GPU_MIN_SPEEDUP {
@@ -261,8 +273,12 @@ fn select_inner(alias: Option<&str>, reprobe: bool, log: &mut dyn FnMut(&str)) -
     let cached = if reprobe { None } else { peek(alias) };
     if let Some(c) = &cached {
         if mode == "auto" {
-            return json!({"backend": c["backend"], "source": "cache", "reason": c.get("reason").cloned().unwrap_or(json!("")),
-                          "cpu": c.get("cpu"), "vulkan": c.get("vulkan")});
+            // 저장된 측정값으로 다시 판정한다 — 판정 규칙이 바뀌어도(예: 전용 DLL 의 CPU 측정 무효) 다시 재지 않고 따라간다
+            let (backend, reason) = match (c.get("cpu"), c.get("vulkan")) {
+                (Some(cpu), Some(gpu)) if cpu.is_object() && gpu.is_object() => decide(cpu, gpu),
+                _ => (c["backend"].as_str().unwrap_or("cpu").to_string(), c.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string()),
+            };
+            return json!({"backend": backend, "source": "cache", "reason": reason, "cpu": c.get("cpu"), "vulkan": c.get("vulkan")});
         }
         if c.get("vulkan").and_then(|v| v.get("ok")).and_then(|x| x.as_bool()).unwrap_or(false) {
             return json!({"backend": "vulkan", "source": "cache", "reason": "SIMPLERAG_GEN_BACKEND=vulkan", "vulkan": c.get("vulkan")});
@@ -342,4 +358,22 @@ pub fn probe_main(args: &[String]) -> i32 {
     let ok = out.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     println!("{}", pyutil::json_ascii(&Value::Object(out), false));
     if ok { 0 } else { 3 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 판정 — iGPU 가 1.3배 이상이면 iGPU, 아니면 CPU. 단 CPU 측정에 iGPU 가 섞였으면(전용 DLL) 비교하지 않고 iGPU
+    #[test]
+    fn decide_rules() {
+        let cpu = |tps: f64, off: bool| json!({"ok": true, "prefill_tps": tps, "gpu_offload": off});
+        let gpu = |tps: f64| json!({"ok": true, "prefill_tps": tps, "gpu_offload": true});
+        assert_eq!(decide(&cpu(90.0, false), &gpu(307.0)).0, "vulkan");
+        assert_eq!(decide(&cpu(152.0, false), &gpu(162.0)).0, "cpu");
+        // Kanana-2 실측 — 전용 Vulkan DLL 로 잰 'CPU' 152 · iGPU 162
+        assert_eq!(decide(&cpu(152.0, true), &gpu(162.0)).0, "vulkan");
+        // iGPU 측정이 실패하면 늘 CPU
+        assert_eq!(decide(&cpu(152.0, true), &json!({"ok": false, "error": "x"})).0, "cpu");
+    }
 }
