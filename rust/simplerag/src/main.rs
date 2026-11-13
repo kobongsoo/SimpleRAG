@@ -10,15 +10,18 @@ use std::sync::atomic::Ordering;
 use simplerag::cli::{self, Args};
 use simplerag::config;
 
-const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,search,clear,status,backend,warmup,import,suggest-synonyms} ...
+const USAGE: &str = "usage: simplerag-rs [-h] {index,ask,chat,extract,ocr,search,clear,status,backend,warmup,import,suggest-synonyms} ...
 
 로컬 문서 RAG (Rust 판)
 
 명령:
-  index    폴더 인덱싱(증분)            --dir <폴더> [--rebuild] [--no-recursive] [--allow-delete] [--max-add N]
+  index    폴더 인덱싱(증분)            --dir <폴더> [--rebuild] [--no-recursive] [--allow-delete] [--max-add N] [--no-ocr]
+           인덱싱 끝에 스캔 문서·그림 파일 OCR 대기열을 이어서 처리한다(--no-ocr 로 건너뜀)
   ask      질의 (질문 생략 시 대화형)   [질문] [--top-k N] [--max-tokens N] [--folder <폴더>] [--model M] [--precise] [--no-stream]
   chat     대화형 질의 (모델 1회 적재) [--top-k N] [--max-tokens N] [--model M] [--precise] [--no-stream]
   extract  추출 미리보기               <파일> [--chars N] [--blocks] [--dump <폴더>]
+  ocr      OCR 대기열 처리              [<파일> [--pages 1,3-5] [--out <결과 json>]]
+           파일을 주면 대기열과 상관없이 그 파일만 OCR 해 글·시간을 보여 준다(시험용)
   search   검색만 수행(LLM 미적재)     <질의> [--top-k N] [--chars N] [--folder <폴더>] [--group] [--similar]
            --group: 탐색기 모드처럼 문서 ▸ 쪽으로 묶어 @find JSON 줄로 출력(--top-k = 1단계 후보 수)
            --similar: 질의 자리에 문서 경로 — 그 문서와 비슷한 문서(사본 · 다른 판 · 내용 비슷)를 @find 줄로
@@ -53,7 +56,7 @@ fn parse(argv: &[String]) -> Args {
         std::process::exit(0);
     }
     a.cmd = argv[0].clone();
-    let valid = ["index", "ask", "chat", "extract", "search", "clear", "status", "backend", "warmup", "import", "suggest-synonyms"];
+    let valid = ["index", "ask", "chat", "extract", "ocr", "search", "clear", "status", "backend", "warmup", "import", "suggest-synonyms"];
     if !valid.contains(&a.cmd.as_str()) {
         arg_error(&format!("argument cmd: invalid choice: '{}' (choose from {})", a.cmd,
             valid.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ")));
@@ -104,6 +107,8 @@ fn parse(argv: &[String]) -> Args {
             "--no-llm" => a.no_llm = true,
             "--group" => a.group = true,
             "--similar" => a.similar = true,
+            "--no-ocr" => a.no_ocr = true,
+            "--pages" => a.pages = Some(next(&mut i, "--pages")),
             s if s.starts_with("--") => arg_error(&format!("unrecognized arguments: {}", s)),
             s => positional.push(s.to_string()),
         }
@@ -120,6 +125,7 @@ fn parse(argv: &[String]) -> Args {
             }
             a.query = positional.first().cloned();
         }
+        "ocr" => a.path = positional.first().cloned(),
         "extract" => {
             if positional.is_empty() {
                 arg_error("the following arguments are required: path");
@@ -204,6 +210,7 @@ fn main() {
         "ask" => cli::cmd_ask(&args),
         "chat" => cli::cmd_chat(&args),
         "extract" => cli::cmd_extract(&args),
+        "ocr" => cli::cmd_ocr(&args),
         "search" => cli::cmd_search(&args),
         "clear" => cli::cmd_clear(&args),
         "status" => cli::cmd_status(&args),

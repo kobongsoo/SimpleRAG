@@ -176,7 +176,8 @@ fn heading_fallback(doc: &mut Document) {
     let offset = if g.is_some() && n_app > 0 { 1 } else { 0 };
     let mut out = vec![];
     for (i, mut b) in std::mem::take(&mut doc.blocks).into_iter().enumerate() {
-        if !para_like(b.kind) && !head_ids.contains(&i) {
+        // OCR 줄은 제목으로 올리지 않는다 — 스캔 표 행("3 소매금융여신심사부 1 …")이 번호 제목으로 잡힌다
+        if (!para_like(b.kind) && !head_ids.contains(&i)) || b.source == B::SRC_OCR {
             out.push(b);
             continue;
         }

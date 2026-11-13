@@ -33,6 +33,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 cfb = "0.10"
 calamine = { version = "0.30", features = ["dates"] }
 libloading = "0.8"
+# 그림 파일 OCR — png · jpeg · tiff · bmp 디코더만 켠다(OCR 설계서 §4-4)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "bmp"] }
+# 여러 쪽 TIFF(스캐너·팩스)는 쪽마다 읽고, 흑백 팩스의 WhiteIsZero 를 직접 뒤집는다(image 는 첫 쪽만 · 뒤집지 않음)
+tiff = "0.11"
 unicode-normalization = "0.1"
 html-escape = "0.2"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_WindowsProgramming", "Win32_System_Registry"] }

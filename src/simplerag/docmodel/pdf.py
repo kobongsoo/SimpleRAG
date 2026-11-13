@@ -72,6 +72,10 @@ def extract(path, title=""):
         raise ValueError("PDF 열기 실패: {}".format(type(e).__name__))
     doc = B.Document(format="pdf", title=title)
     pages, sizes, anchors = [], [], []
+    # OCR — 쪽마다 (글자 수, 쪽 크기, 그림 객체)를 모아 스캔 쪽을 고른다(OCR 설계서 §4)
+    from . import ocr as O
+    use_ocr = O.enabled()
+    infos, ocr_rows = [], {}
     t0 = time.monotonic()
     try:
         n = len(pdf)
@@ -94,10 +98,29 @@ def extract(path, title=""):
                 anchors.append(at)
                 # 줄바꿈은 그대로 두므로 원문 txt 로 잰 줄 수와 같다
                 sizes.append(_line_sizes(tp, txt, len(lines)))
+                if use_ocr:
+                    infos.append((len(re.sub(r"\s", "", txt or "")),) + O.page_images(page))
             finally:
                 page.close()
+        # 스캔 쪽 OCR — 캐시에 없으면 지금 읽는다(Python 판은 대기열 없음). 실패해도 글자층은 그대로 쓴다
+        if use_ocr and infos:
+            want, dropped = O.pick_pages(infos)
+            if want:
+                try:
+                    ocr_rows = O.rows_for(path, pdf, want)
+                except Exception as e:  # noqa: BLE001 — OCR 실패가 추출을 막지 않게
+                    doc.warnings.append("OCR 실패: {}: {}".format(type(e).__name__, str(e)[:80]))
+            if dropped:
+                doc.warnings.append("OCR 부분 {}/{}쪽 (상한)".format(len(want), len(want) + dropped))
     finally:
         pdf.close()
+    # 글자층 줄 뒤에 OCR 줄을 붙인다 — 이 번호부터는 OCR 출처
+    ocr_from = []
+    for i, lines in enumerate(pages):
+        ocr_from.append(len(lines))
+        rows = ocr_rows.get(i, [])
+        lines.extend(rows)
+        sizes[i] = list(sizes[i]) + [None] * len(rows)
     doc.pages = len(pages)
     tables = sum(len(rs) for at in anchors for rs in at.values())
     if sum(len(re.sub(r"\s+", "", "".join(p))) for p in pages) < MIN_TEXT_CHARS and not tables:
@@ -112,6 +135,10 @@ def extract(path, title=""):
             for rows in at.get(j, ()):
                 doc.blocks.append(B.Block(B.TABLE, "", rows=rows, page=no))
             if not ln.strip():
+                continue
+            # OCR 줄 — 제목 추론·머리말 판정 없이 본문 문단으로, 출처는 ocr
+            if j >= ocr_from[no - 1]:
+                doc.blocks.append(B.Block(B.PARAGRAPH, ln.strip(), page=no, source=B.SRC_OCR))
                 continue
             if (no, j) in heads:
                 doc.blocks.append(B.Block(B.HEADING, ln.strip(), level=heads[(no, j)], page=no,

@@ -223,7 +223,8 @@ def _heading_fallback(doc):
 
     out = []
     for b in doc.blocks:
-        if b.type not in _PARA_LIKE and id(b) not in head_ids:
+        # OCR 줄은 제목으로 올리지 않는다 — 스캔 표 행("3 소매금융여신심사부 1 …")이 번호 제목으로 잡힌다
+        if (b.type not in _PARA_LIKE and id(b) not in head_ids) or b.source == B.SRC_OCR:
             out.append(b)
             continue
         first, _, rest = b.text.partition("\n")

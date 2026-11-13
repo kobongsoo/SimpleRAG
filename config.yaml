@@ -36,6 +36,13 @@ extract:
                                 #   답변 실측: 표 질문 정답 0.39→0.44, 다른 질문 손해 없음(report/PDF파서_비교_OpenDataLoader §7-6).
                                 #   이 줄이 없으면 기본 true. 끄려면 false 를 넣는다 → pdf_tables: false
                                 #   ⚠️ 바꾸면 전체 재인덱싱 필요:  index --dir <폴더> --rebuild
+  ocr: true                     # 스캔 PDF 글자 읽기(OCR, 2026-11-13 plan/OCR_설계서). false 면 지금처럼 "텍스트층 없음"으로 실패한다.
+                                #   글자층이 없는 쪽만 읽는다(PP-OCRv6 tiny 검출 + 한국어 PP-OCRv5 인식, models/ocr 약 15MB).
+                                #   쪽당 2~3초라 인덱싱 끝에(앱은 쉬는 동안 한 쪽씩) 따로 처리하고, 결과는 ocr_cache 에 남겨 재구축 때 다시 쓴다.
+                                #   켜고 끄는 데 전체 재인덱싱은 필요 없다. 환경변수 SIMPLERAG_OCR=1/0 이 이 값보다 앞선다
+  ocr_threads: 4                # OCR 계산 스레드 — P/E 혼합 CPU 에서 8 보다 4 가 빨랐다(2026-11-13 실측)
+  ocr_max_pages: 100            # 한 문서에서 OCR 하는 쪽 상한(앞에서부터) — 넘으면 "OCR 부분 100/370쪽 (상한)" 경고
+  ocr_images: true              # 그림 파일(.png .jpg .jpeg .tif .tiff .bmp)도 인덱싱해 OCR (Rust 판). ocr 이 false 면 함께 꺼진다
 
 retrieval:
   dense_top_k: 10               # 코사인(dense) 검색 후보 수

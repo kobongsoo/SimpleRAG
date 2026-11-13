@@ -35,7 +35,7 @@ pub fn ensure_dylib() {
 }
 
 // 세션 만들기(공통)
-fn make_session(path: &str, threads: usize, inter_one: bool) -> Result<Session, String> {
+pub(crate) fn make_session(path: &str, threads: usize, inter_one: bool) -> Result<Session, String> {
     ensure_dylib();
     // ort 는 DLL 을 못 찾으면 패닉한다 — 오류문으로 바꾼다
     let path = path.to_string();

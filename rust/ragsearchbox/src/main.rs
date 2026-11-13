@@ -116,6 +116,8 @@ struct InfoWin {
     mt_msg: String,
     // 마지막 인덱싱 확장자 바꾸기 결과
     ext_msg: String,
+    // 스캔 문서(OCR) 묶음의 결과 글 — 저장 · 오류
+    ocr_msg: String,
 }
 
 //------------------------------------------------------------------
@@ -2233,6 +2235,12 @@ impl App {
         info["exts"] = json!(self.s.index_exts);
         info["exts_default"] = json!(settings::DEFAULT_EXTS);
         info["ext_msg"] = json!(self.info.ext_msg);
+        // 스캔 문서 OCR — 켬/끔 · 대기 · 지금 읽는 문서(OCR 설계서 §8-2)
+        info["ocr"] = match self.jobs.as_ref() {
+            Some(j) => j.ocr_status(),
+            None => json!({"on": self.s.ocr, "images": self.s.ocr_images, "paused": false, "known": false}),
+        };
+        info["ocr_msg"] = json!(self.info.ocr_msg);
         info["ui_mode"] = json!(self.s.ui_mode);
         info["dock"] = json!(self.s.panel_enabled);
         info["mode_msg"] = json!(self.mode_msg);
@@ -2445,6 +2453,23 @@ impl App {
                 self.info.folder_msg = self.set_folders(v).unwrap_or_else(|e| e);
             }
             "folder_msg" => self.info.folder_msg = m["msg"].as_str().unwrap_or("").to_string(),
+            // 스캔 문서 OCR — 켬/끔 · 그림 파일 · 잠시 멈춤
+            "ocr" => {
+                let on = m["value"].as_bool().unwrap_or(true);
+                self.info.ocr_msg = self.set_ocr(Some(on), None).unwrap_or_else(|e| e);
+            }
+            "ocr_images" => {
+                let on = m["value"].as_bool().unwrap_or(true);
+                self.info.ocr_msg = self.set_ocr(None, Some(on)).unwrap_or_else(|e| e);
+            }
+            "ocr_pause" => {
+                let on = m["value"].as_bool().unwrap_or(false);
+                if let Some(j) = self.jobs.as_mut() {
+                    j.ocr_paused = on;
+                    crate::info!("app", "스캔 문서 읽기 {}", if on { "잠시 멈춤" } else { "이어 하기" });
+                }
+                self.info.ocr_msg = String::new();
+            }
             "set_exts" => {
                 let raw = m["exts"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
                 self.info.ext_msg = self.set_exts(&raw).unwrap_or_else(|e| e);
@@ -2607,8 +2632,40 @@ impl App {
         })?;
         crate::info!("app", "인덱싱 확장자를 바꿨다: {}", exts.join(" "));
         self.s.index_exts = exts.clone();
-        watcher::set_exts(&exts);
+        watcher::set_exts(&settings::watch_exts(&self.s));
         Ok(self.apply_index_filter("인덱싱 확장자 변경", true))
+    }
+
+    //------------------------------------------------------------------
+    // 스캔 문서 OCR 켬/끔 · 그림 파일 포함 — INI [AutoIndex] Ocr · OcrImages 저장, 워커 다시 올리기 (OCR 설계서 §8)
+    //=> 워커는 시작할 때만 설정을 읽는다. 그림 파일을 끄면 그림 확장자가 인덱싱 대상에서 빠져 다음 대조에서
+    //   그림 파일 청크가 인덱스에서 빠진다(확장자를 뺄 때와 같다). OCR 을 꺼도 이미 들어간 OCR 청크는 남는다.
+    // -in: ocr · images = 바꿀 값(None 이면 그대로)
+    // -out: Ok(안내 글) / Err(사유 — 저장하지 않았다)
+    //------------------------------------------------------------------
+    fn set_ocr(&mut self, ocr: Option<bool>, images: Option<bool>) -> Result<String, String> {
+        let (new_ocr, new_img) = (ocr.unwrap_or(self.s.ocr), images.unwrap_or(self.s.ocr_images));
+        if new_ocr == self.s.ocr && new_img == self.s.ocr_images {
+            return Ok(String::new());
+        }
+        if self.index_running() {
+            return Err("인덱싱이 돌고 있습니다 — 끝난 뒤 다시 바꾸세요".into());
+        }
+        let b = |v: bool| if v { "1" } else { "0" };
+        settings::save_ini_value(&self.s.ini_path, "AutoIndex", "Ocr", b(new_ocr))
+            .and_then(|_| settings::save_ini_value(&self.s.ini_path, "AutoIndex", "OcrImages", b(new_img)))
+            .map_err(|e| {
+                crate::warn!("app", "OCR 설정을 저장하지 못했다: {}", e);
+                e
+            })?;
+        crate::info!("app", "OCR 설정: 스캔 문서 {} · 그림 파일 {}", b(new_ocr), b(new_img));
+        self.s.ocr = new_ocr;
+        self.s.ocr_images = new_img;
+        watcher::set_exts(&settings::watch_exts(&self.s));
+        if let Some(j) = self.jobs.as_mut() {
+            j.ocr_changed(&self.s);
+        }
+        Ok(self.apply_index_filter("OCR 설정 변경", true))
     }
 
     //------------------------------------------------------------------
@@ -2664,6 +2721,9 @@ impl App {
         if let Some(w) = &self.worker {
             w.set_env("SIMPLERAG_INDEX_EXTS", &self.s.index_exts.join(" "));
             w.set_env("SIMPLERAG_INDEX_EXCLUDE", &self.s.exclude_folders.join(";"));
+            for (k, v) in settings::ocr_env(&self.s) {
+                w.set_env(&k, &v);
+            }
             if w.availability() != "down" {
                 w.unload(why);
                 w.start();
@@ -2861,7 +2921,7 @@ fn main() {
         }
     };
     crate::info!("main", "MoAISearch 시작 — 설정 {}", s.ini_path);
-    watcher::set_exts(&s.index_exts);
+    watcher::set_exts(&settings::watch_exts(&s));
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy: Proxy = Arc::new(Mutex::new(event_loop.create_proxy()));
@@ -2928,9 +2988,12 @@ fn main() {
         Ok((cmd, why)) => {
             crate::info!("app", "워커 명령: {} ({})", cmd.join(" "), why);
             let p = proxy.clone();
-            let w = Worker::new(cmd.clone(), vec![("SIMPLERAG_RELEVANCE_MIN".into(), s.relevance_min.clone()), ("SIMPLERAG_EVIDENCE_FULL".into(), "1".into()),
-                                                  ("SIMPLERAG_INDEX_EXTS".into(), s.index_exts.join(" ")),
-                                                  ("SIMPLERAG_INDEX_EXCLUDE".into(), s.exclude_folders.join(";"))],
+            let mut env = vec![("SIMPLERAG_RELEVANCE_MIN".into(), s.relevance_min.clone()), ("SIMPLERAG_EVIDENCE_FULL".into(), "1".into()),
+                               ("SIMPLERAG_INDEX_EXTS".into(), s.index_exts.join(" ")),
+                               ("SIMPLERAG_INDEX_EXCLUDE".into(), s.exclude_folders.join(";"))];
+            // 스캔 문서 · 그림 파일 OCR 켬/끔 (OCR 설계서 §8)
+            env.extend(settings::ocr_env(&s));
+            let w = Worker::new(cmd.clone(), env,
                                 Box::new(move |e| post(&p, UserEvent::Worker(e))), s.no_stream, s.start_timeout_s, s.answer_timeout_s, s.restart_max, s.idle_unload_min);
             (Some(w), None, cmd)
         }
@@ -2955,7 +3018,7 @@ fn main() {
         info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
                        syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                        ppl_msg: String::new(), ppl_done: Arc::new(Mutex::new(None)), ppl_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                       prec_msg: String::new(), mt_msg: String::new(), ext_msg: String::new() },
+                       prec_msg: String::new(), mt_msg: String::new(), ext_msg: String::new(), ocr_msg: String::new() },
         history: history::load(&history_path),
         history_path,
         s,

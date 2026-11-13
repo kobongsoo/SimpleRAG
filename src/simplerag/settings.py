@@ -212,6 +212,10 @@ SCHEMA = {
         "dump_blocks": _bool,                      # 문서별 블록 JSON 저장(진단용)
         "pdf_headings": _bool,                     # PDF 글자 크기로 제목 추정(P-2, 기본 끔)
         "pdf_tables": _bool,                       # PDF 테두리 표 검출(기본 켬)
+        "ocr": _bool,                              # 스캔 PDF · 그림 파일 OCR(기본 켬, OCR 설계서)
+        "ocr_threads": _int(1, 64),                # OCR 스레드(기본 4)
+        "ocr_max_pages": _int(1, 100000),          # 문서당 OCR 쪽 상한(기본 100)
+        "ocr_images": _bool,                       # 그림 파일도 OCR(기본 켬, Rust 판)
     },
     "retrieval": {
         "dense_top_k": _int(1, 1000),

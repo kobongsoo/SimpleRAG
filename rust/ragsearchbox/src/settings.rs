@@ -45,6 +45,9 @@ pub struct Settings {
     pub index_exts: Vec<String>,
     // 인덱싱 폴더 아래에서 뺀 하위 폴더 — [AutoIndex] ExcludeFolders(; 로 나눔)
     pub exclude_folders: Vec<String>,
+    // 스캔 문서 OCR(OCR 설계서 §8) — [AutoIndex] Ocr · OcrImages (기본 켬). 워커에 SIMPLERAG_OCR · _IMAGES 로 넘긴다
+    pub ocr: bool,
+    pub ocr_images: bool,
     pub log_level: String,
     // 화면 모드(탐색기 모드 설계서 §16) — explorer(기본) | rag · 쪽을 눌렀을 때 preview | app · 폴더 아이콘 바꾸기
     pub ui_mode: String,
@@ -103,6 +106,8 @@ impl Default for Settings {
             autoindex_bm25_idle_s: 10,
             index_exts: default_exts(),
             exclude_folders: vec![],
+            ocr: true,
+            ocr_images: true,
             log_level: "INFO".into(),
             ui_mode: "explorer".into(),
             page_click: "preview".into(),
@@ -302,6 +307,8 @@ pub fn load(path: Option<&str>) -> Settings {
     if !exts.is_empty() {
         s.index_exts = exts;
     }
+    s.ocr = ini.boolean("AutoIndex", "Ocr", true, &mut w);
+    s.ocr_images = ini.boolean("AutoIndex", "OcrImages", true, &mut w);
     s.exclude_folders = ini.s("AutoIndex", "ExcludeFolders").split(';').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
     let m = ini.s("UI", "Mode").to_lowercase();
     if m == "explorer" || m == "rag" {
@@ -471,4 +478,35 @@ mod tests {
         assert_eq!(load(Some(&p)).index_exts, vec![".pdf", ".csv"]);
         let _ = std::fs::remove_dir_all(&d);
     }
+}
+
+// OCR 이 그림 파일도 읽을 때 더하는 확장자 — simplerag ocr::image::IMAGE_EXTS 와 같다
+pub const OCR_IMAGE_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"];
+
+//------------------------------------------------------------------
+// 워커 · index 명령에 넘길 OCR 환경변수 (OCR 설계서 §8)
+//
+// -in: s = 설정
+//
+// -out: [(SIMPLERAG_OCR, 1|0), (SIMPLERAG_OCR_IMAGES, 1|0)]
+// -out: error = 없음
+//------------------------------------------------------------------
+pub fn ocr_env(s: &Settings) -> Vec<(String, String)> {
+    let b = |v: bool| if v { "1".to_string() } else { "0".to_string() };
+    vec![("SIMPLERAG_OCR".into(), b(s.ocr)), ("SIMPLERAG_OCR_IMAGES".into(), b(s.ocr && s.ocr_images))]
+}
+
+//------------------------------------------------------------------
+// 파일 감시 확장자 — 인덱싱 확장자 + (OCR 그림 파일 켬이면) 그림 확장자
+//------------------------------------------------------------------
+pub fn watch_exts(s: &Settings) -> Vec<String> {
+    let mut v = s.index_exts.clone();
+    if s.ocr && s.ocr_images {
+        for e in OCR_IMAGE_EXTS {
+            if !v.iter().any(|x| x == e) {
+                v.push(e.to_string());
+            }
+        }
+    }
+    v
 }

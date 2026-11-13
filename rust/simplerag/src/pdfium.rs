@@ -44,10 +44,23 @@ struct Api {
     get_unicode: unsafe extern "C" fn(TextPage, i32) -> u32,
     get_char_box: unsafe extern "C" fn(TextPage, i32, *mut f64, *mut f64, *mut f64, *mut f64) -> i32,
     get_char_origin: unsafe extern "C" fn(TextPage, i32, *mut f64, *mut f64) -> i32,
+    // OCR(스캔 쪽 판정 · 쪽 그리기) 용
+    page_width: unsafe extern "C" fn(Page) -> f32,
+    page_height: unsafe extern "C" fn(Page) -> f32,
+    page_rotation: unsafe extern "C" fn(Page) -> i32,
+    image_px_size: unsafe extern "C" fn(*mut c_void, *mut u32, *mut u32) -> i32,
+    bitmap_create_ex: unsafe extern "C" fn(i32, i32, i32, *mut c_void, i32) -> *mut c_void,
+    bitmap_fill_rect: unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32, u32) -> i32,
+    bitmap_buffer: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    bitmap_stride: unsafe extern "C" fn(*mut c_void) -> i32,
+    bitmap_destroy: unsafe extern "C" fn(*mut c_void),
+    render_page_bitmap: unsafe extern "C" fn(*mut c_void, Page, i32, i32, i32, i32, i32, i32),
+    page_to_device: unsafe extern "C" fn(Page, i32, i32, i32, i32, i32, f64, f64, *mut i32, *mut i32) -> i32,
 }
 
 // pdfium 쪽 객체 종류 번호 (fpdf_edit.h)
 const PAGEOBJ_PATH: i32 = 2;
+const PAGEOBJ_IMAGE: i32 = 3;
 const PAGEOBJ_FORM: i32 = 5;
 // pypdfium2 get_objects(max_depth=5) 와 같게 — 폼 안 폼은 4단계까지 들어간다
 const FORM_MAX_DEPTH: usize = 5;
@@ -111,6 +124,17 @@ fn load() -> Result<Mutex<Api>, String> {
             get_unicode: sym!(b"FPDFText_GetUnicode\0"),
             get_char_box: sym!(b"FPDFText_GetCharBox\0"),
             get_char_origin: sym!(b"FPDFText_GetCharOrigin\0"),
+            page_width: sym!(b"FPDF_GetPageWidthF\0"),
+            page_height: sym!(b"FPDF_GetPageHeightF\0"),
+            page_rotation: sym!(b"FPDFPage_GetRotation\0"),
+            image_px_size: sym!(b"FPDFImageObj_GetImagePixelSize\0"),
+            bitmap_create_ex: sym!(b"FPDFBitmap_CreateEx\0"),
+            bitmap_fill_rect: sym!(b"FPDFBitmap_FillRect\0"),
+            bitmap_buffer: sym!(b"FPDFBitmap_GetBuffer\0"),
+            bitmap_stride: sym!(b"FPDFBitmap_GetStride\0"),
+            bitmap_destroy: sym!(b"FPDFBitmap_Destroy\0"),
+            render_page_bitmap: sym!(b"FPDF_RenderPageBitmap\0"),
+            page_to_device: sym!(b"FPDF_PageToDevice\0"),
             _lib: lib,
         };
         Ok(Mutex::new(api))
@@ -130,11 +154,33 @@ fn api() -> Result<&'static Mutex<Api>, String> {
 // -필드: sizes = 글자 위치별 글꼴 크기(count_chars 와 text 길이가 같을 때만 채운다, P-2 용)
 //------------------------------------------------------------------
 // -필드: tables = 테두리 표(want_tables 일 때만, 위 → 아래). used 는 text 안 글자 위치
+// -필드: page_w · page_h = 회전 전 쪽 크기(pt) / images = 그림 객체(OCR 켬일 때만, 스캔 쪽 판정용)
 pub struct PageText {
     pub text: String,
     pub n_chars: i32,
     pub sizes: Option<Vec<f64>>,
     pub tables: Vec<crate::docmodel::pdftable::Table>,
+    pub page_w: f32,
+    pub page_h: f32,
+    pub images: Vec<ImgObj>,
+}
+
+//------------------------------------------------------------------
+// 쪽 안의 그림 객체 하나 (폼 안쪽 포함)
+// -필드: b  = [왼, 아래, 오른, 위] 쪽 좌표(pt, 회전 전)
+// -필드: px = 그림 픽셀 크기(가로, 세로) — 같은 그림이 여러 쪽에 반복되는지 볼 때 쓴다
+//------------------------------------------------------------------
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImgObj {
+    pub b: [f32; 4],
+    pub px: (u32, u32),
+}
+
+impl PageText {
+    // 빈 쪽(열지 않았거나 열기 실패)
+    fn empty() -> PageText {
+        PageText { text: String::new(), n_chars: 0, sizes: None, tables: vec![], page_w: 0.0, page_h: 0.0, images: vec![] }
+    }
 }
 
 //------------------------------------------------------------------
@@ -172,6 +218,7 @@ pub fn read_pages_keep(path: &str, want_sizes: bool, want_tables: bool, keep: Op
     let data = std::fs::read(path).map_err(|e| format!("PDF 읽기 실패: {}", e))?;
     let m = api()?;
     let a = m.lock().unwrap_or_else(|p| p.into_inner());
+    let want_images = crate::config::cfg().ocr;
     unsafe {
         let doc = (a.load_mem)(data.as_ptr() as *const c_void, data.len(), std::ptr::null());
         if doc.is_null() {
@@ -185,16 +232,24 @@ pub fn read_pages_keep(path: &str, want_sizes: bool, want_tables: bool, keep: Op
             }
             // 고르지 않은 쪽은 열지 않는다 — 빈 쪽으로 자리만 지킨다
             if keep.map_or(false, |k| !k(i, n)) {
-                out.push(PageText { text: String::new(), n_chars: 0, sizes: None, tables: vec![] });
+                out.push(PageText::empty());
                 continue;
             }
             let page = (a.load_page)(doc, i as i32);
             if page.is_null() {
-                out.push(PageText { text: String::new(), n_chars: 0, sizes: None, tables: vec![] });
+                out.push(PageText::empty());
                 continue;
             }
             let tp = (a.text_load)(page);
-            let mut pt = PageText { text: String::new(), n_chars: 0, sizes: None, tables: vec![] };
+            let mut pt = PageText::empty();
+            // OCR 이 켜져 있으면 스캔 쪽 판정에 쓸 쪽 크기·그림 객체를 모은다
+            if want_images {
+                let (w, h) = ((a.page_width)(page), (a.page_height)(page));
+                // 그림 위치는 회전 전 좌표라 쪽 크기도 회전 전으로 맞춘다(90°·270° 면 가로·세로 바꿈)
+                let rot = (a.page_rotation)(page);
+                (pt.page_w, pt.page_h) = if rot % 2 == 1 { (h, w) } else { (w, h) };
+                let _ = walk_images(&a, page, false, 0, &mut pt.images);
+            }
             if !tp.is_null() {
                 pt.n_chars = (a.count_chars)(tp);
                 pt.text = text_range(&a, tp, pt.n_chars);
@@ -295,6 +350,143 @@ unsafe fn walk_paths(a: &Api, parent: *mut c_void, is_form: bool, level: usize,
         }
     }
     Ok(true)
+}
+
+//------------------------------------------------------------------
+// 쪽(또는 폼)의 그림 객체 모으기 — 스캔 쪽 판정용 (OCR 설계서 §4)
+//=> walk_paths 와 같은 앞 순회로 폼 안까지 내려가며 그림 객체의 범위·픽셀 크기를 모은다.
+// -out: Ok(()) / Err = pdfium 실패(그때까지 모은 것은 남는다)
+//------------------------------------------------------------------
+unsafe fn walk_images(a: &Api, parent: *mut c_void, is_form: bool, level: usize, out: &mut Vec<ImgObj>) -> Result<(), ()> {
+    let count = if is_form { (a.form_count_objects)(parent) } else { (a.page_count_objects)(parent) };
+    if count < 0 {
+        return Err(());
+    }
+    for i in 0..count {
+        let obj = if is_form { (a.form_get_object)(parent, i as u32) } else { (a.page_get_object)(parent, i) };
+        if obj.is_null() {
+            return Err(());
+        }
+        let kind = (a.obj_get_type)(obj);
+        if kind == PAGEOBJ_IMAGE {
+            let (mut l, mut b, mut r, mut t) = (0f32, 0f32, 0f32, 0f32);
+            if (a.obj_get_bounds)(obj, &mut l, &mut b, &mut r, &mut t) != 0 {
+                let (mut pw, mut ph) = (0u32, 0u32);
+                (a.image_px_size)(obj, &mut pw, &mut ph);
+                out.push(ImgObj { b: [l, b, r, t], px: (pw, ph) });
+            }
+        }
+        if kind == PAGEOBJ_FORM && level < FORM_MAX_DEPTH - 1 {
+            walk_images(a, obj, true, level + 1, out)?;
+        }
+    }
+    Ok(())
+}
+
+//------------------------------------------------------------------
+// 쪽 하나를 그림으로 그린 결과
+// -필드: img   = 흰 바탕 BGR 그림
+// -필드: chars = 글자층 글자(공백 제외) 상자 [x0, y0, x1, y1] — 그림 픽셀 좌표(겹친 OCR 줄 빼기용)
+//------------------------------------------------------------------
+pub struct Rendered {
+    pub img: crate::ocr::Bgr,
+    pub chars: Vec<[f32; 4]>,
+}
+
+//------------------------------------------------------------------
+// PDF 쪽 하나를 그림으로 그리기 (OCR 설계서 §5-1)
+//=> 1) 문서를 메모리에서 열고 쪽을 연다(쪽마다 열고 닫아 잠금을 짧게 쥔다 — OCR 계산 동안
+//      다른 PDF 추출이 기다리지 않게)
+//   2) dpi 에 맞는 크기의 BGR 비트맵을 흰색으로 채우고 쪽을 그린다(주석 포함)
+//   3) 글자층 글자 상자를 같은 그림 좌표로 바꿔 함께 돌려준다(쪽 회전도 FPDF_PageToDevice 가 맞춘다)
+//
+// -in: data = PDF 파일 바이트 / index = 쪽 번호(0부터) / dpi = 해상도
+//
+// -out: Ok(Rendered)
+// -out: error = 열기·쪽·비트맵 실패면 Err(오류문)
+//------------------------------------------------------------------
+pub fn render_page(data: &[u8], index: usize, dpi: f32) -> Result<Rendered, String> {
+    let m = api()?;
+    let a = m.lock().unwrap_or_else(|p| p.into_inner());
+    unsafe {
+        let doc = (a.load_mem)(data.as_ptr() as *const c_void, data.len(), std::ptr::null());
+        if doc.is_null() {
+            return Err("PdfiumError".into());
+        }
+        let page = (a.load_page)(doc, index as i32);
+        if page.is_null() {
+            (a.close_doc)(doc);
+            return Err(format!("PDF {}쪽 열기 실패", index + 1));
+        }
+        let scale = dpi / 72.0;
+        let w = (((a.page_width)(page) * scale).round() as i32).max(1);
+        let h = (((a.page_height)(page) * scale).round() as i32).max(1);
+        // 너무 큰 쪽(포스터·도면)은 긴 변 10000px 로 묶는다 — 비트맵 하나가 수백 MB 가 되지 않게
+        let (w, h) = if w.max(h) > 10000 {
+            let k = 10000.0 / w.max(h) as f32;
+            (((w as f32 * k) as i32).max(1), ((h as f32 * k) as i32).max(1))
+        } else {
+            (w, h)
+        };
+        // 2 = FPDFBitmap_BGR (3바이트)
+        let bmp = (a.bitmap_create_ex)(w, h, 2, std::ptr::null_mut(), 0);
+        if bmp.is_null() {
+            (a.close_page)(page);
+            (a.close_doc)(doc);
+            return Err("PDF 쪽 비트맵 만들기 실패".into());
+        }
+        (a.bitmap_fill_rect)(bmp, 0, 0, w, h, 0xFFFF_FFFF);
+        // 0x01 = FPDF_ANNOT (도장·메모 같은 주석도 그린다)
+        (a.render_page_bitmap)(bmp, page, 0, 0, w, h, 0, 0x01);
+        let stride = (a.bitmap_stride)(bmp) as usize;
+        let buf = (a.bitmap_buffer)(bmp) as *const u8;
+        let (wu, hu) = (w as usize, h as usize);
+        let mut img = crate::ocr::Bgr::white(wu, hu);
+        for y in 0..hu {
+            let row = std::slice::from_raw_parts(buf.add(y * stride), wu * 3);
+            img.data[y * wu * 3..(y + 1) * wu * 3].copy_from_slice(row);
+        }
+        (a.bitmap_destroy)(bmp);
+        // 글자층 글자 상자 → 그림 좌표
+        let mut chars = vec![];
+        let tp = (a.text_load)(page);
+        if !tp.is_null() {
+            let n = (a.count_chars)(tp);
+            for i in 0..n.max(0) {
+                let u = (a.get_unicode)(tp, i);
+                if u == 0 || char::from_u32(u).map_or(true, |c| c.is_whitespace()) {
+                    continue;
+                }
+                let (mut l, mut r, mut b, mut t) = (0f64, 0f64, 0f64, 0f64);
+                if (a.get_char_box)(tp, i, &mut l, &mut r, &mut b, &mut t) == 0 {
+                    continue;
+                }
+                let (mut x0, mut y0, mut x1, mut y1) = (0i32, 0i32, 0i32, 0i32);
+                (a.page_to_device)(page, 0, 0, w, h, 0, l, t, &mut x0, &mut y0);
+                (a.page_to_device)(page, 0, 0, w, h, 0, r, b, &mut x1, &mut y1);
+                chars.push([x0.min(x1) as f32, y0.min(y1) as f32, x0.max(x1) as f32, y0.max(y1) as f32]);
+            }
+            (a.text_close)(tp);
+        }
+        (a.close_page)(page);
+        (a.close_doc)(doc);
+        Ok(Rendered { img, chars })
+    }
+}
+
+// PDF 쪽 수 — 그림 파일·OCR 대기열에서 쓴다
+pub fn page_count(data: &[u8]) -> Result<usize, String> {
+    let m = api()?;
+    let a = m.lock().unwrap_or_else(|p| p.into_inner());
+    unsafe {
+        let doc = (a.load_mem)(data.as_ptr() as *const c_void, data.len(), std::ptr::null());
+        if doc.is_null() {
+            return Err("PdfiumError".into());
+        }
+        let n = (a.page_count)(doc).max(0) as usize;
+        (a.close_doc)(doc);
+        Ok(n)
+    }
 }
 
 //------------------------------------------------------------------

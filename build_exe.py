@@ -182,6 +182,20 @@ def copy_models():
     else:
         print("  ⚠️ 리랭커 모델 없음(리랭킹 비활성으로 배포): {}".format(src_rr))
 
+    # OCR 모델(검출 · 인식 · 글자 사전, 약 15MB) — 없으면 스캔 문서 OCR 이 꺼진 것처럼 동작한다(OCR 설계서 §10)
+    src_ocr = os.path.join(src_models, "ocr")
+    dst_ocr = os.path.join(out, "ocr")
+    if os.path.isdir(src_ocr):
+        os.makedirs(dst_ocr, exist_ok=True)
+        for f in ("PP-OCRv6_tiny_det.onnx", "korean_PP-OCRv5_mobile_rec.onnx", "korean_PP-OCRv5_mobile_rec.dict.txt"):
+            s = os.path.join(src_ocr, f)
+            d = os.path.join(dst_ocr, f)
+            if os.path.isfile(s) and not os.path.isfile(d):
+                print("  OCR 모델 복사: {} ({:.1f}MB)".format(f, os.path.getsize(s) / 1024 / 1024))
+                shutil.copy2(s, d)
+    else:
+        print("  ⚠️ OCR 모델 없음(스캔 문서 OCR 비활성으로 배포) — bench/download_models.py 를 먼저 실행하세요")
+
 
 #------------------------------------------------------------------
 # iGPU(Vulkan) 런타임 배치

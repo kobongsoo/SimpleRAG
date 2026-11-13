@@ -145,8 +145,16 @@
   <div class="row" style="align-items:center"><input type="text" id="ext_in" placeholder=".csv" aria-label="추가할 확장자"><button id="b_ext_add" style="margin:0">추가</button>
     <div class="grow"></div><button id="b_ext_default" style="margin:0">기본값으로</button><button id="b_ext_apply" style="margin:0" disabled>적용</button></div>
   <div class="note">확장자를 빼면 이미 인덱싱된 그 확장자의 문서도 인덱스에서 빠집니다(원본 파일은 그대로). 다시 넣으면 처음부터 인덱싱합니다.</div>
-  <div class="note">글자로 된 파일은 어떤 확장자든 넣을 수 있습니다. 이미지 · 압축 파일처럼 글자를 뽑지 못하는 파일은 실패로 남습니다.</div>
+  <div class="note">글자로 된 파일은 어떤 확장자든 넣을 수 있습니다. 그림 파일은 아래 '스캔 문서'에서 OCR 을 켜면 읽습니다. 압축 파일처럼 글자를 뽑지 못하는 파일은 실패로 남습니다.</div>
   <div class="note" id="extnote"></div>
+</fieldset>
+<fieldset><legend>스캔 문서</legend>
+  <div><label><input type="checkbox" id="ocr_on"> 스캔한 PDF 의 글자를 읽어 검색에 넣기 (OCR)</label></div>
+  <div style="margin-left:1.6em"><label><input type="checkbox" id="ocr_img"> 그림 파일(.png · .jpg · .tif)도 읽기</label></div>
+  <div class="row" style="align-items:center"><div class="grow" id="ocrstat" style="white-space:pre-line"></div><button id="b_ocr_pause" style="margin:0">잠시 멈춤</button></div>
+  <div class="note">글자층이 없는 쪽만 읽습니다. 쪽당 2~3초가 걸려 다른 문서 인덱싱과 벡터 채우기가 끝난 뒤 질문이 없을 때 차례로 읽습니다.</div>
+  <div class="note">인식 결과라 글자가 틀리거나 띄어쓰기가 빠질 수 있습니다. 한 문서는 앞 100쪽까지 읽습니다.</div>
+  <div class="note" id="ocrnote"></div>
 </fieldset>
 <fieldset><legend>시작</legend>
   <label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label>
@@ -266,6 +274,7 @@ window.rsb = {
     if (info.folder_msg) note = (note ? note + "\n" : "") + info.folder_msg;
     $("foldernote").textContent = note;
     if (info.exts) syncExts(info);
+    if (info.ocr) drawOcr(info.ocr, info.ocr_msg || "");
     if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
     if (typeof info.cand_notify === "boolean") $("candnotify").checked = info.cand_notify;
     // 정밀 모드 — config.yaml 값으로 매번 맞춘다(파일을 직접 고쳐도 따라간다). 못 찾으면 잠근다
@@ -372,6 +381,49 @@ $("b_ext_apply").onclick = () => {
   extNote = "";
   send({ type: "set_exts", exts: extDraft });
 };
+
+// 스캔 문서 OCR — 켬/끔 · 그림 파일 · 대기와 지금 읽는 문서 · [잠시 멈춤] (OCR 설계서 §8-2)
+let ocrPaused = false;
+function drawOcr(o, msg) {
+  $("ocr_on").checked = !!o.on;
+  $("ocr_img").checked = !!o.images;
+  $("ocr_img").disabled = !o.on;
+  ocrPaused = !!o.paused;
+  const b = $("b_ocr_pause");
+  b.textContent = ocrPaused ? "이어 하기" : "잠시 멈춤";
+  b.disabled = !o.on || !(o.docs_left > 0);
+  let t;
+  if (!o.on) t = "꺼짐 — 스캔한 PDF 는 '텍스트층 없음'으로 실패로 남습니다";
+  else if (!o.known) t = "대기열 확인 전 — 인덱싱이 끝나고 질문이 없을 때 확인합니다";
+  else if (!(o.docs_left > 0)) t = "대기 없음" + (o.done ? " · 이번에 " + o.done + "건 읽음" : "");
+  else {
+    t = "대기 " + o.docs_left + "건 · " + Number(o.pages_left).toLocaleString() + "쪽";
+    // 남은 시간 — 최근 20쪽 평균 속도(처음에는 계산 중)
+    t += o.sec_per_page > 0 ? " · 약 " + fmtMin(o.pages_left * o.sec_per_page) + " 남음" : " · 남은 시간 계산 중";
+    if (ocrPaused) t += " · 멈춤";
+    else if (o.name) t += "\n지금: " + o.name + " " + o.page + "/" + o.of + "쪽";
+    if (o.done || o.failed) t += "\n끝난 문서 " + (o.done || 0) + "건 · 실패 " + (o.failed || 0) + "건";
+  }
+  $("ocrstat").textContent = t;
+  $("ocrnote").textContent = msg;
+}
+// 초 → "1시간 30분" · "12분" · "1분 미만"
+function fmtMin(sec) {
+  const m = Math.round(sec / 60);
+  if (m < 1) return "1분 미만";
+  return m >= 60 ? Math.floor(m / 60) + "시간" + (m % 60 ? " " + (m % 60) + "분" : "") : m + "분";
+}
+$("ocr_on").onchange = () => {
+  const on = $("ocr_on").checked;
+  if (!on && !confirm("스캔 문서 읽기를 끕니다. 이미 읽어 넣은 문서는 검색에 남고, 새 스캔 문서는 실패로 남습니다.\n계속할까요?")) { $("ocr_on").checked = true; return; }
+  send({ type: "ocr", value: on });
+};
+$("ocr_img").onchange = () => {
+  const on = $("ocr_img").checked;
+  if (!on && !confirm("그림 파일(.png · .jpg · .tif)이 인덱스에서 빠집니다(원본 파일은 그대로).\n계속할까요?")) { $("ocr_img").checked = true; return; }
+  send({ type: "ocr_images", value: on });
+};
+$("b_ocr_pause").onclick = () => send({ type: "ocr_pause", value: !ocrPaused });
 
 // 왼쪽 메뉴로 판 바꾸기 — 기본 · 동의어 · 사람 · 로그
 function showTab(name) {

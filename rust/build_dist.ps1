@@ -61,10 +61,11 @@ Get-ChildItem "$py\runtime\llama_vulkan\*" -ErrorAction SilentlyContinue | ForEa
 Copy-IfMissing "$py\runtime\llama_vulkan\VERSION.txt" "$dist\runtime\llama_cpu\VERSION.txt"
 
 # 모델 — 하드 링크
-foreach ($sub in "models", "models\e5-small-ko", "models\bge-reranker-base-int8") { New-Item -ItemType Directory -Force "$dist\$sub" | Out-Null }
+foreach ($sub in "models", "models\e5-small-ko", "models\bge-reranker-base-int8", "models\ocr") { New-Item -ItemType Directory -Force "$dist\$sub" | Out-Null }
 # 생성 모델은 배포 대상만 건다(나머지는 측정용 · EXAONE 은 비상업) — gen_licenses.py 의 SHIP_SLLM 과 같이 고친다
 foreach ($g in "Qwen3-1.7B-Q4_K_M.gguf", "Qwen3-4B-Q4_K_M.gguf") { Link-IfMissing "$py\models\$g" "$dist\models\$g" }
-foreach ($m in "e5-small-ko", "bge-reranker-base-int8") {
+# ocr = 스캔 문서 · 그림 파일 OCR 모델(검출 · 인식 · 글자 사전, OCR 설계서 §10)
+foreach ($m in "e5-small-ko", "bge-reranker-base-int8", "ocr") {
     Get-ChildItem "$py\models\$m\*" -ErrorAction SilentlyContinue | ForEach-Object { Link-IfMissing $_.FullName "$dist\models\$m\$($_.Name)" }
 }
 

@@ -22,6 +22,7 @@ pub mod indexer;
 pub mod legacy;
 pub mod meta;
 pub mod overview;
+pub mod ocr;
 pub mod pdfium;
 pub mod pickle;
 pub mod pyutil;

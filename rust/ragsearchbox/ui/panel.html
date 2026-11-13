@@ -118,6 +118,7 @@
   .srcitem { margin-top: 8px; font-size: calc(var(--fs) * 0.85); }
   .srctop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .srcname { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .ocrtag { flex: none; font-size: 11px; color: #b45309; background: rgba(217, 119, 6, .14); border-radius: 9px; padding: 0 7px; margin: 0 6px; white-space: nowrap; }
   .srcname .no { flex: none; width: 20px; height: 20px; border-radius: 6px; background: var(--ink); color: #fff;
     display: grid; place-items: center; font-size: calc(var(--fs) * 0.72); font-weight: bold; }
   .srcname span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -448,7 +449,14 @@ function drawSources(t, items) {
     name.appendChild(nm);
     const more = el("span", "link", "전체 보기");
     more.onclick = () => popup(it);
-    top.appendChild(name); top.appendChild(more); row.appendChild(top);
+    top.appendChild(name);
+    // OCR 로 읽은 근거 — 숫자·금액이 틀릴 수 있어 원본을 확인하게 알린다(OCR 설계서 §9)
+    if (it.ocr) {
+      const tg = el("span", "ocrtag", "스캔 · 글자 인식");
+      tg.title = "스캔한 그림에서 글자를 읽은 결과라 글자가 틀릴 수 있습니다 — 원본을 확인하세요";
+      top.appendChild(tg);
+    }
+    top.appendChild(more); row.appendChild(top);
     row.appendChild(el("div", "srcbox", it.full || it.snippet || ""));
     box.appendChild(row);
   }

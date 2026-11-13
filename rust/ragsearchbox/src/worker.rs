@@ -216,6 +216,8 @@ impl ChatParser {
                             it["full"] = full.get("text").cloned().unwrap_or(json!(""));
                             it["path"] = full.get("path").cloned().unwrap_or(json!(""));
                             it["page"] = full.get("page").cloned().unwrap_or(Value::Null);
+                            // OCR 로 읽은 근거 — 패널이 "스캔 · 글자 인식" 표시를 단다
+                            it["ocr"] = full.get("ocr").cloned().unwrap_or(json!(false));
                         }
                     }
                 }

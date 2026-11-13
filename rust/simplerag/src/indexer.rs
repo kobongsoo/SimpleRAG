@@ -50,7 +50,16 @@ pub fn index_exts() -> &'static [String] {
         let v: Vec<String> = raw.split(|c: char| c.is_whitespace() || c == ',' || c == ';')
             .map(|s| s.trim().trim_start_matches('.').to_lowercase()).filter(|s| !s.is_empty())
             .map(|s| format!(".{}", s)).collect();
-        if v.is_empty() { TEXT_EXTS.iter().map(|s| s.to_string()).collect() } else { v }
+        let mut v: Vec<String> = if v.is_empty() { TEXT_EXTS.iter().map(|s| s.to_string()).collect() } else { v };
+        // 그림 파일 OCR 이 켜져 있으면 그림 확장자를 더한다 — 사용자 확장자 목록과 따로 "그림 파일도 읽기"로 켜고 끈다
+        if crate::ocr::images_enabled() {
+            for e in crate::ocr::image::IMAGE_EXTS {
+                if !v.iter().any(|x| x == e) {
+                    v.push(e.to_string());
+                }
+            }
+        }
+        v
     })
 }
 
@@ -535,6 +544,8 @@ pub struct SyncOpts<'a> {
     pub prepared: Option<Prepared>,
     // 제목 갱신을 문서 크기와 상관없이 지금 한다(쉬는 동안 처리 · CLI 마무리)
     pub retitle_force: bool,
+    // OCR 대기열이 캐시를 채운 뒤 다시 반영 — 내용이 같아도 다시 추출한다(OCR 설계서 §6)
+    pub ocr_refresh: bool,
 }
 
 //------------------------------------------------------------------
@@ -585,6 +596,311 @@ pub fn defer_over() -> Option<usize> {
 // 앱 워커의 문서 반영 문턱 — 벡터 백그라운드가 켜져 있으면 새 청크를 모두 미룬다(다시 쓸 벡터는 그대로 쓴다)
 pub fn worker_defer_over() -> Option<usize> {
     if cfg().vectors_background { Some(0) } else { defer_over() }
+}
+
+// ── OCR 대기열 (OCR 설계서 §6) ────────────────────────────────
+
+// 상태 파일의 OCR 대기열 — 열쇠 = 문서 키, 값 = {fingerprint, pages(1부터), kind(pdf|image), added}
+pub fn ocr_queue(state: &State) -> Map<String, Value> {
+    state.get("ocr_queue").and_then(|v| v.as_object()).cloned().unwrap_or_default()
+}
+
+fn ocr_queue_mut(state: &mut State) -> &mut Map<String, Value> {
+    if !state.get("ocr_queue").map(|v| v.is_object()).unwrap_or(false) {
+        state.insert("ocr_queue".into(), json!({}));
+    }
+    state.get_mut("ocr_queue").unwrap().as_object_mut().unwrap()
+}
+
+//------------------------------------------------------------------
+// 대기열 넣기·빼기 — 기다리는 쪽이 있으면 넣고(이미 있으면 쪽만 바꿈), 없으면 뺀다
+//------------------------------------------------------------------
+fn ocr_queue_set(state: &mut State, key: &str, fp: &str, info: &crate::ocr::DocOcr) {
+    if info.pending.is_empty() {
+        if let Some(q) = state.get_mut("ocr_queue").and_then(|v| v.as_object_mut()) {
+            q.remove(key);
+        }
+        return;
+    }
+    let kind = if info.whole { "image" } else { "pdf" };
+    let added = ocr_queue(state).get(key).and_then(|v| v.get("added")).cloned()
+        .unwrap_or_else(|| json!(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()));
+    ocr_queue_mut(state).insert(key.to_string(), json!({"fingerprint": fp, "pages": info.pending, "kind": kind, "added": added}));
+}
+
+// 대기열에서 빼기(문서 삭제 · 파일 바뀜)
+fn ocr_queue_drop(state: &mut State, key: &str) {
+    if let Some(q) = state.get_mut("ocr_queue").and_then(|v| v.as_object_mut()) {
+        q.remove(key);
+    }
+}
+
+// 대기열에 남은 (문서 수, 쪽 수)
+pub fn ocr_queue_size(state: &State) -> (usize, usize) {
+    let q = ocr_queue(state);
+    let pages = q.values().map(|v| v.get("pages").and_then(|p| p.as_array()).map(|a| a.len()).unwrap_or(1)).sum();
+    (q.len(), pages)
+}
+
+//------------------------------------------------------------------
+// 청크가 OCR 글을 담았나 — 청크가 걸친 쪽 범위(없으면 시작 쪽)가 OCR 쪽과 겹치면 그렇다
+//------------------------------------------------------------------
+fn chunk_has_ocr(m: Option<&crate::chunk::ChunkMeta>, done: &[usize]) -> bool {
+    let Some(m) = m else { return false };
+    if done.is_empty() {
+        return false;
+    }
+    let (a, b) = match (m.page_from, m.page_to, m.page) {
+        (Some(a), Some(b), _) => (a, b),
+        (_, _, Some(p)) => (p, p),
+        _ => return false,
+    };
+    done.iter().any(|&p| (p as i64) >= a && (p as i64) <= b)
+}
+
+//------------------------------------------------------------------
+// 문서를 뺄 때 OCR 캐시도 정리 — 같은 내용(해시)을 쓰는 다른 문서가 없을 때만 지운다
+//------------------------------------------------------------------
+fn ocr_cache_release(state: &State, key: &str, chash: Option<&str>) {
+    let Some(h) = chash else { return };
+    let shared = docs(state).iter().any(|(k, m)| k != key && m.get("content_hash").and_then(|v| v.as_str()) == Some(h));
+    if !shared {
+        crate::ocr::remove_cache(h);
+    }
+}
+
+//------------------------------------------------------------------
+// OCR 대기열 처리 결과
+// -필드: docs = 끝낸 문서 / pages = 이번에 OCR 한 쪽 / failed = OCR 실패 문서 / stopped = 멈춤 신호로 섰나
+//------------------------------------------------------------------
+#[derive(Debug, Default, Clone)]
+pub struct OcrRun {
+    pub docs: usize,
+    pub pages: usize,
+    pub failed: usize,
+    pub stopped: bool,
+}
+
+//------------------------------------------------------------------
+// OCR 진행 상황 (설정 화면 · 명령줄 안내용)
+// -필드: docs_left · pages_left = 남은 문서·쪽 / name = 지금 문서 / page · of = 그 문서의 몇 번째 쪽
+// -필드: sec_per_page = 최근 20쪽 평균(남은 시간 어림)
+//------------------------------------------------------------------
+#[derive(Debug, Default, Clone)]
+pub struct OcrProgress {
+    pub docs_left: usize,
+    pub pages_left: usize,
+    pub name: String,
+    pub page: usize,
+    pub of: usize,
+    pub sec_per_page: f64,
+}
+
+//------------------------------------------------------------------
+// OCR 대기열 처리 (핵심 — 설계서 §6)
+//=> 1) 스캔 PDF 를 남은 쪽이 적은 것부터, 그다음 그림 파일 순서로 한 건씩 꺼낸다
+//   2) 파일이 없거나 바뀌었으면 대기열에서만 뺀다(다음 인덱싱이 다시 넣는다)
+//   3) 쪽마다 그리기 → OCR → 글자층과 겹친 줄 빼기 → 캐시에 쓰기(쪽마다 저장해 끊겨도 이어 한다)
+//   4) 다 읽으면 그 문서 하나를 다시 반영한다(추출이 캐시를 읽어 OCR 글이 본문에 들어간다)
+//   5) 쪽이 끝날 때마다 멈춤 신호를 본다. 끝나면 엔진을 내려 메모리를 돌려준다
+//
+// -in: state · embedder · store · log = 색인과 같음
+// -in: stop = true 를 돌려주면 그 쪽까지만 하고 선다
+// -in: on_progress = 쪽마다 진행 상황
+// -in: keep_loaded = true 면 대기열이 남은 동안 엔진을 내리지 않는다(워커가 한 쪽씩 부를 때)
+//
+// -out: OcrRun
+// -out: error = 상태 파일·저장소 쓰기 실패면 Err (OCR 자체 실패는 그 문서를 실패 목록으로 옮긴다)
+//------------------------------------------------------------------
+pub fn run_ocr_queue(state: &mut State, embedder: &Embedder, store: &VectorStore, log: &mut dyn FnMut(&str),
+                     stop: &dyn Fn() -> bool, on_progress: &mut dyn FnMut(&OcrProgress), keep_loaded: bool) -> Result<OcrRun, String> {
+    let mut run = OcrRun::default();
+    if !crate::ocr::enabled() {
+        return Ok(run);
+    }
+    // OCR 을 껐다 켠 사이 대기열에서 빠진 문서를 되살린다 — 문서 항목의 ocr_pending 이 기준
+    let lost: Vec<(String, String, Vec<usize>, bool)> = docs(state).iter()
+        .filter(|(k, _)| !ocr_queue(state).contains_key(*k))
+        .filter_map(|(k, m)| {
+            let p: Vec<usize> = m.get("ocr_pending")?.as_array()?.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect();
+            if p.is_empty() { return None; }
+            Some((k.clone(), m.get("fingerprint")?.as_str()?.to_string(), p, crate::ocr::image::is_image(k)))
+        }).collect();
+    for (k, fp, p, whole) in lost {
+        ocr_queue_set(state, &k, &fp, &crate::ocr::DocOcr { pending: p, done: vec![], whole });
+    }
+    // 1) 순서 — PDF(남은 쪽 적은 것부터) → 그림 파일
+    let mut items: Vec<(String, Value)> = ocr_queue(state).into_iter().collect();
+    items.sort_by_key(|(k, v)| {
+        let img = v.get("kind").and_then(|x| x.as_str()) == Some("image");
+        let n = v.get("pages").and_then(|p| p.as_array()).map(|a| a.len()).unwrap_or(1);
+        (img, n, k.clone())
+    });
+    let mut recent: std::collections::VecDeque<f64> = std::collections::VecDeque::new();
+    for (key, v) in items {
+        if stop() {
+            run.stopped = true;
+            break;
+        }
+        let fp = v.get("fingerprint").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        // 2) 파일이 없거나 바뀌었으면 대기열에서만 뺀다
+        if file_fingerprint(&key).ok().as_deref() != Some(fp.as_str()) {
+            ocr_queue_drop(state, &key);
+            save_state(state)?;
+            continue;
+        }
+        let name = pyutil::basename(&key).to_string();
+        let res: Result<bool, String> = (|| {
+            let hash = content_hash(&key).map_err(|e| format!("OCRError: 읽기 실패: {}", e))?;
+            let mut cache = crate::ocr::load_cache(&hash).unwrap_or_else(|| crate::ocr::Cache {
+                engine: crate::ocr::ENGINE.into(), ..Default::default() });
+            let is_img = v.get("kind").and_then(|x| x.as_str()) == Some("image");
+            // 3) 쪽마다 OCR — 캐시에 이미 있는 쪽은 건너뛴다
+            let mut tick = |no: usize, of: usize, left_pages: usize, ms: f64, recent: &mut std::collections::VecDeque<f64>| {
+                if ms > 0.0 {
+                    recent.push_back(ms / 1000.0);
+                    if recent.len() > 20 {
+                        recent.pop_front();
+                    }
+                }
+                let (dl, pl) = ocr_queue_size(state);
+                on_progress(&OcrProgress { docs_left: dl, pages_left: pl.saturating_sub(left_pages), name: name.clone(), page: no, of,
+                    sec_per_page: if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / recent.len() as f64 } });
+            };
+            if is_img {
+                cache.dpi = 0.0;
+                let frames = crate::ocr::image::load(&key).map_err(|e| format!("OCRError: {}", e))?;
+                let of = frames.len();
+                for (i, img) in frames.iter().enumerate() {
+                    if cache.pages.contains_key(&(i + 1)) {
+                        continue;
+                    }
+                    if stop() {
+                        return Ok(false);
+                    }
+                    let t0 = Instant::now();
+                    // 아이콘처럼 작은 그림은 읽지 않는다 — 빈 쪽으로 남겨 "글자 없는 그림"이 된다
+                    let lines = if img.w.min(img.h) < crate::ocr::image::MIN_SHORT_SIDE { vec![] } else { crate::ocr::ocr_image(img)? };
+                    cache.pages.insert(i + 1, crate::ocr::to_cached(&lines));
+                    crate::ocr::save_cache(&hash, &cache)?;
+                    run.pages += 1;
+                    tick(i + 1, of, i + 1, t0.elapsed().as_secs_f64() * 1000.0, &mut recent);
+                }
+            } else {
+                cache.dpi = crate::ocr::DPI;
+                let data = std::fs::read(&key).map_err(|e| format!("OCRError: 읽기 실패: {}", e))?;
+                let want: Vec<usize> = v.get("pages").and_then(|p| p.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()).unwrap_or_default();
+                let of = want.len();
+                for (k, &no) in want.iter().enumerate() {
+                    if cache.pages.contains_key(&no) {
+                        continue;
+                    }
+                    if stop() {
+                        return Ok(false);
+                    }
+                    let t0 = Instant::now();
+                    let r = crate::pdfium::render_page(&data, no - 1, crate::ocr::DPI).map_err(|e| format!("OCRError: {}", e))?;
+                    let lines = crate::ocr::drop_overlapping(crate::ocr::ocr_image(&r.img)?, &r.chars);
+                    cache.pages.insert(no, crate::ocr::to_cached(&lines));
+                    crate::ocr::save_cache(&hash, &cache)?;
+                    run.pages += 1;
+                    // 진행 표시는 "읽을 쪽 중 몇 번째"(k+1/of) — 실제 쪽 번호(no)를 넣으면 "202/2쪽"이 된다
+                    tick(k + 1, of, k + 1, t0.elapsed().as_secs_f64() * 1000.0, &mut recent);
+                }
+            }
+            Ok(true)
+        })();
+        match res {
+            Ok(false) => {
+                run.stopped = true;
+                break;
+            }
+            Ok(true) => {
+                // 4) 다시 반영 — 추출이 캐시를 읽는다
+                let r = sync_doc_with(&key, &fp, state, embedder, store, log, SyncOpts { ocr_refresh: true, ..Default::default() })?;
+                if r.ok {
+                    run.docs += 1;
+                    log(&format!("  [OCR] {} — 청크 {}개", name, r.chunks));
+                } else {
+                    run.failed += 1;
+                    ocr_queue_drop(state, &key);
+                    save_state(state)?;
+                    log(&format!("  [OCR 실패] {} — {}", name, r.why));
+                }
+            }
+            Err(e) => {
+                // OCR 실패 — 실패 목록으로 옮긴다(설정 > 로그 탭에 보인다). 글자층 쪽 청크는 그대로 둔다
+                run.failed += 1;
+                let at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                let why = why_of(&e);
+                failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name, "at": at, "kept_old": true}));
+                ocr_queue_drop(state, &key);
+                save_state(state)?;
+                log(&format!("  [OCR 실패] {} — {}", name, why));
+            }
+        }
+    }
+    // 5) 메모리 돌려주기 — 한 쪽씩 부르는 워커는 대기열이 빌 때만
+    if !keep_loaded || ocr_queue_size(state).0 == 0 {
+        crate::ocr::unload();
+    }
+    Ok(run)
+}
+
+//------------------------------------------------------------------
+// ocr 명령(파일 없이) — 인덱스의 OCR 대기열 처리 후 BM25 반영
+//
+// -in: a = 명령줄 인자(쓰지 않음)
+//
+// -out: 종료 코드 0 = 성공(멈춤 포함), 1 = 실패
+//------------------------------------------------------------------
+pub fn cmd_ocr_queue(_a: &crate::cli::Args) -> i32 {
+    let app = crate::app::App::new(None);
+    let mut lg = |m: &str| crate::cli::outln(m);
+    match ocr_queue_and_bm25(&app.embedder, &app.store, &app.bm25, &mut lg) {
+        Ok(_) => {
+            app.close();
+            0
+        }
+        Err(e) => {
+            crate::cli::log(&format!("❌ {}", e));
+            app.close();
+            1
+        }
+    }
+}
+
+//------------------------------------------------------------------
+// 명령줄용 — 대기열 처리 + 쪽마다 한 줄 안내 + BM25 반영 (index 끝 · ocr 명령이 같이 쓴다)
+//=> Ctrl+C 를 누르면 그 쪽까지 하고 선다(다음에 이어 한다).
+//------------------------------------------------------------------
+pub fn ocr_queue_and_bm25(embedder: &Embedder, store: &VectorStore, bm25: &Bm25Index, log: &mut dyn FnMut(&str)) -> Result<OcrRun, String> {
+    let mut state = load_state();
+    let (d, p) = ocr_queue_size(&state);
+    if d == 0 {
+        return Ok(OcrRun::default());
+    }
+    if !crate::ocr::enabled() {
+        log(&format!("OCR 대기 {}건 · {}쪽 — OCR 이 꺼져 있거나 모델이 없어 건너뜁니다", d, p));
+        return Ok(OcrRun::default());
+    }
+    log(&format!("\n스캔 문서·그림 파일 OCR — 대기 {}건 · {}쪽 (Ctrl+C 로 멈추면 다음에 이어 합니다)", d, p));
+    let t0 = Instant::now();
+    let stop = || crate::cli::INTERRUPT.load(std::sync::atomic::Ordering::SeqCst);
+    let mut show = |pr: &OcrProgress| {
+        let eta = if pr.sec_per_page > 0.0 { format!(" · 약 {:.0}분 남음", pr.pages_left as f64 * pr.sec_per_page / 60.0) } else { String::new() };
+        crate::cli::outln(&format!("  OCR {} {}/{}쪽 · 남은 {}쪽{}", pr.name, pr.page, pr.of, pr.pages_left, eta));
+    };
+    let run = run_ocr_queue(&mut state, embedder, store, log, &stop, &mut show, false)?;
+    let tok = embedder.tokenizer()?;
+    if run.docs > 0 {
+        refresh_bm25(store, bm25, Some(&state), &tok, false, log)?;
+    }
+    let (dl, pl) = ocr_queue_size(&state);
+    log(&format!("OCR {}건 · {}쪽 · 실패 {}건 / {:.1}s{}", run.docs, run.pages, run.failed, t0.elapsed().as_secs_f64(),
+        if run.stopped { format!(" — 멈춤(남은 {}건 · {}쪽)", dl, pl) } else { String::new() }));
+    Ok(run)
 }
 
 // blocks 엔진으로 한 문서 추출·청킹 → (전체 글자, 표 행 수, 청크 메타)
@@ -773,7 +1089,7 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
         }
     };
     if let Some(p) = &prev {
-        if p.get("content_hash").and_then(|v| v.as_str()) == Some(chash.as_str()) {
+        if !opts.ocr_refresh && p.get("content_hash").and_then(|v| v.as_str()) == Some(chash.as_str()) {
             let n_chunks = p.get("chunks").and_then(|v| v.as_i64()).unwrap_or(0);
             // 내용은 같은데 청크 제목이 지금 파일 이름과 다르면(이름 바꿈) 청크를 다시 만든다 — 큰 문서는 쉬는 동안으로
             let retitle = needs_retitle(p, path);
@@ -856,8 +1172,30 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
         let vecs: Vec<Vec<f32>> = reused.into_iter().map(|r| r.unwrap_or_else(|| fresh.next().unwrap_or_default())).collect();
         Ok((text, n_rows, chunks, metas, vecs, hashes, n_reused, need.len(), defer))
     })();
+    // 추출이 남긴 OCR 상태 — 기다리는 쪽 · OCR 글이 든 쪽 (OCR 설계서 §6)
+    let ocr_info = crate::ocr::take_note(path);
     let (text, n_rows, chunks, metas, vecs, hashes, n_reused, n_new, deferred_doc) = match made {
         Ok(x) => x,
+        // 글이 없지만 OCR 을 기다리거나(스캔 PDF·그림) 글자 없는 그림이면 실패가 아니다 —
+        //   청크 0개 문서로 두고, 기다리는 쪽이 있으면 OCR 대기열에 넣는다
+        Err(_) if !ocr_info.pending.is_empty() || ocr_info.whole => {
+            store.delete_doc(&key)?;
+            let start = next_id(state);
+            let mtime = pyutil::mtime_int(path).unwrap_or(0);
+            let folder = pyutil::basename(&pyutil::dirname(path)).to_string();
+            docs_mut(state).insert(key.clone(), json!({
+                "fingerprint": fp, "content_hash": chash, "chunks": 0, "ids": [start, start], "name": name,
+                "folder": folder, "mtime": mtime, "chunk_title": title_of(&name), "size": file_size(path),
+                "ocr_pending": ocr_info.pending,
+            }));
+            ocr_queue_set(state, &key, fp, &ocr_info);
+            failed_pop(state, &key);
+            mark_changed(state);
+            save_state(state)?;
+            crate::meta::hook::synced(&key, Some(&chash));
+            let why = if ocr_info.pending.is_empty() { "글자 없는 그림" } else { "OCR 대기" };
+            return Ok(SyncResult { ok: true, op: op.into(), why: why.into(), ..Default::default() });
+        }
         Err(e) => {
             let why = why_of(&e);
             // at · kept_old 는 설정 > 로그 판이 보인다(로그 보기 설계서 §4-2) — 키를 더하기만 해 Python 판과 모양이 맞는다
@@ -918,6 +1256,10 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
                 p.insert("page".into(), json!(x));
             }
         }
+        // OCR 로 읽은 글이 든 청크 — 근거 카드가 "스캔 · 글자 인식" 표시를 단다(설계서 §9)
+        if ocr_info.whole || chunk_has_ocr(metas.as_ref().map(|ms| &ms[i]), &ocr_info.done) {
+            p.insert("ocr".into(), json!(true));
+        }
         payloads.push(p);
     }
     store.upsert(&ids, &vecs, &payloads)?;
@@ -934,6 +1276,14 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
         "ids": [start, start + chunks.len() as i64], "name": name, "folder": folder, "mtime": mtime,
         "chunk_title": title_of(&name), "size": file_size(path),
     }));
+    // 글자층 쪽은 넣었고 스캔 쪽이 남았으면(섞인 PDF) 대기열에, 다 끝났으면 대기열에서 뺀다
+    if !ocr_info.pending.is_empty() {
+        docs_mut(state).get_mut(&key).unwrap().as_object_mut().unwrap().insert("ocr_pending".into(), json!(ocr_info.pending));
+    }
+    if !ocr_info.done.is_empty() {
+        docs_mut(state).get_mut(&key).unwrap().as_object_mut().unwrap().insert("ocr_pages".into(), json!(ocr_info.done));
+    }
+    ocr_queue_set(state, &key, fp, &ocr_info);
     failed_pop(state, &key);
     mark_changed(state);
     save_state(state)?;
@@ -947,7 +1297,11 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
 //------------------------------------------------------------------
 pub fn remove_doc(key: &str, state: &mut State, store: &VectorStore) -> Result<i64, String> {
     let n = docs(state).get(key).and_then(|m| m.get("chunks")).and_then(|v| v.as_i64()).unwrap_or(0);
+    let chash = docs(state).get(key).and_then(|m| m.get("content_hash")).and_then(|v| v.as_str()).map(|s| s.to_string());
     store.delete_doc(key)?;
+    // OCR 대기열·캐시도 정리 — 같은 내용의 다른 문서가 쓰는 캐시는 남긴다
+    ocr_cache_release(state, key, chash.as_deref());
+    ocr_queue_drop(state, key);
     docs_mut(state).remove(key);
     failed_pop(state, key);
     mark_changed(state);
@@ -1054,6 +1408,7 @@ pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete:
     let failed_before = state.get("failed").and_then(|v| v.as_object()).cloned().unwrap_or_default();
     let mut todo = vec![];
     let mut n_retry = 0;
+    let ocr_on = crate::ocr::enabled();
     for path in &files {
         let fp = match file_fingerprint(path) {
             Ok(f) => f,
@@ -1063,9 +1418,15 @@ pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete:
         if docs(state).get(&key).and_then(|m| m.get("fingerprint")).and_then(|v| v.as_str()) == Some(fp.as_str()) {
             continue;
         }
-        if failed_before.get(&key).and_then(|m| m.get("fingerprint")).and_then(|v| v.as_str()) == Some(fp.as_str()) {
-            n_retry += 1;
-            continue;
+        if let Some(f) = failed_before.get(&key) {
+            // 0.1.3 이하에서 "텍스트층 없음"으로 실패한 스캔 PDF 는 OCR 이 켜져 있으면 다시 계획한다(설계서 §6-1)
+            //   — 이번에는 대기열로 간다. 그림 파일도 OCR 이 꺼져 있던 때 실패했으면 다시 본다
+            let scan_retry = ocr_on && f.get("why").and_then(|v| v.as_str()).map_or(false, |w| w.contains("텍스트층 없음")
+                || (crate::ocr::image::is_image(&key) && !w.starts_with("OCRError")));
+            if !scan_retry && f.get("fingerprint").and_then(|v| v.as_str()) == Some(fp.as_str()) {
+                n_retry += 1;
+                continue;
+            }
         }
         todo.push((path.clone(), fp));
     }
@@ -1522,7 +1883,7 @@ fn run_plan(plan: Plan, mut state: State, pool: Option<HashMap<String, Vec<f32>>
             let prepared = rx.as_ref().and_then(|r| r.recv().ok());
             let r = sync_doc_with(path, fp, &mut state, embedder, store, log,
                                   SyncOpts { defer_over: defer_limit, fresh: fresh_chunks, prepared, retitle_force: false,
-                                             pool: pool.as_ref() })?;
+                                             pool: pool.as_ref(), ocr_refresh: false })?;
             if !r.ok {
                 sum.failed.push((name, format!("{}{}", r.why, if r.kept_old { " (옛 버전 유지)" } else { "" })));
                 continue;
@@ -1551,6 +1912,10 @@ fn run_plan(plan: Plan, mut state: State, pool: Option<HashMap<String, Vec<f32>>
             }
             if r.deferred > 0 {
                 note += "  벡터 대기";
+            }
+            // 스캔 문서·그림 파일 — 청크 0개는 실패가 아니라 OCR 을 기다리는 것(끝에 이어 처리)
+            if !r.why.is_empty() {
+                note += &format!("  {}", r.why);
             }
             log(&format!("  [{}/{}] [{}] {:<44} {:>4}청크  ({:.1} 문서/s, 남은시간 {:.0}s){}",
                 n, total, label, pyutil::head(&name, 42), r.chunks, rate, eta, note));

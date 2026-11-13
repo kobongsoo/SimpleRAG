@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스캔 문서 OCR 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0; --brand: #e5163f;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; }
+section { margin: 40px 0; }
+h2 { font-size: 21px; margin-bottom: 12px; padding-top: 6px; }
+h3 { font-size: 16.5px; margin: 22px 0 8px; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 20px; }
+.toc ol { margin: 0; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card .s { color: var(--muted); font-size: 14px; }
+.tw { overflow-x: auto; margin: 12px 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.tag.w { background: var(--warn-soft); color: var(--warn); }
+.tag.e { background: var(--bad-soft); color: var(--bad); }
+.tag.g { background: var(--good-soft); color: var(--good); }
+/* 설정 창 그림 */
+.mock { background: #f3f4f6; border: 1px solid #c8ccd4; border-radius: 8px; padding: 10px; color: #1f2937; font-family: "Malgun Gothic", sans-serif; font-size: 13px; line-height: 1.5; overflow-x: auto; }
+.mock .win { display: flex; min-width: 640px; }
+.mock .nav { width: 112px; flex: none; }
+.mock .nav div { padding: 8px 10px; color: #5b6475; }
+.mock .nav div.on { background: #fff; color: #1f2937; font-weight: bold; box-shadow: inset 3px 0 0 var(--brand); }
+.mock .nav .lg { font-weight: bold; color: #1f2937; padding-bottom: 10px; }
+.mock .nav .lg span { color: var(--brand); }
+.mock .pan { flex: 1; background: #fff; border: 1px solid #d7dbe3; padding: 6px 12px 10px; }
+.mock fieldset { border: 1px solid #d7dbe3; border-radius: 3px; margin: 6px 0 10px; padding: 4px 10px 8px; }
+.mock legend { font-weight: bold; padding: 0 5px; }
+.mock table { font-size: 12.5px; }
+.mock th { background: #f3f4f6; color: #5b6475; font-weight: normal; padding: 4px 6px; }
+.mock td { padding: 4px 6px; border-bottom: 1px solid #eceef2; }
+.mock .bt { display: inline-block; border: 1px solid #9aa3b2; border-radius: 3px; padding: 0 8px; background: #fff; font-size: 12px; margin-right: 3px; white-space: nowrap; }
+.mock .sub { color: #5b6475; }
+.mock .w { color: #b45309; } .mock .e { color: #b91c1c; }
+.mock .bar { display: flex; gap: 10px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
+.mock .pill { border: 1px solid #d7dbe3; border-radius: 10px; padding: 0 8px; }
+.mock .pill.on { background: #1f2937; color: #fff; border-color: #1f2937; }
+.dec { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.dec b.q { display: block; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 50px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (SimpleRAG · RAGSearchBox Rust 판) · 설계서 · 2026-11-13 · 검토용(구현 전)</div>
+  <h1>스캔 문서·그림 파일 글자 읽기 (OCR)</h1>
+  <p class="lede">글자층이 없는 스캔 PDF는 지금 "PDF 텍스트층 없음"으로 실패하고 검색에 아예 나오지 않는다(운영 인덱스 130건, 2,109쪽).
+  그림 파일(.png · .jpg · .tif)은 아예 인덱싱하지 않는다.
+  스캔 쪽과 그림 파일을 <b>PP-OCRv6 tiny 검출 + 한국어 PP-OCRv5 mobile 인식</b>으로 읽어, 다른 문서처럼 청크·벡터·키워드 색인에 넣는다.
+  OCR은 쪽당 약 3초가 걸리므로 일반 인덱싱이 끝난 뒤 <b>뒤에서 따로</b> 돌리고, 결과는 캐시해 다시 만들 때 재사용한다.</p>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">요구 사항 정리</a></li>
+  <li><a href="#s2">지금 구조 (조사 결과)</a></li>
+  <li><a href="#s3">모델 고르기 — 실측</a></li>
+  <li><a href="#s4">어느 쪽·어떤 파일을 OCR 하나</a></li>
+  <li><a href="#s5">OCR 엔진 (Rust)</a></li>
+  <li><a href="#s6">언제 돌리나 — OCR 대기열</a></li>
+  <li><a href="#s7">캐시와 다시 만들기</a></li>
+  <li><a href="#s8">설정과 화면</a></li>
+  <li><a href="#s9">검색·답변에서 보이는 것</a></li>
+  <li><a href="#s10">배포</a></li>
+  <li><a href="#s11">Python 판</a></li>
+  <li><a href="#s12">고칠 파일</a></li>
+  <li><a href="#s13">확인 방법</a></li>
+  <li><a href="#s14">정해 주실 것</a></li>
+</ol></nav>
+
+<!-- ================================================================== -->
+<section id="s1">
+<h2>1. 요구 사항 정리</h2>
+<div class="cards">
+  <div class="card"><b>스캔 PDF를 검색되게</b><span class="s">글자층이 없는 쪽을 OCR 해서 본문 청크로 만든다. 계약서·확인서·검수 보고서처럼 스캔으로만 남은 문서가 대상이다.</span></div>
+  <div class="card"><b>섞인 PDF도</b><span class="s">일부 쪽만 스캔인 PDF는 글자층이 있는 쪽은 그대로 읽고, 스캔 쪽만 OCR 한다. 스캔 쪽에 쪽 번호·도장 글자가 덧붙어 있어도 OCR 한다.</span></div>
+  <div class="card"><b>그림 파일도</b><span class="s">.png · .jpg · .tif 같은 그림 파일을 OCR 해서 문서처럼 검색되게 한다. 화면 캡처·스캔 이미지가 대상이다.</span></div>
+  <div class="card"><b>인덱싱을 막지 않게</b><span class="s">OCR은 쪽당 약 3초다. 일반 문서 인덱싱은 지금 속도 그대로 두고, OCR은 뒤에서 차례로 한다.</span></div>
+  <div class="card"><b>배포 크기 작게</b><span class="s">모델 두 개 합쳐 약 15MB. onnxruntime.dll 은 이미 배포하므로 더할 DLL이 없다.</span></div>
+</div>
+<p>이번 범위에서 <b>빼는 것</b>: 글자층 PDF 본문 속 그림(구성도·화면 캡처)의 OCR(<a href="#s4">4-2</a>, 다음 단계), Word·PowerPoint 안에 넣은 그림, 스캔 표를 행·칸 표로 복원하기, 손글씨.</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s2">
+<h2>2. 지금 구조 (조사 결과)</h2>
+<h3>2-1. 스캔 PDF가 실패하는 길</h3>
+<ol>
+  <li><code>docmodel/mod.rs</code> <code>extract_document</code> → <code>.pdf</code> 는 <code>pdf::extract</code> 로 간다.</li>
+  <li><code>docmodel/pdf.rs</code> <code>extract_keep</code> 이 pdfium 으로 쪽 글을 읽고, 전체 글자(공백 제외)가 <code>MIN_TEXT_CHARS = 20</code> 보다 적고 표도 없으면
+      <code>Err("PDF 텍스트층 없음(스캔 PDF)")</code>.</li>
+  <li><code>mod.rs</code> 가 기존 추출(<code>extract::extract_text</code>)로 폴백한다. 여기서도 글이 없어 실패한다.</li>
+  <li><code>indexer.rs</code> <code>sync_doc_with</code> 가 상태 파일 <code>failed</code> 에 <code>{fingerprint, why, name, at}</code> 를 남긴다.
+      <code>plan_changes</code> 는 지문(fingerprint)이 같은 실패 문서를 다시 시도하지 않는다.</li>
+</ol>
+<h3>2-2. 이미 있는 것</h3>
+<div class="tw"><table>
+<tr><th>있는 것</th><th>위치</th><th>OCR에서 쓰는 곳</th></tr>
+<tr><td>pdfium.dll 직접 호출(쪽 글·글자 상자·쪽 객체 훑기)</td><td><code>pdfium.rs</code></td><td>쪽 그리기 함수 몇 개만 더한다(<a href="#s5">5-1</a>)</td></tr>
+<tr><td>쪽 객체 종류 읽기 <code>FPDFPageObj_GetType</code> · 범위 <code>GetBounds</code></td><td><code>pdfium.rs</code> <code>walk_paths</code></td><td>쪽에 큰 그림이 있는지 판정(<a href="#s4">4</a>)</td></tr>
+<tr><td>onnxruntime 동적 적재 (<code>ort 2.0.0-rc.10</code>, <code>load-dynamic</code>)</td><td><code>embed.rs</code></td><td>OCR 모델 두 개도 같은 방식으로 연다</td></tr>
+<tr><td>블록 출처 표시 <code>SRC_OCR = "ocr"</code></td><td>Python <code>docmodel/blocks.py</code> (Rust <code>blocks.rs</code> 에는 아직 없음)</td><td>OCR 줄 블록에 단다</td></tr>
+<tr><td>그림 속 글자 블록 종류 <code>FIGURE_TEXT</code> — "지금은 쓰지 않음"</td><td><code>blocks.py</code></td><td>이번엔 쓰지 않음(쪽 전체가 그림이므로 본문 문단으로 넣는다)</td></tr>
+<tr><td>메타데이터 <code>scanned</code> 표시(쪽당 글자 50 미만 또는 스캐너 앱)</td><td><code>meta/normalize</code></td><td>"스캔본" 칩 검색이 이제 본문까지 찾는다</td></tr>
+<tr><td>파일 내용 해시 <code>content_hash</code></td><td><code>indexer.rs</code></td><td>OCR 캐시 열쇠(<a href="#s7">7</a>)</td></tr>
+<tr><td>벡터 백그라운드 · 단계형 인덱싱</td><td><code>indexer.rs</code> <code>worker_defer_over</code>, <code>ragsearchbox/jobs.rs</code></td><td>같은 틀로 OCR 대기열을 뒤에서 돌린다(<a href="#s6">6</a>)</td></tr>
+</table></div>
+<h3>2-3. 운영 인덱스 기준 분량</h3>
+<p><code>dist-rust/meta.sqlite</code>: 전체 1,560건 중 <b>scanned=1 이 130건(모두 PDF), 2,109쪽</b>. 가장 긴 문서는 370쪽이다.
+쪽당 2.8초로 잡으면 처음 한 번 <b>약 1시간 40분</b>이 든다.
+PDF 445건(인덱스 329건 + 실패 목록)을 쪽마다 다시 훑은 분포는 <a href="#s4">4-1</a>에 있다. 분류함의 그림 파일은 373개이고, 지금 기본 인덱싱 확장자(<code>TEXT_EXTS</code>)에 없어 하나도 인덱싱되지 않는다(<a href="#s4">4-4</a>).</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s3">
+<h2>3. 모델 고르기 — 실측</h2>
+<div class="callout bad"><b>PP-OCRv6 인식 모델은 한국어를 못 읽는다.</b> v6 은 tiny · small · medium 세 등급("mobile" 등급은 없음)이고 지원 언어는 중국어·영어·일본어·라틴 문자다.
+인식 모델 글자 사전에 한글이 <b>0자</b>다(small 18,708자, tiny 6,904자). 실제로 한국어 쪽을 한자로 읽어 한글 재현율 0, 글자 F1 0.49였다.
+한국어 인식은 <code>korean_PP-OCRv5_mobile_rec</code>(한글 11,172자)뿐이다. 검출 모델은 언어와 상관없으므로 v6 검출과 묶는다.</div>
+
+<h3>3-1. 품질 — 텍스트층 PDF 40쪽을 그림으로 그려 정답과 비교</h3>
+<p>분류함의 한국어 PDF 20건에서 쪽 40개를 200dpi로 그리고, 그 쪽의 텍스트층을 정답으로 삼았다. "스캔 흉내"는 0.7° 기울임 · 흐림 · 잡음 · JPEG 55를 넣은 그림이다.
+글자 F1은 순서와 상관없이 글자를 맞춘 비율이고, 단어 재현율은 정답의 2자 이상 단어가 OCR 결과에 들어 있는 비율(검색에 가장 가까운 지표)이다.</p>
+<div class="tw"><table>
+<tr><th>조합</th><th>글자 F1 깨끗 / 스캔 흉내</th><th>단어 재현율 깨끗 / 스캔 흉내</th></tr>
+<tr><td>v5 mobile 검출 + 한국어 v5 인식</td><td>0.964 / 0.960</td><td>0.996 / 0.981</td></tr>
+<tr><td>v6 small 검출 + 한국어 v5 인식</td><td>0.965 / 0.960</td><td>0.996 / 0.979</td></tr>
+<tr><td><b>v6 tiny 검출 + 한국어 v5 인식</b> <span class="tag g">채택</span></td><td>0.965 / 0.962</td><td>0.995 / 0.980</td></tr>
+<tr><td>v6 small 검출 + v6 small 인식</td><td>0.491 / 0.483</td><td>0.316 / 0.305</td></tr>
+</table></div>
+<p>검출 모델을 바꿔도 품질은 같다. 실제 스캔 18쪽에서 v6 small 이 한 쪽에서 1,500자를 덜 읽었는데, 문서에 붙은 터미널 화면 캡처(<code>ps</code> 출력)라 v5 로도 거의 못 읽던 글자였다.</p>
+
+<h3>3-2. 속도 — i5-1340P, CPU, onnxruntime</h3>
+<div class="tw"><table>
+<tr><th></th><th>v5 mobile 검출</th><th>v6 small 검출</th><th><b>v6 tiny 검출</b></th></tr>
+<tr><td>검출 모델만, 4스레드, 1600×1152</td><td>662ms</td><td>330ms</td><td><b>156ms</b></td></tr>
+<tr><td>검출 모델만, 8스레드</td><td>1,082ms</td><td>340ms</td><td>385ms</td></tr>
+<tr><td>실제 스캔 PDF 한 쪽 전체 (4스레드, RapidOCR)</td><td>3.9초</td><td>3.4초</td><td><b>2.8초</b> (p90 4.7초)</td></tr>
+</table></div>
+<ul>
+  <li>한국어 인식은 6줄에 155ms다. 한 쪽이 60줄 안팎이라 <b>인식만으로 쪽당 1.5초 이상</b> 든다. 그래서 검출이 4배 빨라도 쪽 전체로는 27%만 준다.</li>
+  <li><b>4스레드가 8스레드보다 빠르다.</b> P/E 코어가 섞인 CPU라 그렇다. 기본값(전체 스레드)으로 둔 첫 측정은 쪽당 6~11초로 흔들렸다. → 스레드를 4로 고정한다.</li>
+  <li>2.8초 중 약 1초는 RapidOCR(Python)의 잘라내기·후처리다. Rust 로 옮기면 줄어들 여지가 있지만, 인식 1.5초가 바닥이라 <b>쪽당 2초 안팎</b>을 목표로 잡는다.</li>
+</ul>
+<h3>3-3. 쓸 모델</h3>
+<div class="tw"><table>
+<tr><th>역할</th><th>Hugging Face 저장소</th><th>파일</th><th>크기</th></tr>
+<tr><td>검출</td><td><code>PaddlePaddle/PP-OCRv6_tiny_det_onnx</code></td><td><code>inference.onnx</code></td><td>1.78MB</td></tr>
+<tr><td>인식</td><td><code>PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx</code></td><td><code>inference.onnx</code> + <code>inference.yml</code>(글자 사전)</td><td>13.42MB</td></tr>
+<tr><td>방향 분류</td><td colspan="3">쓰지 않는다. 스캔 문서는 대부분 바로 서 있고, 측정도 끄고 했다.</td></tr>
+</table></div>
+<p>두 모델 모두 Apache-2.0. 측정 스크립트는 <code>bench/bench_ocr.py</code> 로 옮겨 남긴다(<a href="#s13">13</a>).</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s4">
+<h2>4. 어느 쪽·어떤 파일을 OCR 하나</h2>
+<p>PDF는 문서 단위가 아니라 <b>쪽 단위</b>로 판정한다. 섞인 PDF에서 글자층이 있는 쪽을 다시 읽지 않기 위해서다.
+판정에 쓰는 값은 두 가지다. 쪽 글자 수(공백 제외)와, 그림 객체(<code>FPDF_PAGEOBJ_IMAGE</code>, 폼 안쪽 포함)가 덮는 넓이 비율이다.
+넓이는 그림 상자를 격자에 칠해 겹친 곳을 한 번만 센다. 그림 객체 훑기는 표 검출 때 이미 하는 쪽 객체 훑기(<code>walk_paths</code>)에 붙인다.</p>
+
+<h3>4-1. 운영 PDF 쪽 분포 (실측)</h3>
+<p>PDF 445건, <b>23,950쪽</b>. 인덱스의 PDF 329건과 실패 목록의 스캔본을 합친 것이다.
+<b>반복 그림</b>은 문서의 절반 이상 쪽(3쪽 이상)에 같은 자리·같은 픽셀 크기로 나오는 그림이다(로고, 슬라이드 배경·틀). <b>작은 그림</b>은 쪽 넓이 2% 미만의 아이콘이다. 둘 다 "그림 넓이"에서 뺐다.</p>
+<div class="tw"><table>
+<tr><th>쪽 상태</th><th>쪽</th><th>문서</th><th>처리</th></tr>
+<tr><td><b>① 스캔 쪽</b> — 글자 &lt;10, 그림 ≥30%</td><td>1,979 (8.3%)</td><td>165</td><td><span class="tag g">쪽 전체 OCR</span></td></tr>
+<tr><td><b>② 스캔 쪽 + 덧붙은 글자</b> — 그림 ≥70%(반복 아님), 글자 10~199</td><td>451 (1.9%)</td><td>90</td><td><span class="tag g">쪽 전체 OCR, 글자층과 겹친 줄은 뺌</span></td></tr>
+<tr><td>②′ 큰 그림이 반복 그림(배경·틀) — 글자 10~199</td><td>98 (0.4%)</td><td>16</td><td>글자층만</td></tr>
+<tr><td>③ 글자층 + 쪽 전체 그림(≥90%) — 글자 ≥200</td><td>2,433 (10.2%)</td><td>62</td><td>글자층만 (이미 글자층을 입힌 스캔본·디자인 쪽)</td></tr>
+<tr><td><b>④ 글자층 + 본문 속 그림(20~90%)</b></td><td><b>2,411 (10.1%)</b></td><td><b>150</b></td><td><span class="tag w">글자층만 — 그림 영역 OCR 은 다음 단계</span></td></tr>
+<tr><td>⑤ 글자층 + 그림 2~20%</td><td>1,400 (5.8%)</td><td>140</td><td>글자층만</td></tr>
+<tr><td>⑥ 글자층 + 반복·아이콘 그림만</td><td>3,186 (13.3%)</td><td>177</td><td>글자층만</td></tr>
+<tr><td>⑦ 글자층만</td><td>11,519 (48.1%)</td><td>177</td><td>글자층만</td></tr>
+<tr><td>⑧ 빈 쪽 · 그림 작음 (글자 &lt;10, 그림 &lt;30%)</td><td>473 (2.0%)</td><td>81</td><td>건너뜀</td></tr>
+</table></div>
+<ul>
+  <li>①은 165건에 걸쳐 있다. 메타데이터의 스캔본은 130건이므로, <b>약 35건은 글자층 PDF 안에 스캔 쪽이 섞인 문서</b>로 본다(서명 쪽·첨부 스캔). 지금은 이 쪽들도 조용히 빠져 있다.</li>
+  <li>②는 이번에 새로 넣는 경우다. 표본 문서는 AI 제품 소개서·브로슈어처럼 <b>글자를 그림 안에 그려 넣은 디자인 쪽</b>이 많았다. 스캔본에 쪽 번호·도장을 얹은 쪽도 여기 든다.</li>
+  <li>③은 그림이 쪽을 덮지만 글자층이 200자 이상이다. 검색 가능한 스캔본(글자층을 이미 입힌 것)일 가능성이 커서 OCR 하지 않는다.</li>
+</ul>
+
+<h3>4-2. 판정 규칙</h3>
+<div class="tw"><table>
+<tr><th>순서</th><th>조건</th><th>처리</th></tr>
+<tr><td>1</td><td>글자 &lt;10 이고 그림 ≥30%</td><td>쪽 전체 OCR (①)</td></tr>
+<tr><td>2</td><td>글자 &lt;10</td><td>건너뜀 (⑧ 빈 쪽·간지)</td></tr>
+<tr><td>3</td><td>반복 아닌 그림 ≥70% 이고 글자 &lt;200</td><td>쪽 전체 OCR, 글자층과 겹친 OCR 줄은 버림 (②)</td></tr>
+<tr><td>4</td><td>그 밖</td><td>글자층만 (②′ ~ ⑦)</td></tr>
+</table></div>
+<p><b>②에서 겹친 줄 버리기</b>: OCR 줄 상자 넓이의 절반 이상이 글자층 글자 상자(<code>FPDFText_GetCharBox</code>, 이미 적재함)와 겹치면 그 OCR 줄을 버린다. 그 자리에는 더 정확한 글자층 줄을 쓴다.
+남은 OCR 줄은 그 쪽의 글자층 줄 <b>뒤에</b> 붙인다. <span class="tag w">구현 때 바꿈</span> 처음에는 세로 위치 순서로 섞으려 했다. 하지만 글자층 줄에는 위치가 없어 다시 읽어야 하고, 검색에는 순서 차이가 거의 없어 단순하게 했다. 덧붙은 글자층은 대부분 쪽 머리의 제목·쪽 번호라 앞에 와도 자연스럽다.
+반복 그림 판정은 문서 전체 쪽을 한 번 훑은 뒤에 하므로, 쪽 판정은 첫 훑기가 끝난 다음에 한다.
+OCR 줄은 번호로 시작해도 절 제목으로 올리지 않는다. 시험에서 스캔 표 행 "3 소매금융여신심사부 1 미래신용정보"가 절 제목으로 잡혔기 때문이다.</p>
+
+<h3>4-3. ④ 본문 속 그림 — 다음 단계로 미루는 까닭</h3>
+<ul>
+  <li><b>분량</b>: 2,411쪽, 150건이다. 그림 넓이 중앙값은 쪽의 37%, 글자층 중앙값은 222자다. 그림 영역만 잘라 OCR 해도 쪽 전체를 OCR 하는 것(2.8초)보다 크게 싸지 않다. 화면 캡처는 작은 글자가 많아 그림 파일에서 장당 4.9초가 걸렸다(<a href="#s4">4-4</a>). 그래서 <b>약 40분~1시간 50분</b>이 더 든다(추정, 재지 않음). ①+② 2,430쪽과 비슷한 양이다.</li>
+  <li><b>이득</b>: 구성도 상자 이름·메뉴 글자는 본문 주변 글에 이미 나오는 경우가 많다. 검색에 주는 이득이 스캔 쪽보다 작다.</li>
+  <li><b>다음 단계에 할 때</b>: 그림 영역만 200dpi로 잘라 OCR 하고, <code>FIGURE_TEXT</code> 블록으로 그림 자리에 넣는다. 대상은 쪽 넓이 20% 이상의 반복 아닌 그림이다. 이번 엔진·캐시·대기열을 그대로 쓴다.</li>
+</ul>
+
+<h3>4-4. 그림 파일 (.png · .jpg · .tif)</h3>
+<p>분류함의 그림 파일 373개(png 351 · jpg 18 · gif 4)를 v6 tiny 검출만으로 세었다.</p>
+<div class="tw"><table>
+<tr><th>상태</th><th>개수</th><th>처리</th></tr>
+<tr><td>아주 작음 (짧은 변 &lt;100px — 아이콘)</td><td>89</td><td>건너뜀 (검출도 하지 않음)</td></tr>
+<tr><td>글자 거의 없음 (글자 상자 &lt;3 — 사진·도형)</td><td>10</td><td>청크 없이 "글자 없음"으로 반영. 실패로 보지 않음</td></tr>
+<tr><td>글자 조금 (상자 3~14)</td><td>57</td><td>OCR</td></tr>
+<tr><td>글자 많음 (상자 ≥15)</td><td>217</td><td>OCR — 대부분 1920×1080 화면 캡처(중앙값 873×555)</td></tr>
+</table></div>
+<p>글자 많은 그림 표본 15장을 OCR 한 시간은 <b>장당 평균 4.9초, p90 9.7초</b>(4스레드)였다. 스캔 쪽(2.8초)보다 느리다. 화면 캡처는 작은 글자 상자가 많기 때문이다.
+274장 × 4.9초면 처음 한 번 <b>약 22분</b>이 든다. 화면 캡처 OCR 결과에는 주소창 URL·탭 이름처럼 장마다 같은 줄이 많다.</p>
+<ol>
+  <li><b>대상 확장자</b>: <code>.png .jpg .jpeg .tif .tiff .bmp</code>. <code>IMAGE_EXTS</code> 로 따로 두고, OCR 이 켜져 있고 "그림 파일도 읽기"가 켜져 있으면 인덱싱 대상에 더한다(<a href="#s8">8</a>).
+      .gif · .webp 는 글자 든 것이 드물어 넣지 않는다(설정 &gt; 인덱싱 확장자에서 사용자가 더할 수 있게는 한다).</li>
+  <li><b>읽기</b>: Rust <code>image</code> crate(png · jpeg · tiff · bmp 디코더만 켬). JPEG 는 EXIF 방향대로 세운다(휴대폰 사진). 여러 쪽 TIFF(스캐너·팩스)는 쪽마다 따로 OCR 해 쪽 번호를 단다.</li>
+  <li><b>크기 제한</b>: 긴 변이 4000px 를 넘으면 4000px 로 줄인다. 파일이 50MB 를 넘으면 건너뛰고 경고를 남긴다. 짧은 변이 100px 미만이면 건너뛴다.</li>
+  <li><b>글자 없음 판정</b>: 검출 상자가 3개 미만이면 인식을 하지 않는다. 문서는 청크 0개로 상태 파일 <code>docs</code> 에 넣어 다시 시도하지 않는다. 파일 이름·폴더 검색(탐색기·메타데이터)에는 그대로 나온다.</li>
+  <li><b>블록</b>: PDF 스캔 쪽과 같이 줄 묶기(<a href="#s5">5-4</a>)를 거쳐 <code>PARAGRAPH</code> 블록이 된다. 문서 종류는 <code>"image"</code>, 제목은 파일 이름이다.</li>
+  <li><b>흐름</b>: 그림 파일은 글자층이 없으므로 1단계에서 바로 OCR 대기열로 간다. 대기열에서는 <b>스캔 PDF 다음 차례</b>로 처리한다. 계약서·확인서가 화면 캡처보다 먼저 검색되게 하려는 것이다.</li>
+</ol>
+<div class="callout"><b>쪽 상한</b>: 한 문서에서 OCR 하는 쪽은 앞에서부터 <code>ocr_max_pages</code>(제안 100쪽)까지다. 넘으면 경고 <code>"OCR 부분 100/370쪽 (상한)"</code>을 남긴다.
+지금 PDF 쪽 상한(<code>MAX_PAGES = 3000</code>)과 같은 방식이다. 370쪽짜리 한 건이 대기열을 17분 붙잡지 않게 하려는 것이다.</div>
+<p><code>pdf.rs</code> 의 실패 조건은 이렇게 바뀐다. 전체 글자가 20자 미만이어도 <b>OCR 할 쪽이 하나라도 있고 OCR이 켜져 있으면</b> 실패로 보지 않는다.
+OCR이 꺼져 있거나 모델이 없을 때만 지금처럼 <code>"PDF 텍스트층 없음(스캔 PDF)"</code>으로 실패한다.</p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s5">
+<h2>5. OCR 엔진 (Rust)</h2>
+<p>새 모듈 <code>rust/simplerag/src/ocr/</code>. RapidOCR 를 기준(정답)으로 두고 같은 결과가 나오게 옮긴다. OpenCV 같은 큰 라이브러리는 쓰지 않는다.</p>
+<h3>5-1. 쪽 그리기 — <code>pdfium.rs</code></h3>
+<p>pdfium 함수 6개를 더 적재한다: <code>FPDF_GetPageWidthF</code> · <code>FPDF_GetPageHeightF</code> · <code>FPDFBitmap_CreateEx</code> · <code>FPDFBitmap_FillRect</code> · <code>FPDF_RenderPageBitmap</code> · <code>FPDFBitmap_GetBuffer</code>/<code>GetStride</code>/<code>Destroy</code>.
+<b>200dpi</b>(A4 → 1654×2339)로 흰 바탕에 그려 BGRA 버퍼를 받는다. 측정도 200dpi로 했다.</p>
+<h3>5-2. 검출 — <code>ocr/det.rs</code></h3>
+<ol>
+  <li>짧은 변이 736 보다 작을 때만 늘리고(RapidOCR <code>limit_type: min</code>), 두 변을 32의 배수로 맞춘다. <span class="tag w">구현 때 바꿈</span> 처음에는 긴 변 1600 으로 줄이려 했으나, RapidOCR 의 <code>max</code> 설정은 실제로 2000 을 쓰는 것을 확인했다. 그래서 측정과 같은 조건(200dpi 쪽은 줄이지 않음)으로 맞췄다.</li>
+  <li>정규화: <code>(x/255 − mean)/std</code>, mean <code>[0.485, 0.456, 0.406]</code>, std <code>[0.229, 0.224, 0.225]</code>(모델의 <code>inference.yml</code> 값).</li>
+  <li>출력 확률 지도를 0.3 으로 이진화하고, 붙은 덩어리마다 최소 넓이 회전 사각형을 구한다.</li>
+  <li>상자 안 평균 확률이 0.5 미만이면 버리고, 상자를 <code>넓이×1.6/둘레</code> 만큼 바깥으로 넓힌다(DB 후처리, unclip).</li>
+</ol>
+<p>덩어리 찾기 · 볼록 껍질 · 회전 사각형은 <code>ocr/geom.rs</code> 에 직접 짠다(200줄 안팎). 넓히기는 사각형이라 각 변을 같은 거리만큼 밀면 된다.</p>
+<h3>5-3. 인식 — <code>ocr/rec.rs</code></h3>
+<ol>
+  <li>상자마다 원본 그림(200dpi)에서 잘라 바로 세운다(회전 사각형 → 직사각형 어파인 변환). 세로가 가로의 1.5배를 넘으면 90° 돌린다.</li>
+  <li>높이 48로 맞추고 가로는 비율대로 늘린다. 가로 비율이 비슷한 것끼리 <b>6개씩</b> 묶어 가장 넓은 것에 맞춰 오른쪽을 채운다.</li>
+  <li>정규화 <code>(x/255 − 0.5)/0.5</code>. 출력은 글자별 확률이고, 칸마다 가장 큰 값을 골라 반복을 합치고 공백 기호(0번)를 뺀다(CTC 탐욕 풀이).</li>
+  <li>줄 점수(고른 글자 확률 평균)가 <b>0.5 미만</b>이면 버린다. RapidOCR 기본값과 같다.</li>
+</ol>
+<div class="callout warn"><b>구현 때 확인할 것</b>: 글자 사전 앞뒤 처리(0번 공백 기호, 끝의 띄어쓰기 글자를 붙이는지)는 RapidOCR 코드와 한 글자씩 맞춰 본다. 어긋나면 모든 글자가 한 칸씩 밀린다.</div>
+<h3>5-4. 줄 묶기 → 블록</h3>
+<ol>
+  <li>상자를 세로 가운데 기준으로 정렬하고, 세로로 절반 이상 겹치는 상자를 한 줄로 묶는다. 줄 안에서는 왼쪽부터 놓는다.</li>
+  <li>상자 사이 틈이 글자 높이의 0.5배보다 넓으면 띄어쓰기를 넣는다. 한국어 인식은 상자 <i>안</i> 띄어쓰기를 자주 빠뜨리므로(<code>수신:나우로보틱스귀중</code>), 상자 <i>사이</i> 띄어쓰기라도 살린다.</li>
+  <li>한 줄이 블록 하나다. 종류는 <code>PARAGRAPH</code>, 출처는 <code>SRC_OCR</code>, 쪽 번호를 단다. 글자층 PDF 와 같은 모양이라 뒤의 절 나누기·청킹을 그대로 쓴다.</li>
+  <li>상자 높이를 글자 크기 대신 <code>line_sizes</code> 에 넣으면 지금 제목 추론(<code>infer_headings</code>)이 그대로 돈다. <span class="tag w">구현 후 효과를 보고 결정</span></li>
+</ol>
+<p>BM25 는 e5 서브워드로 토큰을 나누므로(<code>bm25.rs</code>) 띄어쓰기가 빠져도 영향이 공백 분리만큼 크지 않다. 영향의 크기는 <a href="#s13">13-4</a>에서 잰다.</p>
+<h3>5-5. 엔진 적재와 스레드</h3>
+<ul>
+  <li>두 세션을 처음 OCR 할 때 한 번 연다. 메모리는 두 모델 합쳐 100MB 안팎으로 본다(구현 후 측정).</li>
+  <li><code>intra_op_num_threads = ocr_threads</code>(기본 <b>4</b>), <code>inter_op = 1</code>. OCR 스레드는 Windows 우선순위 <code>BELOW_NORMAL</code> 로 내려 검색·답변을 방해하지 않게 한다.</li>
+  <li>한 쪽이 끝날 때마다 멈춤 신호를 확인한다. 앱을 끄거나 사용자가 멈추면 쪽 단위로 바로 선다.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="s6">
+<h2>6. 언제 돌리나 — OCR 대기열</h2>
+<p>OCR 은 일반 추출보다 수백 배 느리다(쪽당 2~3초, 일반 PDF 쪽은 수 ms). 인덱싱 중에 바로 하면 스캔본 한 건이 일반 문서 수백 건을 기다리게 한다. 그래서 두 단계로 나눈다.</p>
+<ol>
+  <li><b>일반 인덱싱</b>: OCR 할 쪽이 있는 PDF는 글자층 쪽만으로 반영하고(글자층 쪽이 없으면 청크 0개), 상태 파일의 새 묶음 <code>ocr_queue</code> 에
+      <code>{fingerprint, pages: [OCR 할 쪽 번호], added}</code> 를 넣는다. <code>failed</code> 에는 넣지 않는다.</li>
+  <li><b>OCR 단계</b>: 일반 라운드와 벡터 백그라운드가 끝나 쉬는 동안, 대기열에서 한 건씩 꺼내 OCR 하고 결과를 <a href="#s7">캐시</a>에 쓴다.
+      그다음 그 문서 하나를 <code>sync_doc</code> 으로 다시 반영한다. 추출이 캐시를 읽으므로 OCR 쪽이 본문에 들어간다.</li>
+</ol>
+<div class="callout"><b>왜 "캐시에 쓰고 다시 반영"인가</b>: OCR 결과를 추출 흐름에 끼워 넣는 길이 하나(<code>pdf.rs</code> 가 캐시를 읽음)뿐이라, 처음 인덱싱 · 파일 수정 · 재구축 · 비슷한 문서 찾기가 모두 같은 코드를 탄다.</div>
+<ul>
+  <li><b>순서</b>: 스캔 PDF 를 쪽 수가 적은 것부터 처리하고, 그다음 그림 파일을 처리한다. 짧은 확인서·계약서가 먼저 검색되게 한다.</li>
+  <li><b>그림 파일</b>: 글자층이 없으므로 1단계에서 청크 없이 바로 대기열로 간다. <code>pages</code> 는 여러 쪽 TIFF 일 때만 쓴다.</li>
+  <li><b>임베딩과 겹치지 않게</b>: 임베딩 라운드(8스레드)가 도는 동안 OCR 은 쉰다. 4코어 둘이 겹치면 둘 다 느려진다.</li>
+  <li><b>CLI</b>: <code>simplerag index</code> 는 인덱싱 끝에 대기열을 이어서 처리한다(<code>--no-ocr</code> 로 건너뜀). <code>simplerag ocr</code> 는 대기열만 처리한다.</li>
+  <li><b>파일이 바뀌면</b>: 지문이 바뀐 문서는 대기열에서 빼고 일반 인덱싱부터 다시 탄다. 지운 문서는 대기열에서도 지운다.</li>
+  <li><b>OCR 실패</b>(모델 적재 실패, 쪽 그리기 실패): 그 문서를 <code>failed</code> 로 옮기고 <code>why = "OCRError: …"</code>. 로그 탭 실패 문서 목록에 그대로 보인다.</li>
+</ul>
+<h3>6-1. 이미 쓰던 사람의 첫 실행</h3>
+<p>0.1.3 이하 인덱스의 스캔본은 <code>failed</code> 에 <code>"PDF 텍스트층 없음(스캔 PDF)"</code>으로 남아 있고, 지문이 같아 다시 시도되지 않는다.
+OCR 이 켜져 있으면 <code>plan_changes</code> 가 이 사유의 실패 문서를 다시 계획에 넣는다. 이 문서들은 1단계에서 대기열로 간다. <b>전체 재구축은 필요 없다.</b></p>
+</section>
+
+<!-- ================================================================== -->
+<section id="s7">
+<h2>7. 캐시와 다시 만들기</h2>
+<p>OCR 은 비싸므로 결과를 파일 내용 기준으로 남긴다. 재구축(<code>--rebuild</code>)·청크 크기 변경·파일 이동이 있어도 다시 OCR 하지 않는다.</p>
+<pre>&lt;데이터 폴더&gt;\ocr_cache\&lt;content_hash 앞 2자&gt;\&lt;content_hash&gt;.json
+{
+  "engine": "ppocrv6-tiny-det+ko-ppocrv5-mobile-rec/1",   // 모델·후처리가 바뀌면 올린다 → 옛 캐시 무시
+  "dpi": 200,
+  "pages": { "3": [ {"t": "수신 : 나우로보틱스 귀중", "s": 0.97, "b": [x0,y0,x1,y1]}, ... ] }
+}</pre>
+<ul>
+  <li>열쇠는 <code>content_hash</code>(파일 내용 해시)다. 이름을 바꾸거나 다른 폴더로 복사해도 같은 캐시를 쓴다. 그림 파일도 같은 형식이다(한 쪽짜리 문서로 본다, 쪽 번호 1).</li>
+  <li>쪽 상한에 걸려 일부만 OCR 했으면 그 쪽들만 들어 있다. 나중에 상한을 올리면 빠진 쪽만 더 OCR 한다.</li>
+  <li>크기는 쪽당 약 5~10KB로 본다. 2,109쪽이면 10~20MB.</li>
+  <li>원본 파일이 인덱스에서 빠지면 그 캐시를 지운다. 같은 해시를 쓰는 다른 문서가 있으면 남긴다.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="s8">
+<h2>8. 설정과 화면</h2>
+<h3>8-1. <code>config.yaml</code></h3>
+<pre>extract:
+  ocr: true                     # 스캔 PDF 글자 읽기(OCR). false 면 지금처럼 "텍스트층 없음"으로 실패
+  ocr_threads: 4                # OCR 스레드. P/E 혼합 CPU 에서 8 보다 4 가 빨랐다(2026-11-13 실측)
+  ocr_max_pages: 100            # 한 문서에서 OCR 하는 쪽 상한(앞에서부터)
+  ocr_images: true              # 그림 파일(.png .jpg .jpeg .tif .tiff .bmp)도 인덱싱해 OCR. ocr 이 false 면 함께 꺼짐</pre>
+<p>지금 설정처럼 환경변수 <code>SIMPLERAG_OCR</code> · <code>SIMPLERAG_OCR_THREADS</code> · <code>SIMPLERAG_OCR_MAX_PAGES</code> 가 앞선다. <code>config.rs</code> 의 설정 검사 표(<code>Check::Bool</code> · <code>Check::Threads</code>)에도 넣는다.
+켜고 끄는 데 <b>전체 재인덱싱은 필요 없다</b>. 켜면 <a href="#s6">6-1</a>처럼 실패한 스캔본이 대기열로 가고, 끄면 대기열만 멈춘다. 이미 들어간 OCR 청크는 남긴다.</p>
+
+<h3>8-2. 설정 &gt; 기본 — "스캔 문서" 묶음</h3>
+<p>"인덱싱 확장자" 묶음 바로 아래에 둔다.</p>
+<div class="mock"><div class="win">
+  <div class="nav"><div class="lg">MoAI<span>-S</span></div><div class="on">기본</div><div>동의어</div><div>이름별칭</div><div>로그</div></div>
+  <div class="pan">
+    <fieldset><legend>스캔 문서</legend>
+      <div>☑ 스캔한 PDF 의 글자를 읽어 검색에 넣기 (OCR)</div>
+      <div style="padding-left:18px">☑ 그림 파일(.png · .jpg · .tif)도 읽기</div>
+      <div class="bar"><span>대기 <b>118건 · 1,964쪽</b></span><span class="sub">· 약 1시간 30분 남음</span><span class="sub">· 지금: 09_한국특허…설치확인서.pdf 3/4쪽</span></div>
+      <div class="bar"><span class="bt">잠시 멈춤</span><span class="sub">끝난 문서 12건 · 실패 0건</span></div>
+      <div class="sub">글자층이 없는 쪽만 읽습니다. 쪽당 2~3초가 걸려 다른 문서 인덱싱이 끝난 뒤 뒤에서 차례로 진행합니다.</div>
+      <div class="sub">인식 결과라 글자가 틀리거나 띄어쓰기가 빠질 수 있습니다. 한 문서는 앞 100쪽까지 읽습니다.</div>
+    </fieldset>
+  </div>
+</div></div>
+<ul>
+  <li>남은 시간은 최근 20쪽 평균 속도로 계산한다. 처음에는 "계산 중".</li>
+  <li>[잠시 멈춤]은 앱을 끌 때까지 멈춘다. 다시 누르면 [이어 하기].</li>
+  <li>트레이 아이콘 툴팁에도 OCR 중일 때 <code>"스캔 문서 읽는 중 12/130"</code>을 붙인다.</li>
+  <li>"그림 파일도 읽기"는 OCR 이 켜져 있을 때만 고를 수 있다. 끄면 그림 파일이 인덱싱 대상에서 빠지고, 이미 들어간 그림 파일 청크도 빠진다(확장자를 뺄 때와 같은 동작).</li>
+  <li>"인덱싱 확장자" 묶음의 안내 문구 "이미지 · 압축 파일처럼 글자를 뽑지 못하는 파일은 실패로 남습니다"를 고친다:
+      "그림 파일은 아래 '스캔 문서'에서 OCR 을 켜면 읽습니다. 압축 파일처럼 글자를 뽑지 못하는 파일은 실패로 남습니다."</li>
+</ul>
+<h3>8-3. 설정 &gt; 로그</h3>
+<p>실패 문서 원인 풀이표에 두 줄을 더한다.</p>
+<div class="tw"><table>
+<tr><th>사유</th><th>풀이</th></tr>
+<tr><td><code>PDF 텍스트층 없음(스캔 PDF)</code></td><td>(OCR 꺼짐) 스캔한 PDF 라 글자가 없습니다. 설정 &gt; 기본 &gt; 스캔 문서에서 OCR 을 켜면 읽습니다.</td></tr>
+<tr><td><code>OCRError: …</code></td><td>스캔 문서 글자 읽기에 실패했습니다. 파일이 손상됐거나 OCR 모델 파일이 없습니다.</td></tr>
+</table></div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s9">
+<h2>9. 검색·답변에서 보이는 것</h2>
+<ul>
+  <li>OCR 청크도 다른 청크와 똑같이 벡터·BM25 검색에 들어간다. 점수를 깎거나 따로 다루지 않는다.</li>
+  <li>근거 카드와 탐색기 미리보기에서 OCR 청크에 <span class="tag w">스캔 · 글자 인식</span>(그림 파일은 <span class="tag w">그림 · 글자 인식</span>) 표시를 단다. 청크 메타에 <code>source: "ocr"</code> 를 남겨 판별한다.
+      숫자·금액이 틀릴 수 있다는 것을 사용자가 알고 원본을 열어 보게 하려는 것이다.</li>
+  <li>답변 모델에 주는 근거 글은 바꾸지 않는다.</li>
+  <li>메타데이터 "스캔본" 칩(<code>scanned=1</code>)으로 거르면 이제 본문 검색 결과도 나온다.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="s10">
+<h2>10. 배포</h2>
+<div class="tw"><table>
+<tr><th>배포 위치</th><th>원본</th><th>크기</th></tr>
+<tr><td><code>{app}\models\ocr\PP-OCRv6_tiny_det.onnx</code></td><td><code>PP-OCRv6_tiny_det_onnx/inference.onnx</code></td><td>1.78MB</td></tr>
+<tr><td><code>{app}\models\ocr\korean_PP-OCRv5_mobile_rec.onnx</code></td><td><code>korean_PP-OCRv5_mobile_rec_onnx/inference.onnx</code></td><td>13.42MB</td></tr>
+<tr><td><code>{app}\models\ocr\korean_PP-OCRv5_mobile_rec.dict.txt</code></td><td><code>inference.yml</code> 의 <code>character_dict</code> 를 한 줄에 한 글자로 뽑은 것</td><td>약 0.04MB</td></tr>
+<tr><td colspan="2"><b>합계</b> (설치 파일은 압축이 거의 안 돼 13~14MB 늘어남)</td><td><b>약 15.2MB</b></td></tr>
+</table></div>
+<ul>
+  <li>기본 설치 파일(<code>MoAISearch_Setup</code>)에 넣는다. 따로 받게 하지 않는다. 정밀 모델 설치 파일(2GB 분할)에 비하면 아주 작다.</li>
+  <li><code>rust/installer.iss</code> 에 <code>models\ocr\*</code> 한 줄, <code>rust/build_dist.ps1</code> 의 폴더 목록에 <code>models\ocr</code> 를 더한다.</li>
+  <li><code>LICENSES_MODELS.txt</code> 에 두 모델(Apache-2.0, PaddlePaddle)을 적는다.</li>
+  <li>모델 폴더는 <code>config.rs</code> 의 <code>models_dir</code> 아래 <code>ocr</code>. 다른 모델처럼 <code>SIMPLERAG_OCR_DIR</code> 로 바꿀 수 있게 한다. 모델이 없으면 OCR 을 끈 것처럼 동작하고 로그에 경고를 한 번 남긴다.</li>
+  <li>버전을 올릴 때 <code>docs/changelog.html</code> 과 릴리스 설명에 "스캔 PDF 검색"을 적는다. 사용자 설명서에 "스캔 문서" 묶음을 더한다.</li>
+  <li>그림 파일 읽기용 <code>image</code> crate(png · jpeg · tiff · bmp 만)로 실행 파일이 조금 커진다(1MB 안팎으로 본다, 빌드 후 확인).</li>
+  <li>INT8 이나 FP16 으로 줄이면 인식 모델을 약 3.4~6.7MB 로 줄일 수 있다. 다만 한국어 정확도를 재 보지 않았으므로 이번에는 원본을 쓴다.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="s11">
+<h2>11. Python 판</h2>
+<p>Python 판(<code>src/simplerag/docmodel/ocr.py</code> · <code>pdf.py</code>)은 이미 설치된 <code>rapidocr 3.9.2</code> 에 같은 두 모델 파일과 같은 설정(스레드 4, 방향 분류 끔, 200dpi, 검출 limit min 736)을 넘겨 쓴다.
+쪽 판정 규칙·줄 묶기·캐시 파일 형식과 <code>engine</code> 이름을 Rust 판과 같게 해서 어느 쪽이 만든 캐시든 서로 읽는다.
+Python 판은 Rust 엔진의 <b>정답 역할</b>도 한다. 같은 쪽을 두 판으로 OCR 해 결과가 같은지 비교한다(<a href="#s13">13-1</a>).</p>
+<div class="callout warn"><b>구현 때 바꿈</b> — Python 판은 대기열 없이 <b>추출할 때 바로</b> OCR 한다. Python 판은 측정·대조용이고 앱은 Rust 판이라, 대기열·설정 화면을 두 벌 만들지 않았다.
+그림 파일 OCR 도 Rust 판만 한다. Python 판은 <code>extract.ocr_images</code> 설정을 읽기만 한다.</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s12">
+<h2>12. 고칠 파일</h2>
+<div class="tw"><table>
+<tr><th>파일</th><th>바꿀 내용</th></tr>
+<tr><td><code>rust/simplerag/src/ocr/mod.rs</code> <span class="tag g">새</span></td><td>엔진 적재(지연·한 번), 쪽 그림 → 줄 목록, 줄 묶기, 캐시 읽기·쓰기</td></tr>
+<tr><td><code>rust/simplerag/src/ocr/det.rs</code> · <code>rec.rs</code> · <code>geom.rs</code> <span class="tag g">새</span></td><td>검출·DB 후처리, 잘라 세우기·CTC 풀이, 덩어리·회전 사각형·어파인 변환</td></tr>
+<tr><td><code>rust/simplerag/src/pdfium.rs</code></td><td>쪽 그리기 함수 6개 적재, <code>render_page(path, no, dpi)</code>, 쪽별 그림 객체 넓이 비율</td></tr>
+<tr><td><code>rust/simplerag/src/docmodel/pdf.rs</code></td><td>쪽 단위 OCR 판정, 캐시가 있으면 OCR 줄을 블록으로, 실패 조건 변경, 쪽 상한 경고</td></tr>
+<tr><td><code>rust/simplerag/src/docmodel/blocks.rs</code></td><td><code>SRC_OCR</code> 더하기</td></tr>
+<tr><td><code>rust/simplerag/src/ocr/image.rs</code> <span class="tag g">새</span> · <code>Cargo.toml</code></td><td>그림 파일 읽기(EXIF 방향, 여러 쪽 TIFF, 크기 제한), <code>image</code> crate 더하기</td></tr>
+<tr><td><code>rust/simplerag/src/docmodel/mod.rs</code></td><td>그림 확장자 → 캐시의 OCR 줄로 블록 만들기(캐시가 없으면 대기열로)</td></tr>
+<tr><td><code>rust/simplerag/src/indexer.rs</code></td><td><code>IMAGE_EXTS</code> 를 인덱싱 대상·<code>UPLOAD_EXTS</code> 에 더하기, 글자 없는 그림을 청크 0개로 반영, <code>ocr_queue</code> 넣고 빼기, 옛 스캔 실패 다시 계획, <code>run_ocr_queue</code>, 캐시 정리</td></tr>
+<tr><td><code>rust/simplerag/src/config.rs</code> · <code>config.yaml</code></td><td><code>extract.ocr</code> · <code>ocr_threads</code> · <code>ocr_max_pages</code>, 환경변수, 설정 검사</td></tr>
+<tr><td><code>rust/simplerag/src/cli.rs</code> · <code>commands.rs</code></td><td><code>ocr</code> 명령, <code>index --no-ocr</code>, 상태 보고에 대기열 수</td></tr>
+<tr><td><code>rust/ragsearchbox/src/jobs.rs</code> · <code>worker.rs</code></td><td>쉬는 동안 OCR 단계 돌리기, 멈춤·이어 하기, 진행 상황 전달</td></tr>
+<tr><td><code>rust/ragsearchbox/ui/info.html</code> · <code>src/settings.rs</code> · <code>tray.rs</code></td><td>"스캔 문서" 묶음, 로그 원인 풀이 두 줄, 트레이 툴팁</td></tr>
+<tr><td><code>rust/ragsearchbox/ui/panel.html</code> · <code>browse.html</code></td><td>근거 카드·미리보기의 "스캔 · 글자 인식" 표시</td></tr>
+<tr><td><code>rust/installer.iss</code> · <code>rust/build_dist.ps1</code> · <code>LICENSES_MODELS.txt</code></td><td>모델 세 파일 배포</td></tr>
+<tr><td><code>src/simplerag/docmodel/pdf.py</code> · <code>config.py</code></td><td>Python 판 OCR(rapidocr), 같은 캐시 형식</td></tr>
+<tr><td><code>bench/bench_ocr.py</code> <span class="tag g">새</span></td><td>이번 실측 스크립트를 옮긴 것 + Rust·Python 결과 비교</td></tr>
+</table></div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s13">
+<h2>13. 확인 방법</h2>
+<h3>13-1. 엔진이 맞게 옮겨졌나</h3>
+<p>텍스트층 PDF 40쪽(이번 측정과 같은 쪽, 씨앗 7)을 Rust 와 RapidOCR 로 각각 OCR 한다. <b>글자 F1 차이 0.01 이하</b>, 검출 상자 수 차이 5% 이하를 목표로 한다.</p>
+<h3>13-2. 품질</h3>
+<p>같은 40쪽의 깨끗한 판 · 스캔 흉내 판. 목표는 이번 실측값 그대로다: 글자 F1 <b>0.96 이상</b>, 단어 재현율 <b>0.98 이상</b>.</p>
+<h3>13-3. 속도</h3>
+<p>실제 스캔 18쪽, 4스레드. RapidOCR 2.8초/쪽보다 빠를 것, 목표 <b>2초/쪽</b>. 검출 · 인식 · 그리기 · 후처리 시간을 나눠 기록한다.
+발열 영향을 줄이려고 조합을 번갈아 돌린다. OCR 중에 검색 한 번이 얼마나 느려지는지도 잰다.</p>
+<h3>13-4. 검색</h3>
+<ul>
+  <li>스캔 문서 20건에서 질문 20개를 만든다(문서 번호·회사명·날짜·금액). <b>상위 5개 안에 그 문서가 나오는 비율</b>을 OCR 전(0건)과 후로 비교한다.</li>
+  <li>띄어쓰기 영향: 같은 질문으로, OCR 글에서 띄어쓰기를 정답처럼 고친 판과 비교한다(텍스트층 PDF 를 그림으로 만든 쪽으로 할 수 있다).</li>
+  <li>골든셋 v2: OCR 은 글자층 문서를 건드리지 않으므로 <b>근거·답변 점수가 그대로</b>여야 한다. 글자층 문서의 청크 해시가 OCR 전후에 같은지 본다.</li>
+</ul>
+<h3>13-5. 흐름</h3>
+<ol>
+  <li>0.1.3 인덱스에서 새 판을 켠다 → 실패 목록의 스캔본 130건이 대기열로 가고, 끝나면 실패 목록에서 빠지는지.</li>
+  <li>OCR 중에 앱을 끄고 다시 켠다 → 끝난 문서는 다시 하지 않고(캐시), 하던 문서부터 이어 하는지.</li>
+  <li><code>--rebuild</code> → 다시 OCR 하지 않고 캐시로 바로 들어가는지(시간 비교).</li>
+  <li>OCR 을 끈다 → 대기열이 멈추고, 이미 들어간 OCR 청크는 검색에 남는지.</li>
+  <li>모델 폴더를 지운다 → OCR 이 꺼진 것처럼 동작하고 로그에 경고가 한 번 남는지.</li>
+  <li>섞인 PDF(글자층 쪽 + 스캔 쪽)와 ② 경우(스캔 쪽 + 쪽 번호 글자) → 스캔 쪽 본문이 들어가고, 쪽 번호 글자가 두 번 들어가지 않는지.</li>
+  <li>그림 파일: 분류함 373개 → 아이콘 89개는 건너뛰고, 글자 없는 그림은 실패 목록에 없으며, 나머지는 검색되는지. 휴대폰 사진(EXIF 회전)·여러 쪽 TIFF 하나씩.</li>
+  <li>"그림 파일도 읽기"를 끈다 → 그림 파일 청크가 인덱스에서 빠지는지.</li>
+</ol>
+</section>
+
+<!-- ================================================================== -->
+<section id="s14">
+<h2>14. 정해 주실 것</h2>
+<div class="dec"><b class="q">① OCR 을 뒤에서 따로 돌릴까, 인덱싱 중에 바로 할까?</b>
+<span class="tag g">제안: 뒤에서 따로</span> 바로 하면 구현이 단순하다. 하지만 처음 인덱싱이 <b>약 2시간 15분</b> 길어지고, 그동안 일반 문서도 늦게 검색된다.
+그 시간은 스캔 쪽 ①+② 2,430쪽 × 2.8초(약 1시간 53분)에 그림 파일 274장 × 4.9초(약 22분)를 더한 것이다.</div>
+<div class="dec"><b class="q">② 기본으로 켤까?</b>
+<span class="tag g">제안: 켬</span> 배포 크기 +15MB이고 쉬는 시간에만 돈다. 계약서처럼 스캔으로만 남은 문서가 검색되는 이득이 크다. 노트북 배터리나 발열이 걱정되면 기본을 끄고 안내 문구로 권할 수 있다.</div>
+<div class="dec"><b class="q">③ 한 문서 쪽 상한</b>
+<span class="tag g">제안: 100쪽</span> 운영 스캔본 가운데 가장 긴 것이 370쪽(약 17분)이다. 상한을 없애면 그런 문서가 대기열 뒤쪽에서 오래 돈다(작은 문서부터 하므로 다른 문서를 막지는 않는다).</div>
+<div class="dec"><b class="q">④ 그림 파일 읽기를 기본으로 켤까?</b>
+<span class="tag g">제안: 켬</span> 분류함 기준 274장, 약 22분이다. 대부분 화면 캡처라 주소창·메뉴 같은 반복 글이 많이 들어온다. 검색 결과가 화면 캡처로 어지러워지면 기본을 끄고, 스캐너가 만든 TIFF 만 기본으로 넣는 방법도 있다.</div>
+<div class="dec"><b class="q">⑤ 채팅에 첨부한 스캔 PDF · 그림</b>
+<span class="tag g">제안: PDF 는 앞 5쪽, 그림은 바로 OCR</span> 첨부 문서는 바로 질문하므로 기다릴 수 없다. 5쪽이면 10~15초, 그림 한 장은 5~10초다. 더 긴 문서는 "앞 5쪽만 읽었습니다"라고 알린다.</div>
+<div class="dec"><b class="q">⑦ ② 경우(큰 그림 + 덧붙은 글자)의 글자 기준</b>
+<span class="tag g">제안: 200자 미만</span> 기준을 올리면 글자층을 입힌 스캔본까지 OCR 하게 되어 시간만 든다(③ 2,433쪽). 낮추면 쪽 번호·도장보다 글자가 많은 스캔 쪽을 놓친다. 구현 후 ② 표본 20쪽을 눈으로 보고 정한다.</div>
+<div class="dec"><b class="q">⑥ 인식 모델을 줄일까(INT8)?</b>
+<span class="tag g">제안: 이번엔 원본</span> 크기 13.4→약 3.4MB, 속도도 빨라질 수 있다. 하지만 한국어 정확도를 재 보지 않았다. 13-2 측정에 INT8 판을 한 줄 더해 보고 나중에 정한다.</div>
+</section>
+
+<footer>MoAI-S 스캔 문서 OCR 설계서 · 2026-11-13 · 조사 대상: <code>rust/simplerag/src/{docmodel/mod,docmodel/pdf,pdfium,indexer,embed,config,bm25}.rs</code>, <code>rust/ragsearchbox/ui/info.html</code>, <code>rust/installer.iss</code>, <code>rust/build_dist.ps1</code>, <code>dist-rust/meta.sqlite</code> · 실측: PP-OCRv6(PaddleOCR 3.7.0) · RapidOCR 3.9.2 · onnxruntime 1.26.0 · i5-1340P</footer>
+</div>
+</body>
+</html>
