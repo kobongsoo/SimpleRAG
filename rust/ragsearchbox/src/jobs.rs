@@ -152,7 +152,7 @@ impl IndexJobs {
     }
 
     // 벡터 채우기 진행 (채운 수, 전체) — 대기 청크가 없거나 소량이면 None
-    fn vec_progress(&self) -> Option<(usize, usize)> {
+    pub fn vec_progress(&self) -> Option<(usize, usize)> {
         let left = self.vec_pending.filter(|n| *n > 0)?;
         let total = self.vec_total.max(left);
         (total >= VEC_SHOW_MIN).then_some((total - left, total))

@@ -58,6 +58,14 @@
   #loadbar { width: 100%; height: 14px; }
   .note.load { color: #2563eb; }
   select { width: 100%; font: inherit; border: 1px solid var(--line); }
+  /* 검색 폴더 목록 — 8줄 높이. select 와 같은 모양이지만 줄 안의 진행 숫자만 빨갛게 칠할 수 있게 직접 그린다 */
+  .flist { border: 1px solid var(--line); height: calc(8 * 1.45em + 4px); overflow-y: auto; padding: 1px 0; background: #fff; outline: none; }
+  .flist .fi { padding: 0 4px; line-height: 1.45em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; user-select: none; }
+  .flist .fi.sel { background: #cce4f7; }
+  .flist:focus .fi.sel { background: #0078d7; color: #fff; }
+  .flist:focus .fi.sel .num { color: #fff; }
+  /* 진행 숫자 — 빨간 굵은 글씨(검색 정확도 높이는 중 · 스캔 문서 · 폴더 인덱싱 · 모델 받기) */
+  .num { color: #c62828; font-weight: bold; }
   .row { display: flex; gap: 10px; align-items: flex-start; }
   .row .grow { flex: 1; }
   .col button { display: block; width: 100%; margin: 0 0 5px; }
@@ -198,7 +206,7 @@
 </div>
 <div id="tab_index" class="hidden">
 <fieldset><legend>검색 폴더</legend>
-  <div class="row"><div class="grow"><select id="folders" size="8"></select></div>
+  <div class="row"><div class="grow"><div id="folders" class="flist" tabindex="0" role="listbox" aria-label="검색 폴더"></div></div>
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
   <label><input type="checkbox" id="folder_icon"> 검색 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
   <div class="note" id="foldernote"></div>
@@ -294,16 +302,22 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const send = (o) => window.ipc.postMessage(JSON.stringify(o));
-let folders = null, folderSig = null;
+let folders = null, folderSig = null, folderSel = -1;
 const UP = "모델이 올라가 있지 않음";
 
 // 폴더 뒤에 붙일 수 — " (1,444)", 인덱싱 중 " (10/311)", 허락 대기 " (16 · 대기 304)" (탐색 창 폴더 목록과 같다)
+//   HTML 로 돌려준다 — 진행 숫자(인덱싱 중 · 허락 대기)는 빨간 글씨(.num)
 function folderCount(r) {
   const n = (v) => Number(v).toLocaleString();
   if (!r) return "";
-  if (r.progress) return ` (${n(r.progress[0])}/${n(r.progress[1])})`;
+  if (r.progress) return ` (<span class="num">${n(r.progress[0])}/${n(r.progress[1])}</span>)`;
   if (r.count == null) return "";
-  return r.waiting ? ` (${n(r.count)} · 대기 ${n(r.waiting)})` : ` (${n(r.count)})`;
+  return r.waiting ? ` (${n(r.count)} · 대기 <span class="num">${n(r.waiting)}</span>)` : ` (${n(r.count)})`;
+}
+// 폴더 목록에서 한 줄 고르기 — 고른 줄을 칠한다
+function pickFolder(i) {
+  folderSel = i;
+  [...$("folders").children].forEach((d, k) => d.classList.toggle("sel", k === i));
 }
 
 window.rsb = {
@@ -332,16 +346,27 @@ window.rsb = {
     const labels = fs.map((f) => f + folderCount((info.roots || []).find((r) => r.path === f)));
     if (JSON.stringify(labels) !== folderSig) {
       folderSig = JSON.stringify(labels);
-      const sel = $("folders"), keep = sel.value;
+      // 고른 폴더를 되살린다(경로로 찾는다 — 순서가 바뀌어도)
+      const keep = folders && folderSel >= 0 ? folders[folderSel] : null;
       folders = fs;
-      sel.innerHTML = "";
-      fs.forEach((f, i) => { const o = document.createElement("option"); o.textContent = labels[i]; o.value = f; sel.appendChild(o); });
-      sel.value = keep;
+      const box = $("folders");
+      box.innerHTML = "";
+      fs.forEach((f, i) => {
+        const d = document.createElement("div");
+        d.className = "fi"; d.setAttribute("role", "option"); d.title = f;
+        d.innerHTML = esc(f) + folderCount((info.roots || []).find((r) => r.path === f));
+        d.onmousedown = () => pickFolder(i);
+        box.appendChild(d);
+      });
+      pickFolder(keep == null ? -1 : fs.indexOf(keep));
     }
     let note = !fs.length ? "검색할 폴더가 없습니다 — [추가…] 로 고르세요"
-      : (info.docs == null ? "" : docsLine(info));
-    if (info.folder_msg) note = (note ? note + "\n" : "") + info.folder_msg;
-    $("foldernote").textContent = note;
+      : (info.docs == null ? "" : esc(docsLine(info)));
+    // 벡터 채우기 진행 — 숫자는 빨간 글씨
+    if (info.vec) note += (note ? "\n" : "") + `검색 정확도 높이는 중: <span class="num">${Number(info.vec[0]).toLocaleString()} / ${Number(info.vec[1]).toLocaleString()}</span>` +
+      " — 지금도 검색할 수 있습니다";
+    if (info.folder_msg) note = (note ? note + "\n" : "") + esc(info.folder_msg);
+    $("foldernote").innerHTML = note;
     if (info.exts) syncExts(info);
     if (info.ocr) drawOcr(info.ocr, info.ocr_msg || "");
     if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
@@ -465,17 +490,17 @@ function drawOcr(o, msg) {
   b.textContent = ocrPaused ? "이어 하기" : "잠시 멈춤";
   b.disabled = !o.on || !(o.docs_left > 0);
   // 건수(대기 · 끝난 문서 · 실패)는 굵게 — 한눈에 보이게. 문서 이름은 esc 로 막는다
-  const N = (n) => "<b>" + Number(n || 0).toLocaleString() + "</b>";
+  const N = (n) => '<b class="num">' + Number(n || 0).toLocaleString() + "</b>";
   let t;
   if (!o.on) t = "꺼짐 — 스캔한 PDF 는 '텍스트층 없음'으로 실패로 남습니다";
   else if (!o.known) t = "대기열 확인 전 — 인덱싱이 끝나고 질문이 없을 때 확인합니다";
   else if (!(o.docs_left > 0)) t = "대기 없음" + (o.done ? " · 이번에 " + N(o.done) + "건 읽음" : "");
   else {
-    t = "⏳ 대기 " + N(o.docs_left) + "건 · " + Number(o.pages_left).toLocaleString() + "쪽";
+    t = "⏳ 대기 " + N(o.docs_left) + "건 · " + N(o.pages_left) + "쪽";
     // 남은 시간 — 최근 20쪽 평균 속도(처음에는 계산 중)
     t += o.sec_per_page > 0 ? " · 약 " + fmtMin(o.pages_left * o.sec_per_page) + " 남음" : " · 남은 시간 계산 중";
     if (ocrPaused) t += " · 멈춤";
-    else if (o.name) t += "\n▶ 지금: " + esc(o.name) + " " + o.page + "/" + o.of + "쪽";
+    else if (o.name) t += "\n▶ 지금: " + esc(o.name) + ' <b class="num">' + o.page + "/" + o.of + "</b>쪽";
     if (o.done || o.failed) t += "\n✔ 끝난 문서 " + N(o.done) + "건 · 실패 " + N(o.failed) + "건";
   }
   $("ocrstat").innerHTML = t;
@@ -768,9 +793,8 @@ $("b_unload").onclick = () => send({ type: "unload" });
 $("b_reload").onclick = () => send({ type: "reload" });
 $("b_add").onclick = () => send({ type: "add_folder" });
 $("b_remove").onclick = () => {
-  const sel = $("folders");
-  if (sel.selectedIndex < 0) { send({ type: "folder_msg", msg: "뺄 폴더를 목록에서 고르세요" }); return; }
-  const f = folders[sel.selectedIndex];
+  if (!folders || folderSel < 0 || folderSel >= folders.length) { send({ type: "folder_msg", msg: "뺄 폴더를 목록에서 고르세요" }); return; }
+  const f = folders[folderSel];
   confirmByName(f, "이 폴더를 빼면 그 안 문서가 인덱스에서 빠집니다(원본 파일은 그대로).", () => send({ type: "remove_folder", folder: f }));
 };
 // 폴더 이름을 똑같이 쳐야 실행하는 확인 창 — 대소문자는 가리지 않고, 맞을 때만 [폴더 빼기] 가 켜진다
@@ -857,13 +881,13 @@ function stateCell(r) {
     case "verifying": return "확인 중…";
     // 설치 — models 폴더에 쓴 크기로 잰 진행(설치 파일이 압축을 풀며 복사한다)
     case "installing":
-      return `설치 중 <span class="prog"><i style="width:${r.pct || 0}%"></i></span> ${r.pct || 0}%<br>` +
-             `<span class="sub">${fmtGB(r.done_mb || 0)} / ${fmtGB(r.total_mb || 0)}</span>`;
+      return `설치 중 <span class="prog"><i style="width:${r.pct || 0}%"></i></span> <span class="num">${r.pct || 0}%</span><br>` +
+             `<span class="sub"><span class="num">${fmtGB(r.done_mb || 0)}</span> / ${fmtGB(r.total_mb || 0)}</span>`;
     case "paused": return "멈춤";
     case "downloading": {
       const eta = r.eta >= 0 ? ` · 약 ${r.eta >= 60 ? Math.ceil(r.eta / 60) + "분" : r.eta + "초"} 남음` : "";
-      return `받는 중 <span class="prog"><i style="width:${r.pct || 0}%"></i></span> ${r.pct || 0}%<br>` +
-             `<span class="sub">${fmtGB(r.done_mb || 0)} / ${fmtGB(r.total_mb || 0)} · ${r.speed || 0}MB/초${eta}</span>`;
+      return `받는 중 <span class="prog"><i style="width:${r.pct || 0}%"></i></span> <span class="num">${r.pct || 0}%</span><br>` +
+             `<span class="sub"><span class="num">${fmtGB(r.done_mb || 0)}</span> / ${fmtGB(r.total_mb || 0)} · ${r.speed || 0}MB/초${eta}</span>`;
     }
     default:
       if (!r.app_ok) return `<span class="sub">MoAI-S ${esc(r.min_app)} 이상 필요</span>`;

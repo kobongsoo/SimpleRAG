@@ -2544,6 +2544,11 @@ impl App {
             None => json!({"on": self.s.ocr, "images": self.s.ocr_images, "paused": false, "known": false}),
         };
         info["ocr_msg"] = json!(self.info.ocr_msg);
+        // 벡터 채우기 진행 [채운 수, 전체] — 설정 > 인덱싱 '검색 정확도 높이는 중' 줄(없으면 null)
+        info["vec"] = match self.jobs.as_ref().and_then(|j| j.vec_progress()) {
+            Some((done, total)) => json!([done, total]),
+            None => Value::Null,
+        };
         info["ui_mode"] = json!(self.s.ui_mode);
         info["dock"] = json!(self.s.panel_enabled);
         info["mode_msg"] = json!(self.mode_msg);
