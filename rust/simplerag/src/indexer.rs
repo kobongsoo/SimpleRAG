@@ -1421,7 +1421,9 @@ pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete:
         if let Some(f) = failed_before.get(&key) {
             // 0.1.3 이하에서 "텍스트층 없음"으로 실패한 스캔 PDF 는 OCR 이 켜져 있으면 다시 계획한다(설계서 §6-1)
             //   — 이번에는 대기열로 간다. 그림 파일도 OCR 이 꺼져 있던 때 실패했으면 다시 본다
+            //   예전 추출 경로(legacy.rs)는 같은 실패를 "하이브리드 전엔진 실패(감지=pdf; pdf:empty)" 로 적는다 — 운영 PC 175건이 이 글
             let scan_retry = ocr_on && f.get("why").and_then(|v| v.as_str()).map_or(false, |w| w.contains("텍스트층 없음")
+                || w.contains("pdf:empty")
                 || (crate::ocr::image::is_image(&key) && !w.starts_with("OCRError")));
             if !scan_retry && f.get("fingerprint").and_then(|v| v.as_str()) == Some(fp.as_str()) {
                 n_retry += 1;
