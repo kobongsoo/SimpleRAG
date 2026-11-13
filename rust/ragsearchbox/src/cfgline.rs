@@ -1,15 +1,15 @@
 //------------------------------------------------------------------
-// 정밀 모드 켜고 끄기 — SimpleRAG config.yaml 의 generation.precision 한 줄만 바꾼다 (Python RAGSearchBox/precision.py 와 같다)
-//=> 정밀 모드 = Qwen3-4B 모델 + 근거에 앞뒤 이웃 청크(코드수정 설계서 §7 ④). 골든 100문항 정답 50 → 59,
-//   대신 첫 글자(TTFT) 약 3배·답 완료 약 2배 늦다. 워커는 시작할 때 config.yaml 을 읽으므로 바꾼 뒤 모델을 다시 올린다.
-//   yaml 로 다시 쓰면 설명 주석이 날아가므로 generation 구역의 precision 줄 값만 갈아 끼운다(줄 끝 CRLF/LF 보존).
-//   같은 방식으로 멀티턴(generation.multiturn, 기본 켬)도 켜고 끈다 — read/save 의 key 로 고른다.
+// SimpleRAG config.yaml 의 generation 한 줄 읽기·바꾸기 — 답변 모델(model) · 이어서 묻기(multiturn) · 옛 정밀 모드(precision)
+//=> 워커는 시작할 때 config.yaml 을 읽으므로 바꾼 뒤 모델을 다시 올린다.
+//   yaml 로 다시 쓰면 설명 주석이 날아가므로 generation 구역의 그 줄 값만 갈아 끼운다(줄 끝 CRLF/LF 보존).
+//   예전 이름은 precision.rs(정밀 모드 켜고 끄기) — 정밀 모드는 설정 > 모델로 바뀌었다(모델 받기 설계서 §8)
 //------------------------------------------------------------------
 
 use std::path::Path;
 
-pub const MODEL_FILE: &str = "Qwen3-4B-Q4_K_M.gguf";
-// 설정 창에 늘 보이는 주의 글
+// 0.1.3 까지 정밀 모드가 쓰던 모델 — 옮겨 가기(migrate_precision)에 쓴다
+pub const OLD_PRECISION_ALIAS: &str = "qwen3-4b-q4";
+pub const OLD_PRECISION_FILE: &str = "Qwen3-4B-Q4_K_M.gguf";
 // 멀티턴 안내 글 (Python precision.MULTITURN_NOTE 와 같다)
 pub const MULTITURN_NOTE: &str = "따라 묻는 질문(\"침구류는?\")의 빠진 주제를 같은 대화의 바로 앞 질문에서 채워 찾습니다. 새 대화(✎)를 누르면 끊깁니다. 바꾸면 모델을 다시 올립니다.";
 
@@ -17,8 +17,6 @@ pub const MULTITURN_NOTE: &str = "따라 묻는 질문(\"침구류는?\")의 빠
 fn default_of(key: &str) -> bool {
     key == "multiturn"
 }
-
-pub const WARN: &str = "⚠️ 켜면 느려집니다 — 첫 글자(TTFT)가 2배 이상(약 2.2 → 7.1초), 답 완료가 약 2배(7.6 → 14.7초). 바꾸면 모델을 다시 올립니다.";
 
 //------------------------------------------------------------------
 // SimpleRAG 가 읽는 config.yaml — SIMPLERAG_CONFIG → 데이터 폴더 → 프로그램 폴더. 없으면 None
@@ -75,32 +73,48 @@ fn find(lines: &[String], key: &str) -> (Option<usize>, Option<usize>) {
 }
 
 //------------------------------------------------------------------
-// 지금 켜져 있나 (정밀 모드 · 멀티턴) — 줄이 없거나 못 읽으면 그 키의 기본값
+// 그 줄의 값 글자 — 줄이 없거나 못 읽으면 None
+//------------------------------------------------------------------
+pub fn read_value(path: &str, key: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let lines: Vec<String> = raw.trim_start_matches('\u{feff}').lines().map(String::from).collect();
+    let at = find(&lines, key).1?;
+    Some(split_line(&lines[at], key)?.1.trim_matches(|c| c == '"' || c == '\'').to_string())
+}
+
+//------------------------------------------------------------------
+// 지금 켜져 있나 (멀티턴 · 옛 정밀 모드) — 줄이 없거나 못 읽으면 그 키의 기본값
 //------------------------------------------------------------------
 pub fn read(path: &str, key: &str) -> bool {
-    let Ok(raw) = std::fs::read_to_string(path) else { return default_of(key) };
-    let lines: Vec<String> = raw.trim_start_matches('\u{feff}').lines().map(String::from).collect();
-    match find(&lines, key).1 {
-        Some(at) => matches!(split_line(&lines[at], key).unwrap().1.to_lowercase().as_str(), "true" | "yes" | "on" | "y"),
+    match read_value(path, key) {
+        Some(v) => matches!(v.to_lowercase().as_str(), "true" | "yes" | "on" | "y"),
         None => default_of(key),
     }
 }
 
 //------------------------------------------------------------------
-// 켜기/끄기 저장 (정밀 모드 · 멀티턴) — 값만 바꾸고 뒤 주석 칸은 공백으로 맞춘다. 줄이 없으면 generation: 바로 아래에 넣는다
-//   label = 안내 글의 이름. 돌려줌: Ok(안내 글) / Err(사유)
+// 지금 답변 모델 별칭 — 줄이 없으면 내장 기본 모델
 //------------------------------------------------------------------
-pub fn save(path: Option<&str>, on: bool, key: &str, label: &str) -> Result<String, String> {
+pub fn read_model(path: Option<&str>) -> String {
+    path.and_then(|p| read_value(p, "model")).map(|v| v.to_lowercase()).filter(|v| !v.is_empty())
+        .unwrap_or_else(|| crate::models::BASE_ALIAS.to_string())
+}
+
+//------------------------------------------------------------------
+// 값 저장 — 값만 바꾸고 뒤 주석 칸은 공백으로 맞춘다. 줄이 없으면 generation: 바로 아래에 넣는다
+//   돌려줌: Ok(()) / Err(사유)
+//------------------------------------------------------------------
+pub fn save_value(path: Option<&str>, key: &str, value: &str) -> Result<(), String> {
     let path = path.filter(|p| Path::new(p).is_file()).ok_or("config.yaml 을 찾지 못해 바꾸지 않았습니다")?;
     let raw = std::fs::read_to_string(path).map_err(|e| format!("config.yaml 을 읽지 못했습니다: {}", e))?;
     let nl = if raw.contains("\r\n") { "\r\n" } else { "\n" };
     let bom = raw.starts_with('\u{feff}');
     let mut lines: Vec<String> = raw.trim_start_matches('\u{feff}').split(nl).map(String::from).collect();
-    let value = if on { "true" } else { "false" };
     match find(&lines, key) {
         (_, Some(at)) => {
             let (head, old, tail) = split_line(&lines[at], key).unwrap();
             let body = tail.trim_start_matches(' ');
+            // 주석 칸이 있던 자리를 지킨다(값이 길어지면 한 칸만 띄운다)
             let gap = if tail.starts_with(' ') {
                 " ".repeat((old.len() + tail.len() - body.len()).saturating_sub(value.len()).max(1))
             } else {
@@ -112,43 +126,37 @@ pub fn save(path: Option<&str>, on: bool, key: &str, label: &str) -> Result<Stri
         (None, None) => return Err("config.yaml 에 generation 구역이 없어 바꾸지 않았습니다".into()),
     }
     let text = format!("{}{}", if bom { "\u{feff}" } else { "" }, lines.join(nl));
-    std::fs::write(path, text).map_err(|e| format!("config.yaml 에 쓰지 못했습니다: {}", e))?;
+    std::fs::write(path, text).map_err(|e| format!("config.yaml 에 쓰지 못했습니다: {}", e))
+}
+
+//------------------------------------------------------------------
+// 켜기/끄기 저장 (멀티턴) — label = 안내 글의 이름. 돌려줌: Ok(안내 글) / Err(사유)
+//------------------------------------------------------------------
+pub fn save(path: Option<&str>, on: bool, key: &str, label: &str) -> Result<String, String> {
+    save_value(path, key, if on { "true" } else { "false" })?;
     Ok(format!("{}를 {}", label, if on { "켰습니다" } else { "껐습니다" }))
 }
 
 //------------------------------------------------------------------
-// 4B 모델 파일이 있나 — SIMPLERAG_MODELS_DIR → 데이터 폴더 models → 프로그램 폴더 models → 옆 Python 배포본 models
+// 0.1.3 정밀 모드에서 옮겨 가기 (모델 받기 설계서 §8)
+//=> precision: true 면 앞으로는 설정 > 모델이 정하므로 false 로 적고,
+//   Qwen3-4B 가 있으면 model 을 qwen3-4b-q4 로 바꾼다 — 워커는 이 모델에 이웃 청크를 붙이므로 전과 같은 조건으로 답한다.
+//   model_present = Qwen3-4B 파일이 있나. 돌려줌: 바꿨으면 Some(안내 글)
 //------------------------------------------------------------------
-pub fn model_present(data_home: Option<&str>, app_dir: Option<&str>) -> bool {
-    let mut dirs: Vec<std::path::PathBuf> = vec![];
-    if let Ok(d) = std::env::var("SIMPLERAG_MODELS_DIR") {
-        dirs.push(d.into());
+pub fn migrate_precision(path: Option<&str>, model_present: bool) -> Option<String> {
+    let p = path?;
+    if !read(p, "precision") {
+        return None;
     }
-    for d in [data_home, app_dir].into_iter().flatten() {
-        dirs.push(Path::new(d).join("models"));
+    if model_present {
+        save_value(Some(p), "model", OLD_PRECISION_ALIAS).ok()?;
     }
-    if let Some(up) = app_dir.and_then(|a| Path::new(a).parent()) {
-        dirs.push(up.join("simplerag").join("models"));
-        dirs.push(up.join("dist").join("simplerag").join("models"));
-    }
-    dirs.iter().any(|d| d.join(MODEL_FILE).is_file())
-}
-
-//------------------------------------------------------------------
-// 설정 창 정밀 모드 안내 줄
-//------------------------------------------------------------------
-pub fn note(present: bool, found: bool, msg: &str) -> String {
-    let mut parts = vec![WARN.to_string()];
-    if !found {
-        parts.push("config.yaml 을 찾지 못해 바꿀 수 없습니다.".into());
-    } else if !present {
-        // 기본 설치 파일에는 4B 가 없다 — 정밀 모델 추가 설치 파일을 안내한다
-        parts.push(format!("models 폴더에 {} 가 없어 켜도 기존 모델로 답합니다. 정밀 모드 모델 설치 파일(MoAISearch_PrecisionModel_Setup)을 실행하면 추가됩니다.", MODEL_FILE));
-    }
-    if !msg.is_empty() {
-        parts.push(msg.to_string());
-    }
-    parts.join("\n")
+    save_value(Some(p), "precision", "false").ok()?;
+    Some(if model_present {
+        "정밀 모드를 설정 > 모델로 옮겼습니다 — 답변 모델 Qwen3-4B(이웃 청크 포함)".to_string()
+    } else {
+        "정밀 모드를 껐습니다 — Qwen3-4B 가 없어 원래 모델로 답합니다. 설정 > 모델에서 정밀 모델을 받을 수 있습니다".to_string()
+    })
 }
 
 #[cfg(test)]
@@ -175,5 +183,25 @@ mod tests {
         save(Some(&ps), false, "multiturn", "멀티턴").unwrap();
         assert!(!read(&ps, "multiturn"));
         assert!(read(&ps, "precision") == false);
+    }
+
+    // 모델 줄 바꾸기 · 0.1.3 정밀 모드 옮겨 가기
+    #[test]
+    fn model_and_migrate() {
+        let dir = std::env::temp_dir().join(format!("rsb_cfgline_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("config.yaml");
+        std::fs::write(&p, "generation:\n  model: qwen3-1.7b-q4          # 기본\n  precision: true               # 옛\n").unwrap();
+        let ps = p.to_string_lossy().into_owned();
+        assert_eq!(read_model(Some(&ps)), "qwen3-1.7b-q4");
+        save_value(Some(&ps), "model", "qwen3.5-4b-q4").unwrap();
+        assert_eq!(read_model(Some(&ps)), "qwen3.5-4b-q4");
+        assert!(std::fs::read_to_string(&p).unwrap().contains("  model: qwen3.5-4b-q4          # 기본\n"));
+        // 4B 가 있으면 모델을 qwen3-4b-q4 로, 정밀 모드는 끈다. 두 번째는 할 일 없음
+        assert!(migrate_precision(Some(&ps), true).is_some());
+        assert_eq!(read_model(Some(&ps)), "qwen3-4b-q4");
+        assert!(!read(&ps, "precision"));
+        assert!(migrate_precision(Some(&ps), true).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

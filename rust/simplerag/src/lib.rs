@@ -33,5 +33,6 @@ pub mod synonym_suggest;
 pub mod synonyms;
 pub mod tok;
 pub mod uploads;
+pub mod vecf16;
 pub mod xlsdate;
 pub mod xmldom;

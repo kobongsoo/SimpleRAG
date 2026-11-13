@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모델 받기 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0; --brand: #e5163f;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; }
+section { margin: 40px 0; }
+h2 { font-size: 21px; margin-bottom: 12px; padding-top: 6px; }
+h3 { font-size: 16.5px; margin: 22px 0 8px; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 20px; }
+.toc ol { margin: 0; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card .s { color: var(--muted); font-size: 14px; }
+.tw { overflow-x: auto; margin: 12px 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.tag.w { background: var(--warn-soft); color: var(--warn); }
+.tag.e { background: var(--bad-soft); color: var(--bad); }
+.tag.g { background: var(--good-soft); color: var(--good); }
+/* 설정 창 그림 */
+.mock { background: #f3f4f6; border: 1px solid #c8ccd4; border-radius: 8px; padding: 10px; color: #1f2937; font-family: "Malgun Gothic", sans-serif; font-size: 13px; line-height: 1.5; overflow-x: auto; }
+.mock .win { display: flex; min-width: 640px; }
+.mock .nav { width: 112px; flex: none; }
+.mock .nav div { padding: 8px 10px; color: #5b6475; }
+.mock .nav div.on { background: #fff; color: #1f2937; font-weight: bold; box-shadow: inset 3px 0 0 var(--brand); }
+.mock .nav .lg { font-weight: bold; color: #1f2937; padding-bottom: 10px; }
+.mock .nav .lg span { color: var(--brand); }
+.mock .pan { flex: 1; background: #fff; border: 1px solid #d7dbe3; padding: 6px 12px 10px; }
+.mock fieldset { border: 1px solid #d7dbe3; border-radius: 3px; margin: 6px 0 10px; padding: 4px 10px 8px; }
+.mock legend { font-weight: bold; padding: 0 5px; }
+.mock table { font-size: 12.5px; }
+.mock th { background: #f3f4f6; color: #5b6475; font-weight: normal; padding: 4px 6px; }
+.mock td { padding: 4px 6px; border-bottom: 1px solid #eceef2; }
+.mock .bt { display: inline-block; border: 1px solid #9aa3b2; border-radius: 3px; padding: 0 8px; background: #fff; font-size: 12px; margin-right: 3px; white-space: nowrap; }
+.mock .sub { color: #5b6475; }
+.mock .w { color: #b45309; } .mock .e { color: #b91c1c; }
+.mock .bar { display: flex; gap: 10px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
+.mock .pill { border: 1px solid #d7dbe3; border-radius: 10px; padding: 0 8px; }
+.mock .pill.on { background: #1f2937; color: #fff; border-color: #1f2937; }
+.dec { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.dec b.q { display: block; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 50px; }
+/* 모델 탭 그림 — 줄·배지·진행 막대 */
+.mock .mrow td { vertical-align: middle; }
+.mock .nm { font-weight: bold; }
+.mock .bd { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 9px; margin-left: 4px; white-space: nowrap; }
+.mock .bd.rec { background: #fde7ec; color: #c2133a; }
+.mock .bd.use { background: #1f2937; color: #fff; }
+.mock .bd.kr { background: #e3ebf7; color: #2c5aa0; }
+.mock .bd.slow { background: #fdf2dd; color: #a8701a; }
+.mock .bd.old { background: #eceff4; color: #5b6475; }
+.mock .prog { display: inline-block; width: 90px; height: 7px; background: #e5e7eb; border-radius: 4px; vertical-align: middle; overflow: hidden; }
+.mock .prog i { display: block; height: 100%; width: 43%; background: #2c5aa0; }
+.mock .hw { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 4px 14px; }
+.mock .hw b { font-weight: normal; color: #5b6475; margin-right: 4px; }
+.mock .rec-line { margin-top: 6px; padding: 5px 8px; background: #fff7f8; border: 1px solid #f5c2cd; border-radius: 4px; }
+.mock .detail { background: #f8fafc; border: 1px dashed #c8ccd4; border-radius: 4px; padding: 6px 10px; margin: 2px 0 4px; }
+/* 모델 아이콘 — 공식 로고가 없을 때는 개발사 색 + 글자(모노그램) */
+.mock .ic { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 7px;
+  color: #fff; font-weight: bold; font-size: 12px; flex: none; letter-spacing: -.02em; }
+.mock .ic.big { width: 52px; height: 52px; border-radius: 11px; font-size: 19px; }
+.mock .ic.qw { background: #615ced; } .mock .ic.kt { background: #e60012; } .mock .ic.kk { background: #f2c200; color: #2b2300; } .mock .ic.lq { background: #111827; }
+.mock .mcell { display: flex; gap: 8px; align-items: center; }
+.mock .dhead { display: flex; gap: 12px; align-items: center; margin: 4px 0 8px; }
+.mock .dhead .t { font-size: 17px; font-weight: bold; }
+.mock .chips { display: flex; gap: 5px; flex-wrap: wrap; margin: 4px 0; }
+.mock .chip { border: 1px solid #d7dbe3; border-radius: 10px; padding: 0 8px; font-size: 12px; background: #fff; }
+.mock .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mock .good { color: #2a7a57; } .mock .bad2 { color: #a8701a; }
+.mock .back { color: #2c5aa0; cursor: default; }
+.mock .act { display: flex; justify-content: flex-end; gap: 6px; border-top: 1px solid #e5e7eb; padding-top: 6px; margin-top: 6px; }
+.mock .bt.pri { background: #2c5aa0; color: #fff; border-color: #2c5aa0; }
+.flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0; }
+.flow span { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 10px; font-size: 14px; }
+.flow em { font-style: normal; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (RAGSearchBox Rust 판) · 설계서 · 2026-11-13 · 설계 확정(구현 전, 측정 전)</div>
+  <h1>설정 &gt; 모델 — 답변 모델 받기·고르기</h1>
+  <p class="lede">LM Studio 의 "탐색" 화면처럼, 설정 창에서 답변 모델 목록을 보고 <b>받기 → 설치 → 사용</b>까지 한 번에 하게 한다.
+  모델은 <b>기본(3B 이하)</b>과 <b>정밀(3B 이상)</b>으로 나누고, 받기 전에 이 PC 의 메모리·그래픽·CPU 를 보고 맞는 모델을 먼저 보여 준다.
+  모델은 GitHub 릴리스에 올린 모델별 설치 파일(.exe)로 받는다. 이것으로 지금의 "정밀 모드" 스위치와 정밀 모델 추가 설치 파일을 없앤다.</p>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">요구 사항 정리</a></li>
+  <li><a href="#s2">지금 구조 (조사 결과)</a></li>
+  <li><a href="#s3">모델 목록과 구분</a></li>
+  <li><a href="#s4">받기 전 추천 — PC 사양으로</a></li>
+  <li><a href="#s5">화면 설계</a></li>
+  <li><a href="#s6">받기·설치·사용 흐름</a></li>
+  <li><a href="#s7">배포 — 모델별 설치 파일과 목록 파일</a></li>
+  <li><a href="#s8">정밀 모드 없애기와 옮겨 가기</a></li>
+  <li><a href="#s9">주고받는 메시지(IPC)</a></li>
+  <li><a href="#s10">고칠 파일</a></li>
+  <li><a href="#s11">확인 방법과 남은 측정</a></li>
+  <li><a href="#s12">정해 주실 것</a></li>
+</ol></nav>
+
+<section id="s1">
+<h2>1. 요구 사항 정리</h2>
+<ul>
+  <li>설정 창에서 모델을 <b>받고, 바로 골라 쓰게</b> 한다. 다른 프로그램을 따로 실행하거나 파일을 옮기지 않는다.</li>
+  <li>모델은 <b>기본 = 3B 이하</b>, <b>정밀 = 3B 이상</b>으로 나눠 보인다.</li>
+  <li>추천은 <b>받기 전에</b> 한다. 후보 모델을 미리 받아 재 보는 방식은 쓰지 않는다. 이 PC 의 사양으로 판단한다.</li>
+  <li>모델은 <b>GitHub 릴리스의 설치 파일(.exe)</b>로 배포한다. 앱은 그 파일을 받아 실행해서 설치한다.</li>
+  <li>후보: 기본 — Kanana Nano 2.1B · LFM2.5-1.2B-Instruct · Qwen3.5-2B · Mi:dm 2.0 Mini / 정밀 — Qwen3.5-4B.</li>
+  <li>"Qwen3-4B 정밀 모델 설치 파일을 받아 쓰라"는 지금 안내와 정밀 모드 스위치는 없앤다.</li>
+  <li>모델 품질 측정은 이 화면 설계가 끝난 뒤에 한다. 그래서 이 설계서의 품질·속도 숫자 중 일부는 <span class="tag w">측정 전</span>으로 남긴다.</li>
+</ul>
+</section>
+
+<section id="s2">
+<h2>2. 지금 구조 (조사 결과)</h2>
+<div class="tw"><table>
+<tr><th>항목</th><th>지금</th><th>이 설계에 주는 뜻</th></tr>
+<tr><td>기본 설치 파일</td><td><code>installer.iss</code> — 프로그램 + 임베딩 + 리랭커 + <b>Qwen3-1.7B</b>(1.1GB)</td><td>기본 모델은 처음부터 들어 있다. 받기 목록에서는 "내장"으로 보인다</td></tr>
+<tr><td>정밀 모델</td><td><code>installer_precision.iss</code> — Qwen3-4B 를 1.9GB 조각(.exe + .bin)으로 나눔. 앱 버전마다 다시 만들어 올림. <code>AppMutex</code> 로 앱이 켜져 있으면 설치를 막음</td><td>모델별 설치 파일의 틀로 쓴다. 다만 앱이 켜진 채로 설치해야 하므로 앱이 켜져 있으면 막는 설정은 뺀다(§7)</td></tr>
+<tr><td>정밀 모드</td><td><code>config.yaml</code> <code>generation.precision</code> = 4B 모델 + 근거마다 앞뒤 이웃 청크. 설정 &gt; 기본 &gt; "정밀 모드" 체크 상자(<code>precision.rs</code>)</td><td>"모델 + 이웃 청크"가 한 덩어리라, 모델별 설정으로 풀어야 한다(§8)</td></tr>
+<tr><td>모델 표</td><td>Rust <code>simplerag/src/config.rs</code> <code>GEN_MODELS</code>(별칭 → 파일, 대화 형식), Python <code>config.py</code> 에 따로. 설정 검사는 3개만 허용</td><td>새 모델을 넣으려면 표를 늘려야 한다. 앱을 고치지 않고도 늘릴 수 있게 모델 옆 설명 파일을 함께 읽는다(§7-3)</td></tr>
+<tr><td>대화 형식</td><td><code>qwen3</code> · <code>midm</code> · <code>kanana</code></td><td>Qwen3.5 는 qwen3 그대로 쓴다(10-29 측정). LFM2.5 는 형식을 새로 만들어야 한다</td></tr>
+<tr><td>생성 백엔드 측정</td><td>처음 실행할 때 내장 1.7B 로 CPU 와 iGPU(Vulkan) 의 처리 속도를 재서 <code>gen_backend.json</code> 에 남김. 예: 이 PC iGPU 260 토큰/초, CPU 80 토큰/초</td><td><b>후보 모델을 받지 않고도</b> 이 PC 의 실제 속도를 안다 → 추천에 쓴다(§4)</td></tr>
+<tr><td>인터넷 연결</td><td>앱에 HTTP 기능이 없다(<code>Cargo.toml</code>)</td><td>Windows 내장 WinHTTP 를 쓴다. 새 라이브러리 없이 회사 프록시 설정을 그대로 따른다</td></tr>
+<tr><td>배포 저장소</td><td><code>kobongsoo/MoAI-S</code> — 릴리스(설치 파일) · Pages(<code>docs/</code>). 첨부 파일 하나 2GB 한도</td><td>모델 목록 파일은 Pages 에, 설치 파일은 모델 전용 릴리스에 둔다(§7)</td></tr>
+</table></div>
+</section>
+
+<section id="s3">
+<h2>3. 모델 목록과 구분</h2>
+<p>품질·속도 칸은 2026-10-29 측정(골든 100문항 핵심어 정답, 이 개발 PC iGPU 첫 글자 중앙값)이다. <b>"첫 글자 비"</b>는 내장 Qwen3-1.7B 를 1로 둔 상대 시간이고, 추천 계산(§4)에 쓴다.</p>
+<div class="tw"><table>
+<tr><th>구분</th><th>모델</th><th>크기(Q4_K_M)</th><th>정답(100)</th><th>첫 글자 비</th><th>라이선스</th><th>상태</th></tr>
+<tr><td rowspan="5">기본<br>(3B 이하)</td><td><b>Qwen3-1.7B</b> (내장)</td><td>1.1GB</td><td>50</td><td>1.0 (2.3초)</td><td>Apache-2.0</td><td><span class="tag g">지금 기본</span> 설치 파일에 들어 있음</td></tr>
+<tr><td>Mi:dm 2.0 Mini (KT)</td><td>1.4GB</td><td>55</td><td>1.3</td><td>MIT</td><td><span class="tag g">측정함</span> 한국어 특화</td></tr>
+<tr><td>Qwen3.5-2B</td><td>1.3GB</td><td>44</td><td>1.4</td><td>Apache-2.0</td><td><span class="tag w">측정함·1.7B보다 낮음</span> 추천에서 뺌</td></tr>
+<tr><td>Kanana Nano 2.1B (카카오)</td><td>약 1.3GB</td><td>—</td><td>—</td><td>확인 필요(CC-BY-NC 로 기억)</td><td><span class="tag e">측정 전</span> 비상업이면 목록에서 뺌</td></tr>
+<tr><td>LFM2.5-1.2B-Instruct (Liquid AI)</td><td>약 0.7GB</td><td>—</td><td>—</td><td>LFM Open License(매출 조건)</td><td><span class="tag e">측정 전</span> 지금 llama.dll 에서 열리는지부터 확인</td></tr>
+<tr><td rowspan="2">정밀<br>(3B 이상)</td><td><b>Qwen3.5-4B</b></td><td>2.7GB</td><td>59 (이웃 청크 없이)</td><td>3.3</td><td>Apache-2.0</td><td><span class="tag g">측정함</span> 새 정밀 모델. <b>이웃 청크를 끈다</b>(붙이면 59 → 55)</td></tr>
+<tr><td>Qwen3-4B (이전 정밀)</td><td>2.5GB</td><td>59 (이웃 청크와 함께)</td><td>2.9</td><td>Apache-2.0</td><td><span class="tag">새로 받기 없음</span> 이미 설치한 사람만 계속 씀(§8)</td></tr>
+</table></div>
+<div class="callout">구분은 <b>매개변수 수</b>로 정한다(3B 미만 = 기본). 화면 이름은 "기본 · 정밀" 그대로 둔다. 모델마다 이웃 청크 사용 여부와 대화 형식은 목록 파일에 함께 적는다. 그래서 정밀 모드라는 별도 스위치는 필요 없다.</div>
+<div class="callout warn"><b>측정 전 모델은 배포 목록에 넣지 않는다.</b> Kanana Nano 와 LFM2.5 는 개발용 목록에만 두고, 라이선스·적재·품질 확인(§11)을 통과하면 목록 파일에 <code>"status": "ready"</code> 로 올린다. 앱을 다시 배포할 필요는 없다(LFM2.5 처럼 새 대화 형식이 필요한 모델만 앱 업데이트가 필요하다).</div>
+</section>
+
+<section id="s4">
+<h2>4. 받기 전 추천 — PC 사양으로</h2>
+<p>후보 모델은 받지 않는다. 대신 <b>① 이 PC 사양</b>과 <b>② 이미 내장된 1.7B 로 처음 실행할 때 잰 속도</b>를 쓴다. ②는 설치할 때 이미 있는 모델로 잰 값이라 따로 받을 것이 없다. ②가 아직 없으면(처음 실행 직후 등) ①만으로 판단한다.</p>
+
+<h3>4-1. 읽는 사양 (모두 Windows 기본 기능, 1초 안에 끝남)</h3>
+<div class="tw"><table>
+<tr><th>항목</th><th>읽는 방법</th><th>쓰는 곳</th></tr>
+<tr><td>전체·여유 메모리</td><td><code>GlobalMemoryStatusEx</code></td><td>돌릴 수 있나 판정. iGPU 는 메모리를 나눠 쓰므로 전체 메모리가 곧 그래픽 메모리 한도</td></tr>
+<tr><td>그래픽 장치 · 전용 메모리</td><td>DXGI 장치 목록(<code>IDXGIFactory1::EnumAdapters1</code>) — 이름, 전용 VRAM, iGPU/외장 구분</td><td>외장 GPU 가 4GB 이상이면 정밀 모델을 빠르게 돌림</td></tr>
+<tr><td>Vulkan 가속 사용 여부</td><td><code>gen_backend.json</code> 의 고른 백엔드(<code>vulkan</code>/<code>cpu</code>)</td><td>CPU 만 쓰면 4B 는 느리다</td></tr>
+<tr><td>CPU 이름 · 스레드 수</td><td>레지스트리 <code>ProcessorNameString</code>, <code>GetSystemInfo</code></td><td>②가 없을 때 대략의 속도 등급</td></tr>
+<tr><td>내장 1.7B 처리 속도</td><td><code>gen_backend.json</code> 의 <code>prefill_tps</code>(고른 백엔드 쪽) · 실제 답변 기록의 첫 글자 중앙값(있으면)</td><td>모델별 예상 첫 글자 계산</td></tr>
+<tr><td>디스크 여유</td><td><code>GetDiskFreeSpaceExW</code>(설치 폴더 드라이브)</td><td>받기 전 막기(설치 파일 + 모델 + 1GB)</td></tr>
+</table></div>
+
+<h3>4-2. 판정 세 단계</h3>
+<ol>
+  <li><b>돌릴 수 있나</b> — 필요 메모리 = 모델 파일 크기 + 0.6GB(대화 기억 공간) + 1.5GB(앱 · 임베딩 · 리랭커 · 화면).
+    전체 메모리가 이보다 적으면 <span class="tag e">이 PC 메모리로는 어려움</span>. 받기 단추는 남기되, 누르면 한 번 더 묻는다.</li>
+  <li><b>얼마나 빠른가</b> — 예상 첫 글자 = <code>내장 1.7B 첫 글자 × 그 모델의 첫 글자 비</code>.
+    1.7B 첫 글자는 <code>600 토큰 ÷ prefill_tps</code> 로 어림한다(구현 때 맞춘 값 — 이 PC 의 iGPU 260 토큰/초에서 실제 첫 글자 중앙값 2.3초가 나오는 토큰 수).
+    ②도 없으면 사양 등급으로 대신한다: 외장 GPU 4GB 이상 · Vulkan iGPU · CPU 8스레드 이상 · 그 밖.
+    <br>표시 등급: 4초 이하 <span class="tag g">빠름</span> · 4~10초 <span class="tag">보통</span> · 10초 넘음 <span class="tag w">느림</span>.</li>
+  <li><b>추천</b> — 기본·정밀 묶음마다 <b>돌릴 수 있고, 예상 첫 글자가 한도 안인 모델 가운데 품질 순위가 가장 높은 것 하나</b>에 <span class="tag e">추천</span>을 단다.
+    한도: 기본 4초, 정밀 10초. 품질 순위는 목록 파일의 <code>rank</code>(측정 결과로 정한 값)를 쓴다. 측정 전 모델에는 추천을 달지 않는다.
+    정밀 묶음에 한도 안 모델이 없으면 "이 PC 에서는 정밀 모델이 느립니다(약 N초)"라고 적고 추천을 달지 않는다.</li>
+</ol>
+
+<h3>4-3. 예 — 이 개발 PC (16GB · Intel iGPU Vulkan · 1.7B 첫 글자 2.3초)</h3>
+<div class="tw"><table>
+<tr><th>모델</th><th>필요 메모리</th><th>예상 첫 글자</th><th>판정</th></tr>
+<tr><td>Qwen3-1.7B</td><td>3.2GB</td><td>2.3초</td><td>빠름 · 내장 · 사용 중</td></tr>
+<tr><td>Mi:dm 2.0 Mini</td><td>3.5GB</td><td>3.0초</td><td>빠름 · <b>기본 추천</b>(순위 1위, 한도 안)</td></tr>
+<tr><td>Qwen3.5-2B</td><td>3.4GB</td><td>3.2초</td><td>빠름 · 순위가 낮아 추천 없음</td></tr>
+<tr><td>Qwen3.5-4B</td><td>4.8GB</td><td>7.6초</td><td>보통 · <b>정밀 추천</b></td></tr>
+</table></div>
+<p>같은 계산으로 8GB · CPU 만 쓰는 PC(1.7B 첫 글자 약 7초)라면 Mi:dm 은 약 9초로 기본 한도를 넘어 추천에서 빠지고, 기본 추천은 내장 1.7B 가 된다. Qwen3.5-4B 는 필요 4.8GB 로 겨우 들어가지만 약 23초가 걸려 <span class="tag w">느림</span>으로 표시되고 추천하지 않는다.</p>
+<div class="callout warn">한도(4초 · 10초)와 필요 메모리 공식은 지금 이 PC 한 대의 값에서 정했다. 사양이 낮은 PC 한 대 이상에서 맞는지 확인한다(§11). 값은 목록 파일에 두어 앱을 다시 배포하지 않고도 고칠 수 있게 한다.</div>
+</section>
+
+<section id="s5">
+<h2>5. 화면 설계</h2>
+<p>설정 창 왼쪽 메뉴에 <b>모델</b>을 새로 넣는다(기본 · <b>모델</b> · 로그 · 동의어 · 이름별칭). 기본 탭의 "정밀 모드" 상자는 없애고, 그 자리에 지금 쓰는 모델 한 줄과 <span class="tag">모델 바꾸기…</span> 단추(모델 탭으로 이동)를 둔다.</p>
+
+<div class="mock"><div class="win">
+  <div class="nav"><div class="lg"><span>MoAI</span>-S</div><div>기본</div><div class="on">모델</div><div>로그</div><div>동의어</div><div>이름별칭</div></div>
+  <div class="pan">
+    <fieldset><legend>이 PC</legend>
+      <div class="hw">
+        <div><b>메모리</b>16GB (지금 여유 7.9GB)</div>
+        <div><b>그래픽</b>Intel Arc (iGPU · Vulkan 가속)</div>
+        <div><b>CPU</b>Core Ultra 7 · 8스레드</div>
+        <div><b>디스크 여유</b>C: 212GB</div>
+        <div><b>지금 첫 글자</b>약 2.3초 (Qwen3-1.7B)</div>
+      </div>
+      <div class="rec-line">추천: 기본은 <b>Mi:dm 2.0 Mini</b>, 정밀은 <b>Qwen3.5-4B</b> — 정밀 모델은 답이 정확한 대신 첫 글자가 약 7.6초로 늦습니다.</div>
+    </fieldset>
+
+    <fieldset><legend>기본 모델 (3B 이하) — 빠른 답</legend>
+      <table>
+        <tr><th>모델</th><th>크기</th><th>이 PC 예상 첫 글자</th><th>상태</th><th></th></tr>
+        <tr class="mrow"><td><div class="mcell"><span class="ic kt">Mi</span><div><span class="nm">Mi:dm 2.0 Mini</span><span class="bd rec">추천</span><span class="bd kr">한국어</span><br><span class="sub">KT · 한국어 답이 자연스러움</span></div></div></td><td>1.4GB</td><td>약 3.0초 · 빠름</td><td class="sub">받지 않음</td><td><span class="bt">상세</span><span class="bt">받기</span></td></tr>
+        <tr class="mrow"><td><div class="mcell"><span class="ic qw">Q</span><div><span class="nm">Qwen3-1.7B</span><span class="bd use">사용 중</span><br><span class="sub">Alibaba · 기본 내장</span></div></div></td><td>1.1GB</td><td>약 2.3초 · 빠름</td><td class="sub">내장</td><td><span class="bt">상세</span></td></tr>
+        <tr class="mrow"><td><div class="mcell"><span class="ic qw">Q</span><div><span class="nm">Qwen3.5-2B</span><br><span class="sub">Alibaba · 근거에 없으면 "모른다"가 많음</span></div></div></td><td>1.3GB</td><td>약 3.2초 · 빠름</td><td class="sub">설치됨</td><td><span class="bt">상세</span><span class="bt">사용</span><span class="bt">삭제</span></td></tr>
+      </table>
+    </fieldset>
+
+    <fieldset><legend>정밀 모델 (3B 이상) — 더 정확, 느림</legend>
+      <table>
+        <tr><th>모델</th><th>크기</th><th>이 PC 예상 첫 글자</th><th>상태</th><th></th></tr>
+        <tr class="mrow"><td><div class="mcell"><span class="ic qw">Q</span><div><span class="nm">Qwen3.5-4B</span><span class="bd rec">추천</span><br><span class="sub">Alibaba · 근거에 없는 말을 가장 적게 함</span></div></div></td><td>2.7GB</td><td>약 7.6초 · 보통</td><td>받는 중 <span class="prog"><i></i></span> 43%<br><span class="sub">1.2 / 2.7GB · 12MB/초 · 약 2분 남음</span></td><td><span class="bt">상세</span><span class="bt">취소</span></td></tr>
+        <tr class="mrow"><td><div class="mcell"><span class="ic qw">Q</span><div><span class="nm">Qwen3-4B</span><span class="bd old">이전 정밀</span><br><span class="sub">0.1.3 까지의 정밀 모드 모델</span></div></div></td><td>2.5GB</td><td>약 6.7초 · 보통</td><td class="sub">설치됨</td><td><span class="bt">상세</span><span class="bt">사용</span><span class="bt">삭제</span></td></tr>
+      </table>
+    </fieldset>
+    <div class="sub">받기가 안 되면(회사망 차단 등) <span class="bt">배포 페이지 열기</span> 에서 설치 파일을 직접 받아 실행하세요. 설치하면 이 목록에 바로 나타납니다.</div>
+  </div>
+</div></div>
+
+<h3>5-1. 줄 정렬과 배지</h3>
+<ul>
+  <li>묶음마다 <b>추천 → 사용 중 → 설치됨 → 받지 않음</b> 순서로 놓고, 같은 순서 안에서는 품질 순위 순으로 놓는다. 내장 모델은 사용 중이 아니면 설치됨과 같이 친다.</li>
+  <li>배지: <span class="tag e">추천</span> · <span class="tag">사용 중</span> · <span class="tag">한국어</span> · <span class="tag w">느림</span> · <span class="tag w">메모리 부족</span> · <span class="tag">이전 정밀</span>. 한 줄에 두 개까지만 보인다.</li>
+  <li>예상 첫 글자는 "약 N초 · 빠름/보통/느림"으로 적는다. ②(실제 속도)가 없으면 등급만 적고 "(사양으로 어림)"을 붙인다.</li>
+  <li>줄 맨 앞에 모델 아이콘(30px)을 둔다(§5-4). 줄의 <span class="tag">상세</span> 단추나 모델 이름을 누르면 상세 화면(§5-3)으로 넘어간다. 처음 설계의 "줄 펼치기"는 상세 화면으로 바꾼다.</li>
+</ul>
+
+<h3>5-3. 상세 화면</h3>
+<p>LM Studio 의 오른쪽 상세 칸과 같은 역할이다. 설정 창은 폭이 좁아 칸을 둘로 나누지 않고, <b>모델 탭 판 전체를 상세 화면으로 바꾼다</b>. 맨 위 <span class="tag">← 모델 목록</span>을 누르거나 Esc 를 누르면 목록으로 돌아가며, 보던 스크롤 위치를 지킨다. 받는 중이면 상세 화면에서도 진행 막대가 같이 움직인다.</p>
+
+<div class="mock"><div class="win">
+  <div class="nav"><div class="lg"><span>MoAI</span>-S</div><div>기본</div><div class="on">모델</div><div>로그</div><div>동의어</div><div>이름별칭</div></div>
+  <div class="pan">
+    <div class="back">← 모델 목록</div>
+    <div class="dhead"><span class="ic big qw">Q</span>
+      <div><div class="t">Qwen3.5-4B <span class="bd rec">추천</span></div><div class="sub">Alibaba Cloud (Qwen) · 정밀 모델 · 2026년 공개</div></div></div>
+    <div class="chips"><span class="chip">매개변수 4B</span><span class="chip">파일 2.7GB</span><span class="chip">필요 메모리 약 4.8GB</span><span class="chip">한국어 지원</span><span class="chip">Apache-2.0 (상업 사용 가능)</span></div>
+
+    <fieldset><legend>이 PC 에서</legend>
+      예상 첫 글자 <b>약 7.6초</b> · 보통 — 지금 쓰는 Qwen3-1.7B(2.3초)보다 약 3배 늦습니다.<br>
+      <span class="sub">근거: 메모리 16GB 로 충분 · iGPU(Vulkan) 가속 · 이 PC 에서 잰 1.7B 속도 × 3.3</span>
+    </fieldset>
+
+    <fieldset><legend>소개</legend>
+      알리바바의 Qwen 팀이 만든 2026년판 소형 모델입니다. 같은 크기의 이전 모델(Qwen3-4B)보다 지시를 잘 따르고, 한국어를 포함한 여러 언어로 답합니다.
+      MoAI-S 에서는 문서 근거를 읽고 답을 정리하는 데 씁니다. 크기가 커서 답이 정확한 대신 느립니다.
+    </fieldset>
+
+    <fieldset><legend>사내 문서 시험 결과 (질문 100개)</legend>
+      <table>
+        <tr><th></th><th>이 모델</th><th>내장 Qwen3-1.7B</th></tr>
+        <tr><td>정답</td><td><b>59</b></td><td>50</td></tr>
+        <tr><td>근거에 없는 말이 섞인 정도(낮을수록 좋음)</td><td><b>12%</b></td><td>27%</td></tr>
+        <tr><td>"답할 수 없습니다"로 피한 답</td><td>5</td><td>1</td></tr>
+        <tr><td>첫 글자 (개발 PC)</td><td>7.6초</td><td>2.3초</td></tr>
+      </table>
+      <div class="two" style="margin-top:6px">
+        <div class="good">좋은 점<br>· 근거에 없는 숫자를 지어내는 일이 가장 적음<br>· 계산·비교 질문 정답이 늘어남</div>
+        <div class="bad2">아쉬운 점<br>· 근거가 애매하면 답을 피하는 일이 조금 많음<br>· 첫 글자가 3배 늦음</div>
+      </div>
+      <div class="sub">2026-10-29 측정 · 골든셋 100문항 · 판정 Claude</div>
+    </fieldset>
+
+    <fieldset><legend>라이선스 · 출처</legend>
+      Apache-2.0 — 회사 업무에 써도 됩니다. 고지문은 설치할 때 함께 들어갑니다.<br>
+      <span class="bt">라이선스 전문</span><span class="bt">원본 모델 카드 열기 ↗</span>
+    </fieldset>
+
+    <div class="act"><span class="sub" style="margin-right:auto">받는 중 43% · 약 2분 남음</span><span class="bt">취소</span><span class="bt pri">받기 2.7GB</span></div>
+  </div>
+</div></div>
+
+<ul>
+  <li><b>내용은 모두 목록 파일(<code>models.json</code>)에서 온다.</b> 앱에 내장한 사본이 있어 인터넷이 막혀도 상세 화면은 열린다. 웹 페이지를 띄우지 않는 까닭은 회사망 차단과 설정 창(WebView2) 보안 때문이다. 외부 주소로 넘어가지 않게 한다.</li>
+  <li>칸 구성: 머리(아이콘 52px · 이름 · 개발사 · 구분 · 공개 시기) → 요약 칩 → <b>이 PC 에서</b>(§4 계산과 그 근거를 한 줄로) → <b>소개</b>(2~4문장, 쉬운 말) → <b>시험 결과</b>(내장 1.7B 와 나란히, 좋은 점·아쉬운 점) → <b>라이선스 · 출처</b> → 아래 고정 단추 줄.</li>
+  <li>측정 전 모델(개발용 목록)은 시험 결과 칸에 "아직 재지 않았습니다"를 적고 추천 배지를 달지 않는다.</li>
+  <li><span class="tag">원본 모델 카드 열기 ↗</span>는 Hugging Face 모델 페이지를 <b>기본 브라우저</b>로 연다(설정 창 안에서 열지 않는다). <span class="tag">라이선스 전문</span>은 앱 안의 글 상자로 보인다. 설치 전에는 목록 파일의 요약을 보이고, 설치 뒤에는 <code>licenses\models\&lt;별칭&gt;.txt</code> 를 보인다.</li>
+  <li>아래 단추 줄은 목록 줄의 상태 단추와 같다(§5-2). 받기를 상세 화면에서 눌러도 같은 대기열로 간다.</li>
+  <li>시험 결과의 "근거에 없는 말이 섞인 정도"는 RAGAS Faithfulness 를 <code>1 − F</code> 로 바꿔 쉬운 말로 보인 값이다. 지표 이름은 화면에 쓰지 않는다.</li>
+</ul>
+
+<h3>5-4. 모델 아이콘</h3>
+<ul>
+  <li>목록 줄 앞은 30px, 상세 화면 머리는 52px 로 보인다. 둥근 네모 안에 넣어 모양을 맞춘다.</li>
+  <li><b>기본은 직접 만든 글자 아이콘(모노그램)</b>이다. 개발사 대표색 바탕에 1~2글자를 쓴다. 예: Qwen <span class="tag">Q</span> 보라, Mi:dm <span class="tag">Mi</span> 빨강, Kanana <span class="tag">K</span> 노랑, LFM <span class="tag">L</span> 검정. 따로 그림 파일이 필요 없고 상표 문제도 없다.</li>
+  <li>개발사 공식 로고를 쓰려면 목록 파일에 <code>icon</code> 을 적는다(64px PNG 또는 SVG). 앱에 내장하고, 새 개발사 아이콘은 Pages 에서 받아 캐시한다. 그림을 받지 못하면 글자 아이콘으로 대신 보인다. 공식 로고는 개발사마다 상표 사용 지침을 확인한 뒤에만 넣는다(§12 ⑦).</li>
+  <li>같은 개발사 모델은 같은 아이콘을 쓴다. 모델 구분은 이름과 배지로 한다.</li>
+  <li>기본 탭의 "지금 답변 모델" 한 줄에도 같은 아이콘(18px)을 붙여 어떤 모델을 쓰는지 바로 알아보게 한다.</li>
+</ul>
+
+<h3>5-2. 단추</h3>
+<div class="tw"><table>
+<tr><th>상태</th><th>단추</th><th>누르면</th></tr>
+<tr><td>받지 않음</td><td>받기</td><td>디스크·메모리 확인 → (부족하면 한 번 묻기) → 받기 시작</td></tr>
+<tr><td>받는 중 / 확인 중</td><td>취소</td><td>멈추고 받은 조각은 남긴다(다음 받기 때 이어 받기)</td></tr>
+<tr><td>멈춤(끊김·앱 종료)</td><td>이어 받기 · 지우기</td><td>받은 데서부터 다시 / 받은 조각 지우기</td></tr>
+<tr><td>설치 중</td><td>(없음)</td><td>설치 파일 실행 중 — 보통 10~30초</td></tr>
+<tr><td>설치됨</td><td>사용 · 삭제</td><td>사용 = 모델 바꾸고 다시 올리기 / 삭제 = 파일 지우기(한 번 묻기)</td></tr>
+<tr><td>사용 중</td><td>(없음)</td><td>내장 모델과 사용 중인 모델은 삭제할 수 없다</td></tr>
+<tr><td>모든 상태</td><td>상세</td><td>상세 화면(§5-3)으로 넘어간다</td></tr>
+</table></div>
+<ul>
+  <li>받기는 한 번에 하나만 한다. 다른 모델의 받기 단추는 "대기에 넣기"로 바뀌고, 앞 받기가 끝나면 이어서 받는다.</li>
+  <li>받는 중에 설정 창을 닫아도 계속 받는다. 끝나면 트레이 알림을 띄운다: "Qwen3.5-4B 를 설치했습니다 — 설정 &gt; 모델에서 사용을 누르세요." 받은 모델을 저절로 쓰게 하지는 않는다. 느려지는 것을 사용자가 직접 고르게 하기 위해서다.</li>
+  <li>답변을 만드는 중에는 사용 단추를 잠그고, 답이 끝나면 바꾼다.</li>
+</ul>
+</section>
+
+<section id="s6">
+<h2>6. 받기·설치·사용 흐름</h2>
+<div class="flow"><span>받기 누름</span><em>→</em><span>디스크·메모리 확인</span><em>→</em><span>조각 받기 (.exe · .bin)</span><em>→</em><span>SHA256 확인</span><em>→</em><span>설치 파일 조용히 실행</span><em>→</em><span>모델 파일 확인</span><em>→</em><span>설치 파일 지우기</span><em>→</em><span>설치됨</span><em>→</em><span>사용 누름</span><em>→</em><span>config.yaml 바꾸고 다시 올리기</span></div>
+
+<h3>6-1. 받기 (WinHTTP)</h3>
+<ul>
+  <li>Windows 내장 WinHTTP 로 받는다. 회사 프록시(인터넷 옵션 · 자동 구성 스크립트)를 그대로 따르고, GitHub 릴리스 주소가 다른 곳으로 넘겨 주는 것도 자동으로 따라간다. <code>windows</code> crate 기능 <code>Win32_Networking_WinHttp</code> 만 더하면 되고 새 라이브러리는 들이지 않는다.</li>
+  <li>받는 곳: <code>%LOCALAPPDATA%\MoAISearch\downloads\&lt;별칭&gt;\</code>. 받는 동안 파일 이름은 <code>.part</code> 이고, 다 받으면 원래 이름으로 바꾼다.</li>
+  <li>이어 받기: <code>.part</code> 크기부터 <code>Range</code> 요청을 보낸다. 앱을 껐다 켜도 이어 받는다.</li>
+  <li>진행률은 설정 창이 1초마다 새로 읽는다(받은 크기, 속도, 남은 시간 — 기존 설정 창 갱신 주기를 그대로 쓴다).</li>
+  <li>끊기면 5초, 15초, 45초 뒤 세 번 다시 시도하고, 그래도 안 되면 "멈춤"으로 둔다.</li>
+</ul>
+
+<h3>6-2. 확인과 설치</h3>
+<ul>
+  <li>조각마다 SHA256 을 목록 파일의 값과 비교한다. 다르면 그 조각을 지우고 "받은 파일이 손상되었습니다 — 다시 받기"로 표시한다. 내려받은 실행 파일을 그냥 실행하지 않게 하는 안전장치다(아직 코드 서명 전이라 해시가 유일한 확인 수단).</li>
+  <li>설치 파일을 <code>/VERYSILENT /SUPPRESSMSGBOXES /NORESTART</code> 로 실행하고 끝날 때까지 기다린다. 사용자 권한으로 설치하므로(<code>PrivilegesRequired=lowest</code>) 관리자 확인 창은 뜨지 않는다. 앱이 직접 받은 파일에는 "인터넷에서 받은 파일" 표시가 붙지 않아 SmartScreen 경고도 뜨지 않는다.</li>
+  <li>종료 코드가 0 이고 <code>models\&lt;파일&gt;</code> 크기가 목록 파일 값과 같으면 설치됨이다. 그런 뒤 설치 파일과 조각을 지운다(2.7GB 를 아끼기 위해서다).</li>
+</ul>
+
+<h3>6-3. 사용과 삭제</h3>
+<ul>
+  <li>사용: <code>config.yaml</code> 의 <code>generation.model</code> 줄 값만 바꾼다. 주석은 지키며, 지금 <code>precision.rs</code> 가 쓰는 방식 그대로다. 그다음 워커를 다시 올린다(정밀 모드 스위치 때와 같은 경로). 다시 올리는 동안 기본 탭과 같은 진행 막대를 보인다.</li>
+  <li>새 모델을 처음 올릴 때 생성 백엔드 측정(<code>gen_backend.json</code>)을 그 모델로 다시 한다(지금 동작 그대로). 그 결과로 "이 PC 예상 첫 글자"를 실제 값으로 고쳐 보인다.</li>
+  <li>삭제: 사용 중이 아닌 설치 모델만 지울 수 있다. 파일을 지우고, 모델 옆 설명 파일(§7-3)과 라이선스 파일도 함께 지운다.</li>
+</ul>
+
+<h3>6-4. 오류와 안내 글</h3>
+<div class="tw"><table>
+<tr><th>상황</th><th>보이는 글</th><th>단추</th></tr>
+<tr><td>디스크 부족</td><td>C: 여유 1.2GB — 이 모델은 설치 중 약 6.5GB 가 필요합니다.</td><td>(받기 막음)</td></tr>
+<tr><td>메모리 부족 판정</td><td>이 PC 메모리(8GB)로는 이 모델이 느리거나 열리지 않을 수 있습니다. 그래도 받을까요?</td><td>받기 · 그만두기</td></tr>
+<tr><td>연결 안 됨 · 차단</td><td>배포 서버에 연결하지 못했습니다(회사망에서 막혔을 수 있습니다).</td><td>다시 시도 · 배포 페이지 열기</td></tr>
+<tr><td>목록 파일을 못 받음</td><td>모델 목록을 새로 받지 못해 프로그램에 들어 있는 목록을 보입니다.</td><td>다시 시도</td></tr>
+<tr><td>해시 다름</td><td>받은 파일이 손상되었습니다.</td><td>다시 받기</td></tr>
+<tr><td>설치 실패(종료 코드 ≠ 0)</td><td>설치하지 못했습니다(코드 N). 로그에 남겼습니다.</td><td>다시 설치 · 로그 보기</td></tr>
+<tr><td>모델이 안 열림</td><td>모델을 올리지 못해 이전 모델(Qwen3-1.7B)로 되돌렸습니다.</td><td>로그 보기</td></tr>
+<tr><td>앱 업데이트 필요</td><td>이 모델은 MoAI-S 0.1.5 이상에서 쓸 수 있습니다.</td><td>배포 페이지 열기</td></tr>
+</table></div>
+</section>
+
+<section id="s7">
+<h2>7. 배포 — 모델별 설치 파일과 목록 파일</h2>
+
+<h3>7-1. 릴리스 구성</h3>
+<ul>
+  <li><code>kobongsoo/MoAI-S</code> 에 <b>앱 버전과 따로 노는 모델 전용 릴리스</b> <code>models-1</code> 을 하나 둔다. 지금처럼 정밀 모델을 앱 버전마다 다시 올리면(2.5GB) 시간과 저장 공간이 낭비되기 때문이다. 모델이 바뀔 때만 파일을 더하거나 바꾼다.</li>
+  <li>파일 이름: <code>MoAISearch_Model_&lt;별칭&gt;_r&lt;판&gt;.exe</code>. 1.9GB 를 넘으면 지금처럼 <code>-1.bin</code>, <code>-2.bin</code> 조각을 함께 둔다(정밀 4B 만 해당).</li>
+  <li>사용자가 직접 받을 때를 위해 릴리스 설명에 모델 표와 "받은 .exe 와 .bin 을 같은 폴더에 두고 .exe 를 실행" 안내를 적는다.</li>
+</ul>
+
+<h3>7-2. 설치 파일 틀 — <code>installer_model.iss</code></h3>
+<p><code>installer_precision.iss</code> 를 일반화한다. 빌드 스크립트가 모델마다 <code>/DAlias= /DModelFile= /DModelName= /DAppIdGuid= /DRev=</code> 를 넘긴다.</p>
+<ul>
+  <li><b><code>AppMutex</code> 를 뺀다.</b> 앱이 켜진 채로 앱이 설치 파일을 실행하기 때문이다. 새 모델 파일은 아직 아무도 쓰지 않으니 겹치지 않는다. 사용 중인 모델을 다시 설치할 때는 앱이 먼저 워커를 내린다.</li>
+  <li>설치 폴더는 지금처럼 기본 프로그램의 제거 정보 레지스트리에서 찾는다. 기본 프로그램이 없으면 멈춘다(사용자가 직접 실행한 경우).</li>
+  <li>넣는 파일: <code>models\&lt;모델&gt;.gguf</code> + <code>models\&lt;별칭&gt;.model.json</code>(§7-3) + <code>licenses\models\&lt;별칭&gt;.txt</code>.</li>
+  <li><code>Uninstallable=no</code> 는 유지한다. 지우기는 앱의 삭제 단추나 기본 프로그램 제거로 한다.</li>
+</ul>
+
+<h3>7-3. 모델 옆 설명 파일 — <code>&lt;별칭&gt;.model.json</code></h3>
+<p>워커(simplerag-rs)는 모델 표를 코드에서 읽는다. 표에 없는 별칭이면 이 파일을 읽어 파일 이름·대화 형식·이웃 청크 여부를 정한다. 그래서 <b>이미 있는 대화 형식을 쓰는 모델</b>은 앱을 다시 배포하지 않고 추가할 수 있다.</p>
+<pre>{ "alias": "qwen3.5-4b-q4", "file": "Qwen3.5-4B-Q4_K_M.gguf", "format": "qwen3",
+  "tier": "precise", "neighbors": false, "min_app": "0.1.4" }</pre>
+
+<h3>7-4. 목록 파일 — <code>models.json</code></h3>
+<p>GitHub Pages(<code>https://kobongsoo.github.io/MoAI-S/models.json</code>)에 둔다. 앱은 모델 탭을 열 때 받아 하루 동안 캐시한다. 받지 못하면 앱에 들어 있는 같은 파일을 쓴다.</p>
+<pre>{
+  "schema": 1, "updated": "2026-11-20",
+  "release": "https://github.com/kobongsoo/MoAI-S/releases/tag/models-1",
+  "recommend": { "base_ttft_max": 4.0, "precise_ttft_max": 10.0, "overhead_gb": 2.1, "prompt_tokens": 600 },
+  "models": [
+    { "alias": "qwen3.5-4b-q4", "name": "Qwen3.5-4B", "vendor": "Alibaba (Qwen)",
+      "tier": "precise", "params_b": 4.0, "file": "Qwen3.5-4B-Q4_K_M.gguf", "file_bytes": 2740937888,
+      "format": "qwen3", "neighbors": false, "min_app": "0.1.4",
+      "rank": 1, "ttft_ratio": 3.3, "korean": false, "status": "ready",
+      "summary": "근거에 없는 말을 가장 적게 함",
+      "icon": { "file": "icons/qwen.png", "mono": "Q", "color": "#615ced" },
+      "released": "2026", "languages": "한국어 포함 다국어",
+      "intro": "알리바바의 Qwen 팀이 만든 2026년판 소형 모델입니다. …",
+      "bench": { "date": "2026-10-29", "correct": 59, "of": 100, "ungrounded": 0.12, "evasive": 5, "ttft_s": 7.6 },
+      "pros": ["근거에 없는 숫자를 지어내는 일이 가장 적음", "계산·비교 질문 정답이 늘어남"],
+      "cons": ["근거가 애매하면 답을 피하는 일이 조금 많음", "첫 글자가 3배 늦음"],
+      "license": "Apache-2.0", "license_note": "회사 업무에 써도 됩니다",
+      "source_url": "https://huggingface.co/Qwen/Qwen3.5-4B",
+      "parts": [
+        { "name": "MoAISearch_Model_qwen3.5-4b-q4_r1.exe",   "bytes": 0, "sha256": "…" },
+        { "name": "MoAISearch_Model_qwen3.5-4b-q4_r1-1.bin", "bytes": 0, "sha256": "…" },
+        { "name": "MoAISearch_Model_qwen3.5-4b-q4_r1-2.bin", "bytes": 0, "sha256": "…" } ] }
+  ]
+}</pre>
+<ul>
+  <li><code>status</code>: <code>ready</code>(보임) · <code>hidden</code>(측정 전, 안 보임) · <code>retired</code>(새로 받기 없음, 설치한 사람만 보임 — Qwen3-4B).</li>
+  <li><code>min_app</code> 보다 낮은 앱에서는 "앱 업데이트 필요"로 보이고 받기를 막는다.</li>
+  <li>새 빌드 스크립트 <code>rust/build_model_installers.ps1</code> 가 설치 파일을 만들고, 크기와 SHA256 을 재서 <code>models.json</code> 을 채운다. 사람이 해시를 손으로 옮기지 않게 하기 위해서다.</li>
+</ul>
+</section>
+
+<section id="s8">
+<h2>8. 정밀 모드 없애기와 옮겨 가기</h2>
+<ul>
+  <li><code>config.yaml</code>: <code>generation.model</code> 이 답변 모델을 정하는 유일한 값이 된다. 이웃 청크는 모델 설명(<code>neighbors</code>)을 따르고, 새 키 <code>generation.neighbors: auto</code>(auto/on/off)로 직접 바꿀 수도 있다.</li>
+  <li><code>generation.precision</code> 은 읽기만 한다. <b>0.1.3 에서 올라온 사용자</b> 가운데 <code>precision: true</code> 이고 Qwen3-4B 파일이 있으면, 처음 실행할 때 <code>model: qwen3-4b-q4</code> 로 바꾸고 <code>precision: false</code> 로 적는다. 그 결과 Qwen3-4B 를 이웃 청크와 함께 쓰게 되어, 바꾸기 전과 똑같이 답한다.</li>
+  <li>Qwen3-4B 는 목록에 <code>retired</code> 로 남는다. 설치한 사람에게만 "이전 정밀"로 보이고 사용·삭제는 그대로 된다.</li>
+  <li><code>SIMPLERAG_PRECISION</code> 환경변수와 명령줄 <code>--model</code> 은 그대로 둔다(측정 스크립트가 쓴다). 환경변수는 "모델 qwen3-4b-q4 + 이웃 켬"과 같은 뜻으로 남긴다.</li>
+  <li>기본 탭의 정밀 모드 상자, <code>precision::WARN</code> 과 안내 글, <code>build_installer.ps1</code> 의 정밀 설치 파일 단계, <code>installer_precision.iss</code> 를 없앤다.</li>
+  <li>사이트·설명서·릴리스 설명의 "정밀 모드 모델 설치 파일" 안내를 "설정 &gt; 모델" 안내로 바꾸고, 변경 기록에 적는다.</li>
+</ul>
+</section>
+
+<section id="s9">
+<h2>9. 주고받는 메시지(IPC)</h2>
+<div class="tw"><table>
+<tr><th>방향</th><th>메시지</th><th>내용</th></tr>
+<tr><td>설정 창 → 앱</td><td><code>models_open</code></td><td>모델 탭을 열 때. 목록 파일을 받고(캐시) 사양을 읽어 <code>models_state</code> 로 답한다</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>model_get {alias}</code></td><td>받기(또는 대기에 넣기)</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>model_cancel {alias}</code> · <code>model_discard {alias}</code></td><td>멈추기 · 받은 조각 지우기</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>model_use {alias}</code></td><td>config.yaml 을 바꾸고 다시 올리기</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>model_delete {alias}</code></td><td>설치 모델 지우기(사용 중이 아닐 때)</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>open_release</code></td><td>배포 페이지를 기본 브라우저로 연다</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>model_source {alias}</code></td><td>그 모델의 <code>source_url</code> 을 기본 브라우저로 연다. 주소는 목록 파일 값만 쓰고, 설정 창에서 받은 주소는 쓰지 않는다</td></tr>
+<tr><td>설정 창 → 앱</td><td><code>model_license {alias}</code></td><td>라이선스 전문 글을 돌려준다(설치 뒤 파일, 설치 전 요약)</td></tr>
+<tr><td>앱 → 설정 창</td><td><code>models_state</code></td><td><code>{hw, recommend, rows:[{alias, state, pct, bytes, speed, eta, est_ttft, grade, badges, msg}], info:{alias: 목록 파일의 소개·시험 결과·아이콘}}</code> — 설정 창 갱신(1초)마다 <code>rows</code> 를, 탭을 열 때 한 번 <code>info</code> 까지 보낸다. 상세 화면은 이것만으로 그리므로 따로 묻지 않는다</td></tr>
+</table></div>
+</section>
+
+<section id="s10">
+<h2>10. 고칠 파일</h2>
+<div class="tw"><table>
+<tr><th>파일</th><th>할 일</th></tr>
+<tr><td><code>rust/ragsearchbox/src/models.rs</code> (새)</td><td>목록 파일 읽기·받기·캐시, 추천 계산, 받기(WinHTTP · 이어 받기 · 대기열), SHA256 확인, 설치 파일 실행, 삭제</td></tr>
+<tr><td><code>rust/ragsearchbox/src/hwinfo.rs</code> (새)</td><td>메모리 · DXGI 그래픽 · CPU · 디스크 여유 읽기, <code>gen_backend.json</code> 속도 읽기</td></tr>
+<tr><td><code>rust/ragsearchbox/src/main.rs</code></td><td>IPC 처리, 트레이 알림, 다시 올리기 연결, 0.1.3 정밀 모드 옮기기, 정밀 모드 처리 제거</td></tr>
+<tr><td><code>rust/ragsearchbox/src/precision.rs</code></td><td>config.yaml 줄 바꾸기를 <code>model</code> · <code>multiturn</code> 용으로 줄이고, 이름을 <code>cfgline.rs</code> 로 바꿈</td></tr>
+<tr><td><code>rust/ragsearchbox/ui/info.html</code></td><td>모델 탭(목록 · 상세 화면 · 글자 아이콘 그리기) 추가, 기본 탭 정밀 모드 상자를 지금 모델 한 줄(아이콘 포함)로 바꿈</td></tr>
+<tr><td><code>rust/ragsearchbox/ui/models.json</code> · <code>ui/icons/</code> (새)</td><td>내장 목록 파일과 아이콘. 설정 창에 base64 로 넣는다(지금 로고와 같은 방식)</td></tr>
+<tr><td><code>rust/ragsearchbox/Cargo.toml</code></td><td><code>windows</code> 기능 <code>Win32_Networking_WinHttp</code> · <code>Win32_Graphics_Dxgi</code> 추가. SHA256 은 <code>sha2</code> crate(작음) 또는 Windows CNG(<code>BCrypt</code>)</td></tr>
+<tr><td><code>rust/simplerag/src/config.rs</code></td><td>모델 표에 새 별칭 추가, <code>&lt;별칭&gt;.model.json</code> 읽기, 이웃 청크를 모델별·<code>neighbors</code> 키로, 설정 검사 허용 목록 넓히기</td></tr>
+<tr><td><code>rust/simplerag/src/generate/prompts.rs</code></td><td>LFM2.5 대화 형식(측정 결과로 넣을지 결정)</td></tr>
+<tr><td><code>src/simplerag/config.py</code></td><td>Python 명령줄도 같은 별칭과 이웃 청크 규칙을 쓰게 맞춤(측정 스크립트용)</td></tr>
+<tr><td><code>rust/installer_model.iss</code> (새) · <code>rust/build_model_installers.ps1</code> (새)</td><td>모델별 설치 파일 만들기, <code>models.json</code> 자동 작성</td></tr>
+<tr><td><code>rust/build_installer.ps1</code> · <code>rust/installer_precision.iss</code></td><td>정밀 설치 파일 단계 삭제 · 파일 삭제</td></tr>
+<tr><td><code>rust/gen_licenses.py</code></td><td>모델 라이선스를 모델 설치 파일에 넣도록 나눔</td></tr>
+<tr><td><code>config.yaml</code></td><td><code>model</code> 설명 주석, <code>precision</code> 는 "옛 값(읽기만)"으로 표시, <code>neighbors</code> 추가</td></tr>
+<tr><td>MoAI-S 저장소 <code>docs/</code> · 설명서</td><td><code>models.json</code>, 모델 릴리스 안내, 설명서 "설정 &gt; 모델" 쪽, 변경 기록</td></tr>
+</table></div>
+</section>
+
+<section id="s11">
+<h2>11. 확인 방법과 남은 측정</h2>
+<h3>11-1. 화면·기능 확인</h3>
+<ul>
+  <li>추천 계산: 사양을 바꿔 넣는 단위 시험(16GB/Vulkan · 8GB/CPU · 32GB/외장 8GB · 측정값 없음).</li>
+  <li>받기: 받다가 네트워크 끊기 → 이어 받기, 앱을 껐다 켜기 → 이어 받기, 조각 하나 일부러 망가뜨리기 → 해시 오류.</li>
+  <li>설치: 앱이 켜진 채 조용히 설치되는지, 관리자 확인 창·SmartScreen 이 안 뜨는지, 끝난 뒤 설치 파일이 지워지는지.</li>
+  <li>사용: 모델 바꾸기 → 다시 올리기 → 답 아래 모델 이름 확인. 올리기 실패 시 이전 모델로 되돌리는지.</li>
+  <li>옮겨 가기: 0.1.3 + 정밀 모드 켬 + Qwen3-4B 설치 상태에서 새 버전으로 올렸을 때 같은 답 조건(4B + 이웃)인지.</li>
+  <li>회사망 흉내: 프록시를 끊은 상태에서 안내 글과 "배포 페이지 열기", 직접 받은 .exe 설치 뒤 목록에 바로 나타나는지.</li>
+</ul>
+<h3>11-2. 화면을 만든 뒤 할 측정 (요청대로 나중에)</h3>
+<ol>
+  <li>Kanana Nano 2.1B 라이선스 확인 — 비상업이면 여기서 뺀다.</li>
+  <li>LFM2.5-1.2B 가 지금 llama.dll(0.3.35)과 Vulkan 에서 열리는지, 대화 형식은 무엇인지.</li>
+  <li>둘 다 골든 100문항(규칙 지표) — 10-29 와 같은 조건으로 핵심어 정답·첫 글자를 재서 <code>rank</code> · <code>ttft_ratio</code> 를 정한다.</li>
+  <li>Qwen3.5-4B 이웃 청크 끔을 다시 확인하고, 모든 모델의 <code>ttft_ratio</code> 를 같은 날 같은 조건으로 다시 잰다.</li>
+  <li>사양이 낮은 PC(8GB · CPU 만) 한 대에서 예상 첫 글자와 실제 값의 차이를 재고, 한도(4초 · 10초)와 필요 메모리 공식을 고친다.</li>
+</ol>
+</section>
+
+<section id="s12">
+<h2>12. 정해 주실 것</h2>
+<div class="callout good"><b>2026-11-13 결정:</b> 아래 ①~⑧ 모두 제안대로 한다.</div>
+<div class="dec"><b class="q">① Qwen3-4B 를 새로 받기 목록에서 뺄까요?</b>
+제안: 뺀다(<code>retired</code>). 이미 설치한 사람은 "이전 정밀"로 계속 쓰고 지울 수 있다. 정밀 모델은 Qwen3.5-4B 하나만 내놓는다.</div>
+<div class="dec"><b class="q">② Qwen3.5-4B 는 이웃 청크 없이 쓸까요?</b>
+제안: 그렇게 한다(10-29 측정: 이웃을 붙이면 59 → 55). 이것은 11-2 ④에서 다시 확인한다.</div>
+<div class="dec"><b class="q">③ Qwen3.5-2B 를 목록에 둘까요?</b>
+제안: 두되 추천은 하지 않는다. 내장 1.7B 보다 정답이 적고(44 대 50) 느리다. 목록을 짧게 하려면 빼도 된다.</div>
+<div class="dec"><b class="q">④ 모델 전용 릴리스(<code>models-1</code>)를 앱 버전과 따로 둘까요?</b>
+제안: 따로 둔다. 앱을 올릴 때마다 2.7GB 를 다시 올리지 않아도 된다.</div>
+<div class="dec"><b class="q">⑤ 받은 뒤 저절로 그 모델로 바꿀까요?</b>
+제안: 바꾸지 않는다. 정밀 모델은 느려지므로 사용자가 "사용"을 직접 누르게 한다. 트레이 알림으로만 알린다.</div>
+<div class="dec"><b class="q">⑥ 처음 실행 뒤, 사양이 좋은 PC 에 "정밀 모델을 쓸 수 있습니다" 안내를 한 번 띄울까요?</b>
+제안: 이번에는 넣지 않는다. 모델 탭 추천만으로 시작하고, 사용 기록을 본 뒤 정한다.</div>
+<div class="dec"><b class="q">⑦ 모델 아이콘은 글자 아이콘으로 시작할까요, 공식 로고를 넣을까요?</b>
+제안: 글자 아이콘(개발사 색 + 1~2글자)으로 시작한다. 공식 로고는 Qwen · KT · 카카오 · Liquid AI 의 상표 사용 지침을 확인한 뒤 목록 파일의 <code>icon</code> 만 채워 바꾼다. 앱은 다시 배포하지 않는다.</div>
+<div class="dec"><b class="q">⑧ 상세 화면의 소개 글은 누가 쓸까요?</b>
+제안: 모델 카드를 바탕으로 쉬운 한국어 2~4문장으로 직접 쓴다. 시험 결과와 좋은 점·아쉬운 점은 측정 보고서에서 옮긴다. 원문 복사는 하지 않는다.</div>
+</section>
+
+<footer>MoAI-S 모델 받기 설계서 · 2026-11-13 · 근거: report/Qwen3.5_모델비교_RAGAS_20261029.html, rust/installer_precision.iss, rust/ragsearchbox/src/precision.rs, gen_backend.json</footer>
+</div>
+</body>
+</html>

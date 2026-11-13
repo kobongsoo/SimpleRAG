@@ -239,6 +239,8 @@ impl Embedder {
 pub struct Reranker {
     state: Mutex<Option<(tokenizers::Tokenizer, Session)>>,
     load_lock: Mutex<()>,
+    // 마지막으로 점수를 낸 때 — 쉬는 동안 내리기(메모리 절감 설계서 C안)가 본다
+    last_used: Mutex<Instant>,
 }
 
 impl Default for Reranker {
@@ -249,11 +251,38 @@ impl Default for Reranker {
 
 impl Reranker {
     pub fn new() -> Reranker {
-        Reranker { state: Mutex::new(None), load_lock: Mutex::new(()) }
+        Reranker { state: Mutex::new(None), load_lock: Mutex::new(()), last_used: Mutex::new(Instant::now()) }
     }
 
     pub fn is_ready(&self) -> bool {
         self.state.lock().unwrap().is_some()
+    }
+
+    //------------------------------------------------------------------
+    // 오래 쉬었으면 리랭커 내리기 (메모리 절감 설계서 C안)
+    //=> 마지막으로 점수를 낸 뒤 idle 이 지났으면 ONNX 세션과 토크나이저를 버려 메모리를 돌려준다.
+    //    1) 올리는 중(load_lock)이거나 점수 내는 중(state 잠금)이면 건드리지 않는다 — try_lock
+    //    2) 쉰 시간이 모자라면 그대로 둔다
+    //   다음 score() 가 ensure_loaded 로 다시 올린다(약 1~1.5초).
+    //
+    // -in: idle = 이만큼 안 썼으면 내린다
+    //
+    // -out: true = 내렸다 / false = 안 내림
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn unload_if_idle(&self, idle: std::time::Duration) -> bool {
+        let Ok(_l) = self.load_lock.try_lock() else { return false };
+        let Ok(mut st) = self.state.try_lock() else { return false };
+        if st.is_none() || self.last_used.lock().unwrap().elapsed() < idle {
+            return false;
+        }
+        *st = None;
+        true
+    }
+
+    // 지금 쓴 것으로 치기 — 미리 올리기(/warm)가 부른다
+    pub fn touch(&self) {
+        *self.last_used.lock().unwrap() = Instant::now();
     }
 
     //------------------------------------------------------------------
@@ -290,6 +319,8 @@ impl Reranker {
             pad_token: "<pad>".into(),
             ..Default::default()
         }));
+        // 막 올린 리랭커가 옛 '마지막 사용 시각' 때문에 곧바로 다시 내려가지 않게
+        self.touch();
         *self.state.lock().unwrap() = Some((tok, session));
         Ok(t0.elapsed().as_secs_f64() * 1000.0)
     }
@@ -298,12 +329,29 @@ impl Reranker {
     // (질문, 근거) 쌍 점수 — 높을수록 관련
     //------------------------------------------------------------------
     pub fn score(&self, query: &str, passages: &[String]) -> Result<Vec<f32>, String> {
-        self.ensure_loaded()?;
         if passages.is_empty() {
             return Ok(vec![]);
         }
-        let mut st = self.state.lock().unwrap();
-        let (tok, sess) = st.as_mut().unwrap();
+        // 올린 뒤 잠그기 — 그 사이 쉬는-내리기가 끼어들어 비어 있으면 다시 올린다
+        let mut st = None;
+        for _ in 0..3 {
+            self.ensure_loaded()?;
+            let g = self.state.lock().unwrap();
+            if g.is_some() {
+                st = Some(g);
+                break;
+            }
+        }
+        let mut st = st.ok_or("RerankError: 리랭커를 올리지 못했습니다(내리기와 겹침)")?;
+        let r = self.score_locked(st.as_mut().unwrap(), query, passages);
+        // 점수를 다 낸 뒤부터 쉬는 시간을 센다
+        self.touch();
+        r
+    }
+
+    // 잠근 리랭커로 점수 내기 — score 본체
+    fn score_locked(&self, ts: &mut (tokenizers::Tokenizer, Session), query: &str, passages: &[String]) -> Result<Vec<f32>, String> {
+        let (tok, sess) = (&ts.0, &mut ts.1);
         let pairs: Vec<tokenizers::EncodeInput> = passages.iter()
             .map(|p| tokenizers::EncodeInput::Dual(query.to_string().into(), p.clone().into())).collect();
         let encs = tok.encode_batch(pairs, true).map_err(|e| e.to_string())?;

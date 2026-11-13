@@ -419,6 +419,10 @@ GEN_MODELS = {
     "qwen3.5-4b-q4": "Qwen3.5-4B-Q4_K_M.gguf",
     # LG EXAONE 4.0 1.2B (공식 GGUF, EXAONE 라이선스 — 비상업) 비교 측정용
     "exaone-4.0-1.2b-q4": "EXAONE-4.0-1.2B-Q4_K_M.gguf",
+    # Liquid AI LFM2.5 1.2B (공식 GGUF, LFM Open License — 연 매출 1천만 달러 이상 회사는 상업 사용 불가) 비교 측정용
+    "lfm2.5-1.2b-q4": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+    # 카카오 Kanana Nano 2.1B (mradermacher GGUF Q4_K_M, CC-BY-NC-4.0 — MoAI-S 는 비상업 용도라 쓸 수 있다)
+    "kanana-nano-2.1b-q4": "kanana-nano-2.1b-instruct-Q4_K_M.gguf",
 }
 # 모델별 채팅 형식(generate/chatformat.py). 적지 않은 별칭은 qwen3 로 본다 —
 #   형식이 틀리면 학습 때 본 적 없는 입력이 들어가 품질 비교가 무의미해진다.
@@ -432,6 +436,8 @@ GEN_MODEL_FORMATS = {
     "qwen3.5-2b-q4": "qwen3",
     "qwen3.5-4b-q4": "qwen3",
     "exaone-4.0-1.2b-q4": "exaone4",
+    "lfm2.5-1.2b-q4": "lfm2",
+    "kanana-nano-2.1b-q4": "llama3",
 }
 # 정밀 모드(계획서 D8 ③ / REPORT §44): 1.7B 는 506문항 정답 377 → 399(p=0.007),
 #   골든셋 v2 must 57 → 80 이라 기본으로 쓴다. 대신 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).
@@ -469,6 +475,16 @@ if PRECISION:
     else:
         CONFIG_WARNINGS.append("정밀 모드: {} 가 models 폴더에 없어 {} 로 답합니다".format(
             GEN_MODELS[PRECISION_GEN_MODEL], DEFAULT_GEN_MODEL))
+# 근거에 이웃 청크 붙이기(generation.neighbors, 모델 받기 설계서 §8) — Rust 판 config.rs 와 같다.
+#   auto(기본) 면 모델마다 측정으로 정한 값: Qwen3-4B 는 54 → 59 로 늘고 Qwen3.5-4B 는 59 → 55 로 줄었다(2026-10-29).
+#   on/off 면 그대로. 환경변수 SIMPLERAG_NEIGHBORS=1/0 이 앞선다. 옛 정밀 모드는 Qwen3-4B 로 바꾸므로 auto 로 이웃이 붙는다
+NEIGHBOR_MODELS = (PRECISION_GEN_MODEL,)
+_nb_env = os.environ.get("SIMPLERAG_NEIGHBORS", "").strip().lower()
+if _nb_env and _nb_env != "auto":
+    NEIGHBORS = _nb_env not in ("0", "off", "false", "no")
+else:
+    _nb = str(_YAML.get("generation.neighbors", "auto"))
+    NEIGHBORS = (_nb == "1") if _nb in ("0", "1") else (DEFAULT_GEN_MODEL in NEIGHBOR_MODELS)
 
 GEN_THREADS = 8             # prefill 이 8스레드에서 가장 빠름(REPORT §6)
 GEN_N_CTX = 2048            # top-3 x 128토큰이면 충분. 크게 잡을수록 손해

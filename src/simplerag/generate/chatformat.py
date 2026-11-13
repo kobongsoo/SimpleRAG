@@ -122,6 +122,46 @@ def _exaone4(system, user):
     )
 
 
+#------------------------------------------------------------------
+# 일반 Llama-3 채팅 형식 (Kanana Nano 2.1B 등)
+#=> 공식 템플릿(kakaocorp/kanana-nano-2.1b-instruct tokenizer_config.json)을 옮겼다.
+#   Kanana 1.5 와 달리 빈 시스템 블록을 먼저 내지 않고, 턴 내용은 앞뒤 공백을 걷어 낸다(| trim).
+#   앞머리 BOS(<|begin_of_text|>)는 llama.cpp 가 붙인다.
+#
+# -in: system = 시스템 지시문
+# -in: user   = 사용자 메시지
+#
+# -out: prompt = 완성 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def _llama3(system, user):
+    return (
+        "<|start_header_id|>system<|end_header_id|>\n\n" + system.strip() + "<|eot_id|>"
+        "<|start_header_id|>user<|end_header_id|>\n\n" + user.strip() + "<|eot_id|>"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    )
+
+
+#------------------------------------------------------------------
+# LFM2 · LFM2.5 채팅 형식 (Liquid AI — ChatML 모양)
+#=> 공식 템플릿(LiquidAI/LFM2.5-1.2B-Instruct-GGUF 의 tokenizer.chat_template)을 옮겼다.
+#   턴은 <|im_start|>역할\n … <|im_end|>\n 로 감싼다. Qwen3 와 달리 사고(<think>) 블록이 없는
+#   지시형 모델이라 빈 <think> 를 넣지 않는다. 앞머리 BOS(<|startoftext|>)는 llama.cpp 가 붙인다.
+#
+# -in: system = 시스템 지시문
+# -in: user   = 사용자 메시지
+#
+# -out: prompt = 완성 문자열
+# -out: error = 없음
+#------------------------------------------------------------------
+def _lfm2(system, user):
+    return (
+        "<|im_start|>system\n" + system + "<|im_end|>\n"
+        "<|im_start|>user\n" + user + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+
 # 형식 이름 → (조립 함수, 생성 중단 문자열)
 #   중단 문자열을 형식마다 따로 두는 이유: Qwen3 는 <|im_end|>, Llama-3 계열은
 #   <|eot_id|> 로 턴을 끝낸다. 남의 것을 섞어 두면 답이 안 끊기거나 일찍 끊긴다.
@@ -131,6 +171,10 @@ FORMATS = {
     "kanana": (_kanana, ["<|eot_id|>", "<|end_of_text|>"]),
     # EXAONE 4.0 은 [|endofturn|] 로 턴을 끝낸다
     "exaone4": (_exaone4, ["[|endofturn|]", "[|endoftext|]"]),
+    # 일반 Llama-3(Kanana Nano) — <|eot_id|> 로 턴을 끝낸다
+    "llama3": (_llama3, ["<|eot_id|>", "<|end_of_text|>"]),
+    # LFM2.5 는 <|im_end|> 로 턴을 끝낸다
+    "lfm2": (_lfm2, ["<|im_end|>", "<|endoftext|>"]),
 }
 
 

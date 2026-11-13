@@ -79,15 +79,15 @@ pub fn synonym_extra(picked: &[Chunk], first: &Chunk, timing: &Timing, top_k: us
 static HEAD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[[^\]\n]*\]\n").unwrap());
 
 //------------------------------------------------------------------
-// 정밀 모드 — 근거에 이웃 청크 이어 붙이기 (Python hybrid.attach_neighbors 와 같다)
+// 이웃 청크 — 근거에 앞뒤 청크 이어 붙이기 (Python hybrid.attach_neighbors 와 같다)
 //=> 근거마다 같은 문서의 바로 앞·뒤 청크(±1) 가운데 리랭커 후보(pool) 안에 든 것만 붙인다
 //   — 답이 다음 청크로 잘린 근거를 채운다(코드수정 설계서 §7 ③ C4: 정답 발췌 63 → 73).
-//    1) 설정(generation.precision)이 꺼졌으면 그대로 · 2) 이미 근거로 든 청크는 붙이지 않는다
+//    1) 설정(generation.neighbors — auto 면 모델마다)이 꺼졌으면 그대로 · 2) 이미 근거로 든 청크는 붙이지 않는다
 //    3) 앞 이웃은 머리 줄 뒤·본문 앞에, 뒤 이웃은 본문 뒤에 머리 줄을 떼고 잇는다
 //   돌려줌: (새 근거 목록, 붙인 이웃 수)
 //------------------------------------------------------------------
 pub fn attach_neighbors(picked: Vec<Chunk>, pool: &[Chunk]) -> (Vec<Chunk>, usize) {
-    if !cfg().precision {
+    if !cfg().neighbors {
         return (picked, 0);
     }
     let by: HashMap<(&str, i64), &Chunk> = pool.iter().map(|c| ((c.doc_path.as_str(), c.chunk_idx), c)).collect();

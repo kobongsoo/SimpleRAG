@@ -1,0 +1,349 @@
+{
+  "schema": 1,
+  "updated": "2026-11-13",
+  "release": "https://github.com/kobongsoo/MoAI-S/releases/tag/models-1",
+  "download_base": "https://github.com/kobongsoo/MoAI-S/releases/download/models-1/",
+  "recommend": {
+    "base_ttft_max": 4.0,
+    "precise_ttft_max": 10.0,
+    "overhead_gb": 2.1,
+    "prompt_tokens": 600
+  },
+  "models": [
+    {
+      "alias": "qwen3-1.7b-q4",
+      "name": "Qwen3-1.7B",
+      "vendor": "Alibaba (Qwen)",
+      "tier": "base",
+      "params_b": 1.7,
+      "file": "Qwen3-1.7B-Q4_K_M.gguf",
+      "file_bytes": 1107409472,
+      "format": "qwen3",
+      "neighbors": false,
+      "builtin": true,
+      "status": "ready",
+      "rank": 2,
+      "ttft_ratio": 1.0,
+      "korean": false,
+      "min_app": "",
+      "icon": {
+        "mono": "Q",
+        "color": "#615ced"
+      },
+      "summary": "기본 내장 · 빠르고 고르게 답함",
+      "released": "2025",
+      "languages": "한국어 포함 다국어",
+      "intro": "알리바바 Qwen 팀의 작은 모델입니다. MoAI-S 를 설치하면 처음부터 들어 있는 기본 모델로, 사내 문서 근거를 읽고 3~5문장으로 정리하는 일을 빠르게 합니다. 대부분의 PC 에서 첫 글자가 몇 초 안에 나옵니다.",
+      "bench": {
+        "date": "2026-10-29",
+        "correct": 50,
+        "of": 100,
+        "ungrounded": 0.27,
+        "evasive": 1,
+        "ttft_s": 2.3
+      },
+      "pros": [
+        "가장 빠름 — 대부분의 PC 에서 바로 답함",
+        "따로 받을 필요 없음"
+      ],
+      "cons": [
+        "계산 · 여러 문서를 잇는 질문은 자주 틀림"
+      ],
+      "license": "Apache-2.0",
+      "license_note": "회사 업무에 써도 됩니다(상업 사용 가능).",
+      "source_url": "https://huggingface.co/Qwen/Qwen3-1.7B",
+      "license_file": "Qwen3-Apache-2.0.txt",
+      "parts": []
+    },
+    {
+      "alias": "midm-2.0-mini-q4",
+      "name": "Mi:dm 2.0 Mini",
+      "vendor": "KT",
+      "tier": "base",
+      "params_b": 2.3,
+      "file": "Midm-2.0-Mini-Instruct-Q4_K_M.gguf",
+      "file_bytes": 1426272608,
+      "format": "midm",
+      "neighbors": false,
+      "status": "ready",
+      "rank": 1,
+      "ttft_ratio": 1.3,
+      "korean": true,
+      "min_app": "0.1.4",
+      "icon": {
+        "mono": "Mi",
+        "color": "#e60012"
+      },
+      "summary": "한국어 답이 자연스러움",
+      "released": "2025",
+      "languages": "한국어 · 영어",
+      "intro": "KT 가 한국어에 맞춰 만든 작은 모델입니다. 한국 회사 문서의 말투와 용어를 잘 알아들어 답이 자연스럽습니다. 내장 모델보다 조금 느리지만 사내 문서 시험에서 정답이 더 많았습니다.",
+      "bench": {
+        "date": "2026-10-29",
+        "correct": 55,
+        "of": 100,
+        "ungrounded": 0.21,
+        "evasive": null,
+        "ttft_s": 3.0
+      },
+      "pros": [
+        "한국어 답이 자연스러움",
+        "내장 모델보다 정답이 많음(55 대 50)"
+      ],
+      "cons": [
+        "첫 글자가 내장 모델보다 약 0.7초 늦음"
+      ],
+      "license": "MIT",
+      "license_note": "회사 업무에 써도 됩니다(상업 사용 가능).",
+      "source_url": "https://huggingface.co/K-intelligence/Midm-2.0-Mini-Instruct",
+      "license_file": "Midm-2.0-MIT.txt",
+      "parts": [
+        {
+          "name": "MoAISearch_Model_midm-2.0-mini-q4_r1.exe",
+          "bytes": 1428376392,
+          "sha256": "e84463024f64c922e03eb19f947254fae752a07f3bfff1373f79c2b3960b5db9"
+        }
+      ]
+    },
+    {
+      "alias": "qwen3.5-2b-q4",
+      "name": "Qwen3.5-2B",
+      "vendor": "Alibaba (Qwen)",
+      "tier": "base",
+      "params_b": 2.0,
+      "file": "Qwen3.5-2B-Q4_K_M.gguf",
+      "file_bytes": 1280835840,
+      "format": "qwen3",
+      "neighbors": false,
+      "status": "ready",
+      "rank": 4,
+      "ttft_ratio": 1.4,
+      "korean": false,
+      "min_app": "0.1.4",
+      "icon": {
+        "mono": "Q",
+        "color": "#615ced"
+      },
+      "summary": "근거가 애매하면 \"모른다\"고 답함",
+      "released": "2026",
+      "languages": "한국어 포함 다국어",
+      "intro": "Qwen 팀의 2026년판 작은 모델입니다. 근거에 없는 말을 지어내기보다 \"근거에 없어 답할 수 없습니다\"라고 답하는 편입니다. 사내 문서 시험에서는 내장 모델보다 정답이 적어 추천하지 않습니다.",
+      "bench": {
+        "date": "2026-10-29",
+        "correct": 44,
+        "of": 100,
+        "ungrounded": 0.36,
+        "evasive": 4,
+        "ttft_s": 3.2
+      },
+      "pros": [
+        "모르는 것을 모른다고 답하는 편"
+      ],
+      "cons": [
+        "내장 모델보다 정답이 적음(44 대 50)",
+        "답을 피하는 일이 많음"
+      ],
+      "license": "Apache-2.0",
+      "license_note": "회사 업무에 써도 됩니다(상업 사용 가능).",
+      "source_url": "https://huggingface.co/Qwen/Qwen3.5-2B",
+      "license_file": "Qwen3.5-Apache-2.0.txt",
+      "parts": [
+        {
+          "name": "MoAISearch_Model_qwen3.5-2b-q4_r1.exe",
+          "bytes": 1282950062,
+          "sha256": "9df8c502fc4d2d580e4ed6400654a3d70c7ab3bc3e804e5a3873a889c23dea36"
+        }
+      ]
+    },
+    {
+      "alias": "qwen3.5-4b-q4",
+      "name": "Qwen3.5-4B",
+      "vendor": "Alibaba (Qwen)",
+      "tier": "precise",
+      "params_b": 4.0,
+      "file": "Qwen3.5-4B-Q4_K_M.gguf",
+      "file_bytes": 2740937888,
+      "format": "qwen3",
+      "neighbors": false,
+      "status": "ready",
+      "rank": 1,
+      "ttft_ratio": 3.3,
+      "korean": false,
+      "min_app": "0.1.4",
+      "icon": {
+        "mono": "Q",
+        "color": "#615ced"
+      },
+      "summary": "근거에 없는 말을 가장 적게 함",
+      "released": "2026",
+      "languages": "한국어 포함 다국어",
+      "intro": "Qwen 팀의 2026년판 모델 가운데 MoAI-S 에서 쓰기 알맞은 크기입니다. 근거를 꼼꼼히 읽어 계산 · 비교 질문을 더 잘 맞히고, 근거에 없는 숫자를 지어내는 일이 가장 적습니다. 크기가 커서 정확한 대신 첫 글자가 늦습니다.",
+      "bench": {
+        "date": "2026-10-29",
+        "correct": 59,
+        "of": 100,
+        "ungrounded": 0.12,
+        "evasive": 5,
+        "ttft_s": 7.6
+      },
+      "pros": [
+        "근거에 없는 숫자를 지어내는 일이 가장 적음",
+        "계산 · 비교 질문 정답이 늘어남(59 대 50)"
+      ],
+      "cons": [
+        "근거가 애매하면 답을 피하는 일이 조금 많음",
+        "첫 글자가 내장 모델보다 약 3배 늦음"
+      ],
+      "license": "Apache-2.0",
+      "license_note": "회사 업무에 써도 됩니다(상업 사용 가능).",
+      "source_url": "https://huggingface.co/Qwen/Qwen3.5-4B",
+      "license_file": "Qwen3.5-Apache-2.0.txt",
+      "parts": [
+        {
+          "name": "MoAISearch_Model_qwen3.5-4b-q4_r1.exe",
+          "bytes": 2102611,
+          "sha256": "1113da1f936fb090be0e173b729c0aea866541a47a0c41fdb4215e926ff9d8ce"
+        },
+        {
+          "name": "MoAISearch_Model_qwen3.5-4b-q4_r1-1.bin",
+          "bytes": 1897897216,
+          "sha256": "8af4d59b971d721e89ba9fc51a0b44c5059415b41f480935afb7ba0df4d6eead"
+        },
+        {
+          "name": "MoAISearch_Model_qwen3.5-4b-q4_r1-2.bin",
+          "bytes": 843052419,
+          "sha256": "021e7e024f9e827a2d60a65247b46c079cdc2c85436607c11b8da78ee28fded1"
+        }
+      ]
+    },
+    {
+      "alias": "qwen3-4b-q4",
+      "name": "Qwen3-4B",
+      "vendor": "Alibaba (Qwen)",
+      "tier": "precise",
+      "params_b": 4.0,
+      "file": "Qwen3-4B-Q4_K_M.gguf",
+      "file_bytes": 2497281312,
+      "format": "qwen3",
+      "neighbors": true,
+      "status": "retired",
+      "rank": 2,
+      "ttft_ratio": 2.9,
+      "korean": false,
+      "min_app": "",
+      "icon": {
+        "mono": "Q",
+        "color": "#615ced"
+      },
+      "summary": "0.1.3 까지의 정밀 모드 모델",
+      "released": "2025",
+      "languages": "한국어 포함 다국어",
+      "intro": "0.1.3 까지 \"정밀 모드\"에서 쓰던 모델입니다. 근거 앞뒤 문단을 함께 읽어 답합니다. 새로 받을 수는 없고, 이미 설치한 PC 에서는 계속 쓰거나 지울 수 있습니다.",
+      "bench": {
+        "date": "2026-10-29",
+        "correct": 59,
+        "of": 100,
+        "ungrounded": 0.21,
+        "evasive": 1,
+        "ttft_s": 6.7
+      },
+      "pros": [
+        "답을 피하는 일이 적음",
+        "근거 앞뒤 문단까지 읽음"
+      ],
+      "cons": [
+        "새 정밀 모델보다 근거에 없는 말이 조금 많음"
+      ],
+      "license": "Apache-2.0",
+      "license_note": "회사 업무에 써도 됩니다(상업 사용 가능).",
+      "source_url": "https://huggingface.co/Qwen/Qwen3-4B",
+      "license_file": "Qwen3-Apache-2.0.txt",
+      "parts": []
+    },
+    {
+      "alias": "kanana-nano-2.1b-q4",
+      "name": "Kanana Nano 2.1B",
+      "vendor": "Kakao",
+      "tier": "base",
+      "params_b": 2.1,
+      "file": "kanana-nano-2.1b-instruct-Q4_K_M.gguf",
+      "file_bytes": 1393493664,
+      "format": "llama3",
+      "neighbors": false,
+      "status": "ready",
+      "rank": 3,
+      "korean": true,
+      "min_app": "0.1.4",
+      "icon": {
+        "mono": "K",
+        "color": "#f2c200",
+        "ink": "#2b2300"
+      },
+      "summary": "카카오 · 한국어 · 비상업 라이선스",
+      "intro": "카카오가 한국어에 맞춰 만든 작은 모델입니다. 사내 문서 시험에서 내장 모델과 정답 수가 비슷했고, 첫 글자는 조금 늦습니다. 라이선스가 비상업(CC BY-NC 4.0)이라 비상업 용도로만 쓸 수 있습니다.",
+      "license": "CC BY-NC 4.0",
+      "source_url": "https://huggingface.co/kakaocorp/kanana-nano-2.1b-instruct",
+      "parts": [
+        {
+          "name": "MoAISearch_Model_kanana-nano-2.1b-q4_r1.exe",
+          "bytes": 1395616116,
+          "sha256": "d9c6abee661b1af8b07851bbe3c0f5dd99253945e7121d184f27f9429c5ecf0e"
+        }
+      ],
+      "ttft_ratio": 1.5,
+      "released": "2025",
+      "languages": "한국어 · 영어",
+      "bench": {
+        "date": "2026-11-13",
+        "correct": 50,
+        "of": 100,
+        "ungrounded": null,
+        "evasive": 1,
+        "ttft_s": 3.7
+      },
+      "pros": [
+        "한국어 답이 자연스러움",
+        "내장 모델과 정답 수가 비슷함(50 대 51)"
+      ],
+      "cons": [
+        "첫 글자가 내장 모델보다 약 1.5배 늦음",
+        "비상업 용도로만 쓸 수 있음"
+      ],
+      "license_note": "비상업 용도로만 쓸 수 있습니다(MoAI-S 는 비상업 용도).",
+      "license_file": "Kanana-Nano-CC-BY-NC-4.0.txt"
+    },
+    {
+      "alias": "lfm2.5-1.2b-q4",
+      "name": "LFM2.5-1.2B",
+      "vendor": "Liquid AI",
+      "tier": "base",
+      "params_b": 1.2,
+      "file": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+      "file_bytes": 730895168,
+      "format": "lfm2",
+      "neighbors": false,
+      "status": "hidden",
+      "rank": 0,
+      "korean": false,
+      "min_app": "0.1.5",
+      "icon": {
+        "mono": "L",
+        "color": "#111827"
+      },
+      "summary": "Liquid AI · 측정함 — 내장보다 정답이 적어 내놓지 않음",
+      "intro": "2026-11-13 측정: 사내 문서 질문 100개 중 35개 정답(내장 Qwen3-1.7B 51). 첫 글자도 내장 모델과 같아 내놓지 않습니다.",
+      "license": "LFM Open License v1.0",
+      "source_url": "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct",
+      "parts": [],
+      "bench": {
+        "date": "2026-11-13",
+        "correct": 35,
+        "of": 100,
+        "ungrounded": null,
+        "evasive": 1,
+        "ttft_s": 2.5
+      },
+      "license_note": "연 매출 1천만 달러 이상 회사는 상업 사용 불가."
+    }
+  ]
+}

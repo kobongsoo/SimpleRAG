@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>저장소 메모리 절감 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0; --brand: #e5163f;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; }
+section { margin: 40px 0; }
+h2 { font-size: 21px; margin-bottom: 12px; padding-top: 6px; }
+h3 { font-size: 16.5px; margin: 22px 0 8px; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 20px; }
+.toc ol { margin: 0; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card .n { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.card .s { color: var(--muted); font-size: 14px; }
+.tw { overflow-x: auto; margin: 12px 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+tr.hi td { background: var(--accent-soft); font-weight: 600; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.tag.w { background: var(--warn-soft); color: var(--warn); }
+.tag.e { background: var(--bad-soft); color: var(--bad); }
+.tag.g { background: var(--good-soft); color: var(--good); }
+.bar { display: flex; height: 26px; border-radius: 5px; overflow: hidden; margin: 6px 0 2px; font-size: 12px; color: #fff; }
+.bar span { display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; }
+.b-vec { background: #2c5aa0; } .b-pl { background: #b0463b; } .b-txt { background: #a8701a; } .b-saved { background: transparent; color: var(--muted); border: 1px dashed var(--rule); }
+.barlbl { font-size: 13px; color: var(--muted); }
+.dec { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.dec b.q { display: block; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 50px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">MoAI-S (SimpleRAG Rust 판) · 설계서 · 2026-11-13 · 검토용(구현 전)</div>
+  <h1>chat 워커 메모리 줄이기</h1>
+  <p class="lede">MoAI-S만 실행해도 램 사용률이 56%에서 89%로 올라갑니다. chat 워커가 쓰는 메모리 4.8GB를 세 갈래로 줄입니다.</p>
+  <ul class="lede">
+    <li><b>A안</b>: payload를 원문 JSON으로 보관합니다.</li>
+    <li><b>B안</b>: 벡터를 반 정밀도(f16)로 보관합니다.</li>
+    <li><b>C안</b>: 쉬는 동안 생성 모델과 리랭커를 내립니다.</li>
+  </ul>
+  <p class="lede">A·B안은 상주하는 저장소를 1,565MB에서 약 650MB로 줄이고, C안은 쉬는 동안 2.3GB와 공유 GPU 1.6GB를 비웁니다.
+  디스크 형식은 그대로라 인덱스를 다시 만들 필요가 없습니다.</p>
+</header>
+
+<div class="cards">
+  <div class="card"><b>쉬는 동안 워커 메모리</b><div class="n">4.5 → 약 1.5 GB</div><div class="s">A+B+C안 · 공유 GPU 1.6GB → 13MB</div></div>
+  <div class="card"><b>저장소 메모리</b><div class="n">1,565 → 약 650 MB</div><div class="s">−910 MB (A안 −710 · B안 −207)</div></div>
+  <div class="card"><b>다시 올리는 시간</b><div class="n">약 2~3.5 초</div><div class="s">C안: 검색창을 열 때 미리 올려 가림</div></div>
+  <div class="card"><b>검색 결과</b><div class="n">상위 10 같음 199/204</div><div class="s">A·C안은 결과가 그대로이고, B안만 아주 조금 달라짐</div></div>
+</div>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">배경 — 무엇이 메모리를 쓰나</a></li>
+  <li><a href="#s2">원인 — 1.56GB의 내역</a></li>
+  <li><a href="#s3">보관 방식 비교 실측</a></li>
+  <li><a href="#s4">A안: payload 원문 보관</a></li>
+  <li><a href="#s5">B안: 벡터 반 정밀도(f16)</a></li>
+  <li><a href="#s5c">C안: 쉬는 동안 생성 모델·리랭커 내리기</a></li>
+  <li><a href="#s5d">ONNX 최적화 저장본 검토 (채택 안 함)</a></li>
+  <li><a href="#s6">함수별 영향</a></li>
+  <li><a href="#s7">바뀌지 않는 것</a></li>
+  <li><a href="#s8">위험과 대응</a></li>
+  <li><a href="#s9">검증 계획·합격 기준</a></li>
+  <li><a href="#s10">작업 순서</a></li>
+  <li><a href="#s11">결정할 것</a></li>
+  <li><a href="#s12">부록 — 측정 재현</a></li>
+</ol></nav>
+
+<section id="s1">
+<h2>1. 배경 — 무엇이 메모리를 쓰나</h2>
+<p>사용자 노트북(램 16GB, Iris Xe)에서 MoAI-S만 실행해도 램 사용률이 89%였습니다. 작업 관리자의 "공유 GPU 메모리"는
+Iris Xe에서는 따로 있는 메모리가 아니라 <b>램의 일부</b>입니다. 실제로 재 보니 프로세스 전용 메모리 안에 그대로 잡혀 있었습니다.
+chat 워커가 구성요소를 동시에 올리므로, 하나씩 차례로 올리며 잰 결과는 다음과 같습니다(<code>examples/mem_profile.rs</code>, 설치본 282,953청크).</p>
+<div class="tw"><table>
+<tr><th>단계</th><th class="r">전용 메모리 증가</th><th class="r">공유 GPU 증가</th><th>비고</th></tr>
+<tr><td>임베딩 (e5-small ONNX)</td><td class="r">+392 MB</td><td class="r">0</td><td></td></tr>
+<tr class="hi"><td>벡터 저장소</td><td class="r">+1,559 MB</td><td class="r">0</td><td>이 설계서의 대상</td></tr>
+<tr><td>BM25</td><td class="r">+167 MB</td><td class="r">0</td><td></td></tr>
+<tr><td>리랭커 (bge int8)</td><td class="r">+551 MB</td><td class="r">0</td><td></td></tr>
+<tr><td>생성 모델 적재 (Qwen3-1.7B, Vulkan)</td><td class="r">+1,729 MB</td><td class="r">+1,610 MB</td><td>공유 GPU가 전용 안에 포함</td></tr>
+<tr><td>예열 + 질문 1건</td><td class="r">+366 MB</td><td class="r">+17 MB</td><td></td></tr>
+<tr><td><b>합계</b></td><td class="r"><b>약 4.8 GB</b></td><td class="r"><b>1.6 GB</b></td><td></td></tr>
+</table></div>
+<div class="callout">생성 모델(1.7GB)은 이번 설계서에서 다루지 않습니다. GPU 레이어를 줄이거나 CPU와 나눠 돌리는 방식은 iGPU에서는 램이 줄지 않습니다.
+그러면서 읽기 속도만 떨어집니다(prefill 307 → 90 t/s, 이 PC 프로브 값). 그래서 손댈 곳은 저장소입니다.</div>
+</section>
+
+<section id="s2">
+<h2>2. 원인 — 1.56GB의 내역</h2>
+<p>지금 저장소(<code>src/store.rs</code>)는 시작할 때 <code>points.sqlite</code>를 모두 읽습니다. 점마다
+<code>Point { vec: Vec&lt;f32&gt;, payload: serde_json::Map }</code> 모양으로 <code>BTreeMap</code>에 들고 있습니다.
+디스크 내용을 필드별로 재 보면 다음과 같습니다.</p>
+<div class="tw"><table>
+<tr><th>필드</th><th class="r">디스크 크기</th><th>성격</th></tr>
+<tr><td>벡터 (384 × f32)</td><td class="r">414 MB</td><td>청크마다</td></tr>
+<tr><td><code>text</code> 본문</td><td class="r">106.5 MB</td><td>청크마다</td></tr>
+<tr><td><code>doc_path</code> · <code>doc_name</code> · <code>folder</code> · <code>path</code></td><td class="r">55.0 MB</td><td>문서 단위 — 같은 문서의 청크가 똑같은 값을 반복</td></tr>
+<tr><td><code>gen</code> · <code>content_hash</code> · <code>mtime</code> · <code>source</code></td><td class="r">27.3 MB</td><td>문서 단위</td></tr>
+<tr><td><code>chunk_hash</code> · <code>chunk_idx</code> · <code>section_id</code> · <code>page*</code></td><td class="r">13.3 MB</td><td>청크마다</td></tr>
+<tr><td><b>payload 합</b></td><td class="r"><b>242 MB</b></td><td></td></tr>
+</table></div>
+<p>디스크에서 242MB인 payload가 메모리에서는 <b>약 1,110MB</b>(1,565 − 벡터 456)가 됩니다. 청크 하나에 필드가 14개 안팎이고,
+<code>serde_json::Map</code>(<code>preserve_order</code> 켬 = IndexMap)은 필드마다 다음을 따로 만듭니다.</p>
+<ul>
+  <li>이름 문자열(<code>String</code> 24바이트 + 힙 할당)</li>
+  <li>값(<code>Value</code> 32바이트 + 문자열이면 힙 할당)</li>
+  <li>해시 색인 칸</li>
+</ul>
+<p>28만 청크 × 14필드 ≈ 400만 개 항목이라, 내용보다 그릇이 4.5배 큽니다.</p>
+<div class="callout warn">앞선 대화에서 "1.1GB는 본문"이라고 했던 것은 틀린 설명입니다. 본문은 107MB뿐입니다. 본문을 디스크에서 그때그때 읽는 방식(지연 읽기)으로 바꿔도 100MB 남짓밖에 줄지 않습니다.</div>
+</section>
+
+<section id="s3">
+<h2>3. 보관 방식 비교 실측</h2>
+<p>같은 <code>points.sqlite</code>를 방식마다 별도 프로세스로 올려, 늘어난 전용 메모리를 쟀습니다(<code>examples/store_mem.rs</code>).</p>
+<div class="tw"><table>
+<tr><th>방식</th><th>메모리에 드는 것</th><th class="r">저장소 메모리</th><th class="r">지금 대비</th></tr>
+<tr><td>map (지금)</td><td>f32 벡터 + JSON 객체</td><td class="r">1,565 MB</td><td class="r">—</td></tr>
+<tr class="hi"><td>hybrid (A안)</td><td>f32 벡터 + 원문 JSON 글자 + 본문 · 문서 경로(공유) · 청크 번호</td><td class="r">853 MB</td><td class="r">−712 MB</td></tr>
+<tr><td>raw</td><td>f32 벡터 + 원문 JSON 글자만</td><td class="r">718 MB</td><td class="r">−847 MB</td></tr>
+<tr><td>compact</td><td>f32 벡터 + 필드를 타입으로 풀고 문서 단위 필드는 문서 표 공유</td><td class="r">622 MB</td><td class="r">−943 MB</td></tr>
+<tr><td>vec (바닥값)</td><td>f32 벡터만</td><td class="r">456 MB</td><td class="r">—</td></tr>
+<tr class="hi"><td>hybrid + f16 (A+B안)</td><td>위 hybrid에서 벡터만 f16</td><td class="r">약 646 MB</td><td class="r">약 −919 MB</td></tr>
+</table></div>
+<p class="barlbl">저장소 메모리 구성 (가로 = 1,565MB)</p>
+<div class="bar"><span class="b-vec" style="width:29%">벡터 456</span><span class="b-pl" style="width:71%">payload 객체 약 1,110</span></div>
+<div class="bar"><span class="b-vec" style="width:15%">f16 249</span><span class="b-pl" style="width:26%">원문·본문 약 397</span><span class="b-saved" style="width:59%">줄어드는 몫 약 919</span></div>
+<p class="barlbl">A+B안 수치는 hybrid 실측(853)에서 벡터 절반(282,953 × 384 × 2B = 207MB)을 뺀 계산값입니다. 구현 뒤 다시 잽니다.</p>
+<p><b>raw · compact를 고르지 않은 이유는 다음과 같습니다.</b></p>
+<ul>
+  <li><b>raw:</b> 모두 찾기와 폴더 한정 검색이 질문마다 28만 개 payload를 전부 풀어야 해서 수 초씩 걸립니다. JSON 하나 푸는 데 15µs이므로 28만 × 15µs ≈ 4초입니다.</li>
+  <li><b>compact:</b> 230MB를 더 줄이지만, 필드마다 값 ↔ JSON 변환 규칙을 새로 짜야 합니다. 숫자 형식, 필드 순서, 메타데이터 훅처럼 나중에 덧붙는 필드까지 챙겨야 합니다. 바깥 코드가 받는 payload가 지금과 한 글자도 다르지 않다는 보장이 깨지기 쉽습니다.</li>
+</ul>
+</section>
+
+<section id="s4">
+<h2>4. A안: payload 원문 보관 (hybrid)</h2>
+<h3>4-1. 자료 구조</h3>
+<pre>// 문서 단위 열쇠 — 같은 문서의 청크가 한 벌을 나눠 가진다(Arc)
+struct DocKey {
+    path: Box&lt;str&gt;,          // doc_path 원래 글자
+    norm: Box&lt;str&gt;,          // pyutil::normcase(doc_path) — 질문마다 다시 계산하지 않게 미리
+    content_hash: Box&lt;str&gt;,  // doc_by_hash 훑기용
+}
+
+struct Point {
+    vec: Vectors 안의 칸 번호 또는 Vec&lt;f32&gt;/Vec&lt;u16&gt;,  // B안 참고
+    raw: Box&lt;str&gt;,           // 디스크 payload JSON 글자 그대로
+    text: Box&lt;str&gt;,          // 본문 — 모두 찾기·BM25 재구축·대기 청크 채우기가 훑는다
+    doc: Arc&lt;DocKey&gt;,
+    chunk_idx: i32,          // 없으면 -1 (정렬 기본값 0 으로 읽는다 — 지금과 같게)
+    section_id: Option&lt;i64&gt;,
+}</pre>
+<ul>
+  <li><b>돌려줄 때만 풉니다.</b> <code>payloads()</code> · <code>search()</code> · <code>doc_points()</code> · <code>section_chunks()</code> · <code>points_of()</code>는 지금처럼 <code>Payload</code>(Map)를 돌려줍니다.
+  돌려줄 점의 <code>raw</code>만 <code>serde_json::from_str</code>로 풉니다. 실측으로 1개에 15µs이고, 검색 후보 수십 개면 1ms가 안 됩니다.</li>
+  <li><b>원문 JSON을 그대로 들고 있어서</b> 돌려주는 Map이 지금과 같습니다(필드 순서, 숫자 표기까지). 바깥 코드(retrieve, find, similar, brief, indexer, overview, uploads, cli)는 고치지 않습니다.</li>
+  <li><b>본문은 <code>raw</code> 안에도 있고 <code>text</code>에도 있어 두 벌입니다(약 107MB).</b> 이 몫을 없애는 방법(원문을 본문 앞뒤 두 토막으로 잘라 들기)은 복잡도에 비해 이득이 작아 이번 범위에서는 뺍니다(<a href="#s11">결정할 것 ③</a>).</li>
+</ul>
+<h3>4-2. 쓰기 경로</h3>
+<ul>
+  <li><code>upsert</code>: 지금도 <code>Value::Object(p).to_string()</code>을 디스크에 씁니다. 같은 글자를 <code>raw</code>로 들고, 훑기 필드는 <code>p</code>에서 꺼냅니다.</li>
+  <li><code>set_payload_ids</code>(문서 이동): <code>raw</code>를 풀고, 덮어쓴 뒤, 다시 글자로 만들어 디스크와 메모리에 같이 넣습니다. 그리고 <code>doc</code>를 새 경로의 <code>DocKey</code>로 바꿉니다.</li>
+  <li><code>DocKey</code> 공유 표 <code>HashMap&lt;(path, content_hash), Arc&lt;DocKey&gt;&gt;</code>는 적재·삽입 때만 씁니다. 문서가 지워지면 <code>Arc</code>가 저절로 풀리므로 따로 청소할 필요가 없습니다(표에서 떼는 것은 <code>delete_doc</code> 때).</li>
+</ul>
+
+<h3>4-3. 구현 결과 (2026-11-13, 설치본 인덱스 282,953청크)</h3>
+<div class="callout good"><b>A안을 구현했습니다.</b> 바꾼 파일은 <code>src/store.rs</code> 하나이고, 저장소 밖 코드는 고치지 않았습니다.
+<code>DocKey</code>에는 설계에 적은 대로 normcase를 미리 구한 값과 내용 해시를 함께 두었습니다.</div>
+<div class="tw"><table>
+<tr><th>항목</th><th class="r">예전</th><th class="r">A안</th></tr>
+<tr class="hi"><td>저장소 메모리 (<code>mem_profile</code>)</td><td class="r">+1,559 MB</td><td class="r">+853 MB</td></tr>
+<tr><td>저장소 적재 시간 (같은 조건, MoAI-S 끔)</td><td class="r">10.2 s</td><td class="r">4.2 s</td></tr>
+<tr><td>chat 워커 전체 (답 1건 뒤)</td><td class="r">4,697 MB</td><td class="r">3,990 MB</td></tr>
+<tr><td>C안으로 쉬어 내린 뒤 상주 몫 (임베딩·저장소·BM25)</td><td class="r">2,119 MB</td><td class="r">1,411 MB</td></tr>
+</table></div>
+<p><b>동일성 검사</b>(<code>examples/store_a_check.rs</code>)는 같은 sqlite를 예전 방식(점마다 JSON 객체)으로 따로 읽어 기준을 만들고, 새 저장소 결과와 맞댔습니다.
+검사 항목은 payloads 전체 · scroll_all · doc_paths · texts_of · doc_points/section_chunks/doc_by_hash(문서 50개) · folder_scope(폴더 20개) · docs_scope · scan_words(3낱말) · doc_max_scan(문서 전부)입니다.
+<b>검사 856,082개 중 다른 것 0개</b>였고, payload는 282,953/282,953개가 필드 순서까지 같았습니다. Rust 테스트 52개도 통과했습니다.</p>
+
+</section>
+
+<section id="s5">
+<h2>5. B안: 벡터 반 정밀도(f16)</h2>
+<h3>5-1. 실측 — 골든 v2 204문항, 설치본 282,953청크 (<code>examples/f16_check.rs</code>)</h3>
+<div class="tw"><table>
+<tr><th>상위 K</th><th class="r">순서까지 같음</th><th class="r">묶음 같음</th><th class="r">평균 겹침</th><th>쓰는 곳</th></tr>
+<tr><td>3</td><td class="r">198 / 204</td><td class="r">200 / 204</td><td class="r">2.98 / 3</td><td></td></tr>
+<tr class="hi"><td>10</td><td class="r">182 / 204</td><td class="r">199 / 204</td><td class="r">9.98 / 10</td><td><code>dense_top_k: 10</code> — 실제 후보 수</td></tr>
+<tr><td>50</td><td class="r">110 / 204</td><td class="r">195 / 204</td><td class="r">49.95 / 50</td><td>참고</td></tr>
+</table></div>
+<ul>
+  <li><b>칸 하나의 변환 오차</b>는 최대 1.2 × 10⁻⁴, <b>상위 50 점수 차</b>는 최대 5.1 × 10⁻⁵입니다.</li>
+  <li><b>상위 10 묶음이 달라진 5문항</b>은 10위와 11위 점수가 거의 같은 경우로, 경계에서 한 개가 바뀐 것입니다(평균 겹침 9.98).
+  "순서까지 같음"이 182인 까닭도 상위 안에서 점수가 거의 같은 청크끼리 자리가 바뀐 경우입니다. 코퍼스의 절반이 완전 동일 사본이어서 이런 접전이 흔합니다.</li>
+  <li><b>dense 후보는 다음 단계에서 한 번 더 걸러집니다.</b> RRF가 BM25 후보와 섞고, 리랭커가 다시 순위를 매긴 뒤 3개만 남깁니다. 그래서 최종 근거가 바뀌는 문항은 이보다 적을 것으로 봅니다. 다만 이것은 <b>추정</b>이고, 골든셋으로 확인합니다(<a href="#s9">검증</a>).</li>
+</ul>
+<h3>5-2. 속도 — 질문당 전체 훑기 (28만 × 384)</h3>
+<div class="tw"><table>
+<tr><th>내적 방식</th><th class="r">질문당</th><th>설명</th></tr>
+<tr><td>f32 지금 (<code>store::dot</code>, 8칸 묶음)</td><td class="r">68.7 ms</td><td>빌드에 AVX가 켜져 있지 않아 SSE 4칸만 씀</td></tr>
+<tr><td>f32 + AVX·FMA 명령</td><td class="r">28.8 ms</td><td>명령만 바꾼 몫: −40 ms</td></tr>
+<tr class="hi"><td>f16 + F16C·AVX·FMA 명령</td><td class="r">22.2 ms</td><td>읽는 양이 절반이 된 몫: −6.6 ms</td></tr>
+</table></div>
+<div class="callout good">f16 때문에 느려지는 일은 없습니다. 속도 이득은 대부분 <b>AVX 내적</b> 덕분이고, 이것은 f16과 무관하게 f32에도 적용할 수 있습니다.
+비슷한 문서 찾기(<code>doc_max_scan</code>, 질의 벡터 32개 × 전체)는 같은 내적을 32번 하므로 이득이 그만큼 커집니다.
+참고로 <code>search()</code>는 지금 <code>dot()</code>도 쓰지 않고 한 칸씩 더하는 반복자를 써서, 68.7ms보다 더 느릴 수 있습니다.</div>
+
+<h3>5-2-1. AVX 내적 구현 결과 (2026-11-13, 작업 순서 3단계)</h3>
+<div class="callout good"><b>AVX 내적을 구현했습니다</b>(<code>store.rs</code>의 <code>dot</code>). CPU에 AVX·FMA가 있으면 쓰고, 없으면 예전 8칸 묶음으로 계산합니다. <code>SIMPLERAG_NO_AVX=1</code>로 끌 수 있습니다(비교 측정용).
+<code>search()</code>도 한 칸씩 더하던 계산을 같은 <code>dot</code>으로 바꿨습니다. 함께 <b>28만 개 전체를 정렬하던 것을 상위 k개만 골라 정렬</b>하도록 바꿨는데, 비교에 id가 들어가 동점이 없으므로 결과가 전체 정렬과 똑같습니다.</div>
+<div class="tw"><table>
+<tr><th>측정 (질문 204개, 같은 프로세스·MoAI-S 끔)</th><th class="r">예전</th><th class="r">AVX 끔(상위 k 고르기만)</th><th class="r">AVX 켬</th></tr>
+<tr class="hi"><td>dense 검색 <code>search(10)</code> 질문당</td><td class="r">192 ~ 206 ms</td><td class="r">168 ms</td><td class="r">71 ms</td></tr>
+<tr><td>비슷한 문서 <code>doc_max_scan</code>(질의 32개, 스레드 8)</td><td class="r">837 ms</td><td class="r">837 ms</td><td class="r">314 ms</td></tr>
+</table></div>
+<p><b>순위 비교</b>(골든 v2 204문항): 예전 search(한 칸씩 더하기)와 비교하면 상위 10이 순서까지 같은 문항이 199/204, 묶음이 같은 문항이 202/204였습니다. 상위 50은 순서까지 같음 167/204, 묶음 같음 200/204입니다.
+AVX를 끄고 8칸 묶음만 써도 201/204·203/204로 비슷하게 갈립니다. 그러니 달라지는 곳은 점수가 1e-7 안팎으로 붙은 접전 청크이고, 더하는 순서가 바뀌면 생기는 차이입니다.
+비슷한 문서 상위 20 문서는 AVX 켬·끔에서 순서가 같았습니다(점수 끝자리 15.97097 ↔ 15.97098만 다름).
+dense 검색 71ms 가운데 내적은 약 25ms이고, 나머지는 BTreeMap을 훑으며 (점수, id) 28만 개를 모으는 몫입니다. B안에서 벡터를 한 덩어리 배열로 옮기면 이 몫도 줄일 수 있습니다.</p>
+
+<h3>5-3. 설계</h3>
+<ul>
+  <li><b>메모리에서만 f16입니다.</b> 디스크 <code>vec</code> BLOB은 지금처럼 f32로 씁니다. 적재할 때 정규화 → f16으로 바꿉니다.</li>
+  <li><b>질의 벡터는 f32로 둡니다.</b> 내적은 f16 칸을 f32로 풀면서 f32로 더합니다(F16C <code>_mm256_cvtph_ps</code> + FMA).</li>
+  <li><b>명령이 없는 CPU에서는</b> 한 칸씩 풀어서 계산합니다. F16C는 Intel 3세대(Ivy Bridge, 2012), AMD Piledriver 이후 모두 있어서, 대체 경로는 사실상 안전장치입니다.
+  고르는 일은 <code>is_x86_feature_detected!</code>로 시작할 때 한 번만 합니다.</li>
+  <li><b>변환 코드</b>는 <code>half</code> 크레이트를 쓰지 않고 작은 모듈(<code>src/vecf16.rs</code>)로 둡니다. <code>f16_check.rs</code>에서 검증한 반올림(가장 가까운 짝수)과 내적을 그대로 옮깁니다. 의존성이 늘지 않습니다.</li>
+  <li><b>벡터를 덩어리 하나에 몰아 둡니다(선택).</b> 점마다 <code>Vec&lt;u16&gt;</code>를 두면 머리 24바이트와 할당 단위가 붙습니다(28만 × 약 40B ≈ 11MB). 큰 배열 하나에 두면 이 몫이 없고 훑기도 연속 메모리라 더 빠릅니다.
+  다만 삭제와 삽입 때 칸 관리가 필요하므로, 1차는 점마다 <code>Vec&lt;u16&gt;</code>로 하고 2차 과제로 둡니다.</li>
+</ul>
+<h3>5-4. 정밀도가 흘러나가지 않게 — 벡터를 다시 쓰는 경로</h3>
+<div class="callout bad">메모리 벡터를 디스크에 다시 쓰는 경로가 두 곳 있습니다. 여기서 f16 값을 쓰면 <b>디스크 벡터가 조금씩 깎입니다</b>(재구축을 거칠 때마다 누적).</div>
+<div class="tw"><table>
+<tr><th>함수</th><th>지금</th><th>바꿀 것</th></tr>
+<tr><td><code>points_of</code> (indexer — 같은 내용 사본 문서의 벡터 복사, 지문이 같은 청크 재사용)</td><td>메모리 벡터(정규화된 f32)를 돌려줌</td><td>그 id들의 <code>vec</code>를 <b>sqlite에서 읽어</b> f32로 돌려줌. 몇 개뿐이라 비용 무시 가능</td></tr>
+<tr><td><code>take_vectors</code> (재구축 벡터 재사용 — 전체)</td><td>메모리 벡터를 꺼내 옮김(<code>mem::take</code>)</td><td><b>sqlite 전체 <code>vec</code>를 읽어</b> 풀을 만듦. 재구축(50분) 중 수 초가 더 들 뿐</td></tr>
+<tr><td><code>doc_points</code> (비슷한 문서 기준 문서)</td><td>메모리 벡터</td><td>f16 → f32로 풀어 돌려줌. 질의로만 쓰고 디스크에 쓰지 않으므로 그대로 둬도 됨</td></tr>
+</table></div>
+<p>참고: 지금 <code>points_of</code>는 <b>정규화된</b> 벡터를 돌려줍니다. sqlite에서 읽으면 원래 임베딩 출력이 나옵니다.
+코사인에는 영향이 없고, 적재할 때 어차피 다시 정규화합니다.</p>
+<h3>5-5. 스위치</h3>
+<p><code>config.yaml</code>에 <code>index.vector_f16: true</code>(기본 켬)와 환경변수 <code>SIMPLERAG_VECTOR_F16=0</code>을 둡니다.
+골든셋을 비교할 때와 Python 판과 결과를 맞대 볼 때(Python 판은 Qdrant f32) 끌 수 있게 하려는 것입니다. A안은 결과가 바뀌지 않으므로 스위치를 두지 않습니다.</p>
+
+<h3>5-6. B안 구현 결과 (2026-11-13, 설치본 인덱스 282,953청크 · 골든 v2 204문항)</h3>
+<div class="callout good"><b>B안을 구현했습니다.</b>
+<ul>
+  <li>메모리 벡터는 <code>Vector</code>(f32 또는 f16) 둘 중 하나로 듭니다. 변환·내적은 새 모듈 <code>src/vecf16.rs</code>가 맡고, F16C가 있으면 8칸씩 한 번에 처리합니다.</li>
+  <li><code>points_of</code>·<code>take_vectors</code>는 sqlite의 f32를 읽어 정규화합니다. 그래서 f32 모드에서는 예전과 같은 값을 돌려줍니다.</li>
+  <li>스위치는 <code>index.vector_f16</code>(기본 켬)과 <code>SIMPLERAG_VECTOR_F16=0</code>입니다. config.yaml에는 줄을 넣지 않았고, 코드 기본값을 씁니다. Python 판 설정 검사에는 키만 더했습니다.</li>
+</ul></div>
+<div class="tw"><table>
+<tr><th>항목</th><th class="r">f32 (끔)</th><th class="r">f16 (켬)</th></tr>
+<tr class="hi"><td>저장소 메모리</td><td class="r">+860 MB</td><td class="r">+642 MB (−218)</td></tr>
+<tr><td>저장소 적재 시간 (번갈아 2번)</td><td class="r">7.2 · 5.7 s</td><td class="r">7.2 · 3.8 s</td></tr>
+<tr><td>dense 검색 <code>search(10)</code> 질문당</td><td class="r">75.2 ms</td><td class="r">65.7 ms</td></tr>
+<tr><td>비슷한 문서 <code>doc_max_scan</code>(질의 32)</td><td class="r">292 ms</td><td class="r">271 ms</td></tr>
+<tr><td>payload 동일성 (store_a_check)</td><td class="r">856,082개 중 0 다름</td><td class="r">856,082개 중 0 다름</td></tr>
+<tr><td>dense 상위 10 (f32와 비교)</td><td class="r">—</td><td class="r">순서 같음 184 · 묶음 같음 200 / 204</td></tr>
+<tr class="hi"><td><b>최종 근거 3개</b> (검색 · RRF · 리랭킹 거친 뒤)</td><td class="r">—</td><td class="r">순서까지 같음 200 / 204</td></tr>
+<tr class="hi"><td><b>정답 출처 적중</b> (근거 문서에 src 조각)</td><td class="r">167 / 204</td><td class="r">167 / 204 (엇갈림 0)</td></tr>
+</table></div>
+<p><b>검증 3 합격.</b> 설계서 기준(적중 감소 0문항, 또는 유의하지 않은 ±1문항 이내)으로, 감소 0문항이고 서로 엇갈린 문항도 없습니다.
+근거가 바뀐 4문항(#16·#63·#100·#179)은 근거 3개 중 하나가 접전 청크로 바뀐 경우이고, 출처 적중은 그대로입니다.
+"연차 휴가는 며칠인가요?"는 f16 켬·끔 모두 근거 3개와 답변 글이 글자까지 같았습니다.
+단위 테스트로 문서 복사와 재구축 재사용이 디스크 f32 값을 비트까지 그대로 돌려주는지(f16이 디스크로 새지 않음) 확인했고, 테스트 57개가 통과했습니다.
+측정 중 메모리 측정 예제(mem_profile)의 답 1건이 한 번 토큰 0개로 끝났습니다. 그러나 같은 조건으로 두 번 다시 돌리면 정상(102토큰)이었고, f16을 끈 상태와 <code>ask</code> 명령에서도 정상이어서 원인을 재현하지 못했습니다.</p>
+<div class="tw"><table>
+<tr><th>A + AVX + B안 누적</th><th class="r">처음</th><th class="r">지금</th></tr>
+<tr><td>벡터 저장소 메모리</td><td class="r">1,559 MB</td><td class="r">642 MB</td></tr>
+<tr><td>chat 워커 (답 1건 뒤)</td><td class="r">4,697 MB</td><td class="r">약 3,780 MB</td></tr>
+<tr><td>쉬어서 모델을 내린 뒤 상주 몫 (임베딩·저장소·BM25, C안과 함께)</td><td class="r">2,119 MB</td><td class="r">약 1,200 MB</td></tr>
+<tr><td>dense 검색 질문당</td><td class="r">약 200 ms</td><td class="r">약 66 ms</td></tr>
+</table></div>
+</section>
+
+<section id="s5c">
+<h2>6. C안: 쉬는 동안 생성 모델·리랭커 내리기</h2>
+<h3>6-1. 왜 이 둘만인가</h3>
+<p>MoAI-S를 끈 깨끗한 조건에서 구성요소별 크기와 적재 시간을 다시 쟀습니다(<code>mem_profile</code>, 2026-11-13).</p>
+<div class="tw"><table>
+<tr><th>구성요소</th><th class="r">메모리</th><th class="r">처음 적재</th><th>쓰는 곳</th><th>판정</th></tr>
+<tr><td>임베딩 (e5-small)</td><td class="r">0.39 GB</td><td class="r">2.0 s</td><td>모든 검색 · 자동 인덱싱</td><td>상주</td></tr>
+<tr><td>벡터 저장소</td><td class="r">1.56 GB (A+B안 뒤 약 0.65)</td><td class="r">10.2 s</td><td>모든 검색</td><td>상주 — 다시 올리기 너무 느림</td></tr>
+<tr><td>BM25</td><td class="r">0.17 GB</td><td class="r">0.8 s</td><td>모든 검색</td><td>상주</td></tr>
+<tr class="hi"><td>리랭커 (bge int8)</td><td class="r">0.55 GB</td><td class="r">4.0 s</td><td>AI 답변만</td><td>쉬면 내림</td></tr>
+<tr class="hi"><td>생성 모델 (Qwen3-1.7B, Vulkan)</td><td class="r">1.73 GB (공유 GPU 1.61 포함)</td><td class="r">5.8 s + 예열 1.0 s</td><td>AI 답변 · 탐색기 AI 정리</td><td>쉬면 내림</td></tr>
+</table></div>
+<ul>
+  <li>질문할 때마다 올리고 내리는 방식은 버립니다. 첫 글자 시간이 질문마다 몇 초씩 늘어납니다.</li>
+  <li>검색, 모두 찾기, 탐색기 검색, 자동 인덱싱에는 리랭커와 생성 모델이 쓰이지 않습니다. 쉬는 시간이 긴 상주 프로그램이라 이 둘을 내리는 효과가 큽니다.</li>
+</ul>
+
+<h3>6-2. 실측 — 내렸을 때 메모리가 실제로 돌아오나 (<code>examples/unload_check.rs</code>)</h3>
+<p>chat 워커와 같은 바탕(임베딩·저장소·BM25 상주, 전용 2,119MB)에서 다음을 여러 번 되풀이했습니다:
+리랭커와 생성 모델 올리기 → 점수 계산 1번과 짧은 답 1개 → 두 객체 버리기.</p>
+<div class="tw"><table>
+<tr><th>되풀이</th><th class="r">올린 뒤 (기준 대비)</th><th class="r">내린 뒤 (기준 대비)</th><th class="r">공유 GPU 올림 → 내림</th></tr>
+<tr><td>1회</td><td class="r">+2,330 MB</td><td class="r">+134 MB</td><td class="r">1,620 → 13 MB</td></tr>
+<tr><td>3회</td><td class="r">+2,341 MB</td><td class="r">+269 MB</td><td class="r">1,620 → 13 MB</td></tr>
+<tr><td>5회</td><td class="r">+2,350 MB</td><td class="r">+404 MB</td><td class="r">1,620 → 13 MB</td></tr>
+<tr><td>6~8회</td><td class="r">+2,351 MB</td><td class="r">+405 MB (더 늘지 않음)</td><td class="r">1,620 → 13 MB</td></tr>
+</table></div>
+<ul>
+  <li><b>돌아옵니다.</b> 내리면 2.35GB 가운데 약 1.95~2.2GB가 Windows로 돌아가고, <b>공유 GPU 1.6GB는 전부</b> 돌아갑니다(13MB는 Vulkan 장치 몫).</li>
+  <li><b>남는 몫 130~405MB</b>는 프로세스 힙이 빈 칸을 붙잡고 있는 것으로 봅니다. 다섯 번째부터는 405MB에서 더 늘지 않고, 올렸을 때의 최대치도 매번 같습니다(+2,351). <b>새는 것이 아니라 다음 적재 때 다시 쓰는 칸</b>입니다.</li>
+  <li><b>하나씩 따로 되풀이하면</b> 리랭커만은 +128~170MB, 생성 모델만은 +110MB에서 멈춥니다. 생성 모델 몫 +110MB는 처음 한 번 올라온 llama/Vulkan DLL이 남는 몫입니다. 둘을 번갈아 올릴 때 빈 칸이 조각나 405MB까지 남습니다.</li>
+  <li><b>힙 정리를 시험했습니다.</b> 내린 뒤 <code>HeapCompact</code>로 모든 힙을 정리하면 남는 몫이 약 300MB에서 멈춰 100MB 정도 더 줄었습니다. 효과가 작고 Win32 호출이 하나 늘어서, 선택 사항으로 둡니다(<a href="#s11">결정할 것 ⑤</a>).</li>
+</ul>
+
+<h3>6-3. 실측 — 다시 올리는 시간 (같은 프로세스 안, 디스크 캐시 따뜻함)</h3>
+<div class="tw"><table>
+<tr><th>구성요소</th><th class="r">다시 올리기</th><th>비고</th></tr>
+<tr><td>리랭커</td><td class="r">0.9 ~ 1.5 s</td><td>첫 점수 계산 0.11~0.17 s 별도</td></tr>
+<tr><td>생성 모델</td><td class="r">1.1 ~ 2.6 s + 예열 0.6 ~ 0.9 s</td><td>프로세스에서 처음 올릴 때는 셰이더 준비로 예열이 7초까지 걸린 적이 있음(1회)</td></tr>
+<tr class="hi"><td>둘을 동시에</td><td class="r">약 2 ~ 3.5 s</td><td>지금 예열(<code>App::warmup</code>)처럼 스레드 두 개로 나눠 올림</td></tr>
+</table></div>
+<div class="callout warn">오래 쉰 뒤에는 Windows가 모델 파일을 파일 캐시에서 비웠을 수 있습니다. 그러면 gguf 1.06GB와 onnx 266MB를 디스크에서 다시 읽어야 해서, NVMe 기준으로 1초 안팎이 더 들 것으로 봅니다(추정이며 아직 재지 않았습니다).</div>
+
+<h3>6-4. 동작 설계</h3>
+<ol>
+  <li><b>내리는 때:</b> 마지막으로 생성 모델이나 리랭커를 쓴 뒤 <code>generation.idle_unload_min</code>분(기본 10, 0이면 끔) 동안 다시 쓰지 않으면 내립니다.
+  chat 워커 안에 1분마다 시각을 확인하는 스레드 하나를 둡니다.</li>
+  <li><b>내리는 방법:</b> <code>Generator::unload()</code>와 <code>Reranker::unload()</code>를 새로 만듭니다. 각자 <code>load_lock</code>을 잡고 상태를 <code>None</code>으로 바꾸면, 지금 있는 <code>Drop</code>이 <code>llama_free</code>·<code>model_free</code>와 ONNX 세션 해제를 해 줍니다.
+  답을 만드는 중이면 내리지 않도록, 사용 중 표시(원자 카운터)를 두고 0일 때만 내립니다.</li>
+  <li><b>다시 올리는 때 ① 미리:</b> RAGSearchBox가 채팅 창을 열 때(<code>open_panel</code>·<code>open_panel_window</code>)나 입력칸에 첫 글자를 칠 때 워커에 <code>/warm</code> 한 줄을 보냅니다.
+  워커는 지금의 리랭커 백그라운드 적재(<code>start_rerank_load</code>)처럼 두 모델을 뒤에서 올리고 예열합니다. 질문을 치는 몇 초 동안 끝나므로 대부분 가려집니다.</li>
+  <li><b>다시 올리는 때 ② 그냥 질문이 올 때:</b> 따로 할 일이 없습니다. <code>Generator::stream</code>·<code>generate</code>·<code>warm</code>과 <code>Reranker::score</code>가 이미 <code>ensure_loaded()</code>를 부르므로, 내려가 있으면 그 자리에서 올립니다. 이때는 첫 글자가 2~3.5초 늦어집니다.</li>
+  <li><b>상태 표시:</b> 워커 상태 줄에 "쉬는 중(모델 내림)"을 더해 설정 창이나 트레이 툴팁에서 보이게 합니다(선택).</li>
+  <li><b>바뀌지 않는 것:</b> 검색, 모두 찾기, 비슷한 문서, 자동 인덱싱은 내린 상태에서도 그대로 동작합니다. 이 기능들은 두 모델을 쓰지 않습니다.</li>
+</ol>
+
+<h3>6-4-1. 구현 결과 (2026-11-13, 실제 chat 워커 · 설치본 인덱스 · 쉬는 시간 1분으로 줄여 측정)</h3>
+<div class="callout good"><b>C안을 구현했습니다.</b> 계획과 다른 점은 두 가지입니다.
+<ul>
+  <li>미리 올리기 신호를 "채팅 창 열기"가 아닌 <b>"입력칸에 글자를 치기 시작할 때"</b>(30초에 한 번)로 바꿨습니다. 패널은 인덱싱 폴더를 탐색기로 열기만 해도 저절로 뜨기 때문에, 창 열기는 질문할 뜻이 있다는 신호로 약합니다.</li>
+  <li><b>질문이 도착한 순간에도 두 모델을 뒤에서 올리기 시작</b>하게 했습니다. 처음 구현처럼 리랭커 → 생성 모델을 차례로 올리면 첫 글자가 13.3초까지 늦었습니다. 검색과 겹쳐 올리면 8.6초로 줄었습니다.</li>
+</ul></div>
+<div class="tw"><table>
+<tr><th>상황</th><th class="r">워커 전용 메모리</th><th class="r">공유 GPU</th><th class="r">첫 글자</th></tr>
+<tr><td>모델 올라간 상태 질문</td><td class="r">4,713 MB</td><td class="r">1,627 MB</td><td class="r">4.3 ~ 4.8 s</td></tr>
+<tr class="hi"><td>쉬어서 내린 뒤</td><td class="r">2,227 ~ 2,246 MB</td><td class="r">13 MB</td><td class="r">—</td></tr>
+<tr><td>내린 상태에서 바로 질문 (차례로 올림, 처음 구현)</td><td class="r"></td><td class="r"></td><td class="r">13.3 s</td></tr>
+<tr><td>내린 상태에서 바로 질문 (질문 도착 때 동시에 올림)</td><td class="r"></td><td class="r"></td><td class="r">8.6 s (+약 4 s)</td></tr>
+<tr class="hi"><td>입력 시작(/warm) 6초 뒤 질문</td><td class="r"></td><td class="r"></td><td class="r">3.1 s (늘지 않음)</td></tr>
+</table></div>
+<p>미리 올리기는 3.2~4.4초 걸렸습니다. 내렸다 올리기를 두 번 했을 때 남는 몫은 2,227MB에서 2,246MB로 거의 늘지 않았습니다.
+이 측정은 MoAI-S를 끈 상태에서 디스크 캐시가 따뜻할 때 한 것이라, 10분 넘게 쉬어 캐시가 비었을 때의 시간은 아직 재지 못했습니다.</p>
+
+<h3>6-5. 효과</h3>
+<div class="tw"><table>
+<tr><th>상태</th><th class="r">지금</th><th class="r">C안만</th><th class="r">A+B+C안</th></tr>
+<tr><td>쉬는 동안 워커 전용 메모리</td><td class="r">약 4.5 GB</td><td class="r">약 2.3~2.5 GB</td><td class="r">약 1.4~1.6 GB</td></tr>
+<tr><td>쉬는 동안 공유 GPU</td><td class="r">1.6 GB</td><td class="r">13 MB</td><td class="r">13 MB</td></tr>
+<tr><td>답하는 동안 워커 전용 메모리</td><td class="r">약 4.8 GB</td><td class="r">같음</td><td class="r">약 3.9 GB</td></tr>
+</table></div>
+<p class="barlbl">"쉬는 동안"은 상주 2.12GB(A+B안 뒤 약 1.2GB)에 내린 뒤 남는 몫 0.13~0.4GB를 더한 값입니다. 사용자 PC 기준으로 MoAI-S를 켰을 때 램 사용률이 89%에서 약 64~66%가 되는 셈입니다(추정).</p>
+</section>
+
+<section id="s5d">
+<h2>7. ONNX 최적화 저장본 검토 (채택 안 함)</h2>
+<p>앞선 측정(<code>mem_profile</code>)에서 리랭커 적재가 4.0초로 나왔습니다. 그래서 ONNX Runtime이 그래프 최적화(Level3)를 끝낸 모델을 파일로 저장해 두고(<code>with_optimized_model_path</code>),
+다음부터 최적화 없이 그 파일을 읽으면 빨라지는지 쟀습니다(<code>examples/onnx_cache.rs</code>, 3번씩, 디스크 캐시 따뜻함).</p>
+<div class="tw"><table>
+<tr><th>항목</th><th class="r">리랭커 (bge int8, 266MB)</th><th class="r">임베딩 (e5-small, 113MB)</th></tr>
+<tr><td>토크나이저 읽기 (tokenizer.json 16MB)</td><td class="r">0.64 s</td><td class="r">0.70 s</td></tr>
+<tr><td>세션: 원본 + Level3 (지금)</td><td class="r">0.60 ~ 0.78 s</td><td class="r">0.34 ~ 0.57 s</td></tr>
+<tr><td>세션: 원본 + Level1</td><td class="r">0.64 ~ 0.81 s</td><td class="r">0.45 ~ 0.53 s</td></tr>
+<tr class="hi"><td>세션: 저장본 + 최적화 끔</td><td class="r">0.41 ~ 0.53 s</td><td class="r">0.20 ~ 0.22 s</td></tr>
+<tr><td>저장본 만들기 (한 번)</td><td class="r">1.31 s · 266 MB</td><td class="r">0.69 s · 112 MB</td></tr>
+<tr><td>출력 차이 (지금 대비)</td><td class="r">저장본 0 · Level1 3.6×10⁻³</td><td class="r">저장본 0 · Level1 0.13</td></tr>
+<tr><td>추론 1회 (48토큰)</td><td class="r">Level3 19.8 · 저장본 19.3 · Level1 24.4 ms</td><td class="r">Level3 7.8 · 저장본 9.3 · Level1 11.2 ms</td></tr>
+</table></div>
+<ul>
+  <li><b>줄어드는 시간은 0.2초 안팎입니다.</b> 세션 만드는 시간 자체가 0.6초뿐이고, 토크나이저 읽기(0.64초)가 그만큼 큽니다. 앞서 본 4.0초는 대부분 디스크 캐시가 차가운 첫 적재와 램 압박 몫으로 보입니다. 같은 프로세스에서 다시 올리면 리랭커가 0.9~1.5초입니다(6-3).</li>
+  <li><b>결과는 저장본이 지금과 같습니다(차이 0).</b> Level1은 점수가 달라지고 추론도 느려 쓰지 않습니다.</li>
+  <li><b>대신 관리할 것이 늘어납니다.</b> Level3 저장본은 그 PC의 CPU 명령에 맞춘 결과일 수 있어, 배포본에 넣지 못하고 사용자 PC에서 처음에 만들어야 합니다.
+  ONNX Runtime 판이나 CPU가 바뀌면 다시 만들어야 하고, 디스크도 378MB를 더 씁니다.</li>
+  <li><b>결론:</b> 0.2초를 얻자고 캐시 관리를 들이는 것은 손해라고 봅니다. 다시 올리는 시간은 6-4의 미리 올리기로 가리는 쪽이 낫습니다.
+  토크나이저 0.64초를 줄이려면, 리랭커를 내릴 때 세션만 버리고 토크나이저(메모리는 재 보지 않았고 수십 MB로 추정)는 남겨 두는 방법이 있습니다(<a href="#s11">결정할 것 ⑥</a>).
+  임베딩과 리랭커의 tokenizer.json은 크기가 거의 같지만 내용이 달라서(SHA1 다름) 하나를 나눠 쓸 수는 없습니다.</li>
+</ul>
+</section>
+
+<section id="s6">
+<h2>8. 함수별 영향 (<code>src/store.rs</code> 안)</h2>
+<div class="tw"><table>
+<tr><th>함수</th><th>쓰는 필드</th><th>바뀌는 점</th><th>성능</th></tr>
+<tr><td><code>ensure_loaded</code></td><td>전부</td><td>Map 대신 hybrid 점 만들기 · 벡터 f16 변환</td><td>적재 시간 비슷(실측 3.8s ↔ 3.4~11s, 램 압박에 따라 흔들림)</td></tr>
+<tr><td><code>search</code></td><td>vec</td><td>f16 AVX 내적 · 결과 점만 풀기</td><td>빨라짐</td></tr>
+<tr><td><code>doc_max_scan</code> / <code>scan_part</code></td><td>vec · doc · text</td><td>문서 대표 payload는 id만 기억했다가 합친 뒤 문서 수(약 3.5천)만큼 풀기</td><td>빨라짐(내적) · 풀기 +50ms 이하</td></tr>
+<tr><td><code>folder_scope</code> · <code>docs_scope</code> · <code>doc_points</code></td><td>doc</td><td><code>doc.norm</code> 미리 계산값 사용</td><td>빨라짐(점마다 normcase 안 함)</td></tr>
+<tr><td><code>scan_words</code> (모두 찾기)</td><td>text · doc</td><td><code>pl_str(text)</code> → <code>p.text</code></td><td>같음</td></tr>
+<tr><td><code>doc_by_hash</code> · <code>delete_doc*</code> · <code>doc_paths</code></td><td>doc</td><td>필드 접근만 바뀜</td><td>같음 또는 빨라짐</td></tr>
+<tr><td><code>section_chunks</code></td><td>doc · section_id · chunk_idx</td><td>걸러 낸 점만 풀기</td><td>같음</td></tr>
+<tr><td><code>scroll_all</code> · <code>texts_of</code> · <code>pending_batch</code></td><td>text · doc</td><td>필드 접근만 바뀜</td><td>같음</td></tr>
+<tr><td><code>payloads</code></td><td>raw</td><td>풀어서 돌려줌</td><td>+15µs/개</td></tr>
+<tr><td><code>upsert</code> · <code>set_payload_ids</code> · <code>set_vectors</code></td><td>전부</td><td>4-2 · 5-3대로</td><td>같음</td></tr>
+<tr><td><code>points_of</code> · <code>take_vectors</code></td><td>vec · raw</td><td>5-4대로 sqlite에서 f32 읽기 · <code>take_vectors</code>의 <code>key(&amp;Payload)</code>는 raw를 풀어 넘김</td><td>재구축 때 수 초 더 듦</td></tr>
+</table></div>
+<p>저장소 밖에서 바뀌는 곳은 없습니다. <code>Point</code> 구조체와 <code>Payload</code> 별칭은 <code>pub</code>이지만, 바깥에서 <code>Point</code> 필드를 직접 읽는 곳은 없습니다(<code>rg "\.vec\b|\.payload"</code>로 확인했고, find · similar · uploads는 자기 구조체의 필드입니다).
+<code>uploads.rs</code>의 업로드 문서 코퍼스는 자기 메모리 표를 따로 들고 있으며, 크기가 작아 이번 범위가 아닙니다.</p>
+<h3>C안이 건드리는 곳 (저장소 밖)</h3>
+<div class="tw"><table>
+<tr><th>파일</th><th>바뀌는 점</th></tr>
+<tr><td><code>simplerag/src/generate/generator.rs</code></td><td><code>unload()</code>, 사용 중 카운터, 마지막 사용 시각</td></tr>
+<tr><td><code>simplerag/src/embed.rs</code> (<code>Reranker</code>)</td><td><code>unload()</code>, 사용 중 카운터, 마지막 사용 시각</td></tr>
+<tr><td><code>simplerag/src/app.rs</code></td><td>쉬는 시간 감시 스레드, 미리 올리기(<code>start_rerank_load</code>와 같은 모양으로 둘 다)</td></tr>
+<tr><td><code>simplerag/src/cli.rs</code> (<code>cmd_chat</code>)</td><td><code>/warm</code> 명령 받기, 상태 줄</td></tr>
+<tr><td><code>simplerag/src/config.rs</code> · <code>config.yaml</code></td><td><code>generation.idle_unload_min</code> (기본 10), <code>SIMPLERAG_IDLE_UNLOAD_MIN</code></td></tr>
+<tr><td><code>ragsearchbox/src/main.rs</code></td><td>채팅 창 열기·첫 입력 때 워커에 <code>/warm</code> 보내기, 설정 창에 "쉬면 모델 내리기(분)" 칸(선택)</td></tr>
+</table></div>
+</section>
+
+<section id="s7">
+<h2>9. 바뀌지 않는 것</h2>
+<ul>
+  <li><b>디스크 형식</b>: <code>points.sqlite</code>의 <code>points(id, vec f32 BLOB, payload JSON)</code>와 <code>bm25_tf</code>. <b>인덱스를 다시 만들 필요가 없고</b>, 이전 판으로 되돌려도 그대로 열립니다.</li>
+  <li>저장소 밖의 API: 함수 이름, 인자, 돌려주는 <code>Payload</code>.</li>
+  <li>Python 판(<code>src/simplerag</code>, Qdrant local): 손대지 않습니다.</li>
+  <li>BM25, 리랭커, 생성 모델, 임베딩 모델 파일과 그 계산 방식(C안은 언제 올리고 내리는지만 바꿉니다).</li>
+</ul>
+</section>
+
+<section id="s8">
+<h2>10. 위험과 대응</h2>
+<div class="tw"><table>
+<tr><th>위험</th><th>정도</th><th>대응</th></tr>
+<tr><td>f16 때문에 dense 상위 10 경계 청크가 바뀜(5/204)</td><td><span class="tag w">작음</span></td><td>골든 v2로 검색 적중·근거를 비교해 떨어지지 않으면 기본 켬. 떨어지면 스위치를 끄고 A안만 냄</td></tr>
+<tr><td>f16 벡터가 디스크로 새어 정밀도가 누적 손실</td><td><span class="tag e">막아야 함</span></td><td>5-4: 복사·재사용은 sqlite f32에서 읽음. 단위 시험으로 "upsert한 BLOB = 원래 BLOB" 확인</td></tr>
+<tr><td>A안의 <code>raw</code>와 <code>text</code>·<code>doc</code>가 어긋남(문서 이동 뒤 등)</td><td><span class="tag w">중간</span></td><td>쓰기 경로를 <code>Point::from_payload(&amp;Payload)</code> 하나로 모아, raw와 훑기 필드를 항상 함께 만듦</td></tr>
+<tr><td>돌려주는 Map이 지금과 달라짐</td><td><span class="tag g">낮음</span></td><td>원문 JSON을 그대로 풀기 때문. 전체 28만 점을 old/new로 비교하는 일회성 검사로 확인</td></tr>
+<tr><td>AVX가 없는 CPU</td><td><span class="tag g">낮음</span></td><td>시작할 때 감지해서 대체 경로로. 대체 경로로도 결과가 같은지 시험</td></tr>
+<tr><td>Python 판과 맞대 보는 시험(<code>bench/rust_vs_py</code>)에서 dense 점수 차이</td><td><span class="tag g">낮음</span></td><td>맞대 볼 때는 <code>SIMPLERAG_VECTOR_F16=0</code></td></tr>
+<tr><td>C안: 답을 만드는 중에 감시 스레드가 모델을 내림</td><td><span class="tag e">막아야 함</span></td><td>사용 중 카운터가 0이고 <code>load_lock</code>을 잡았을 때만 내림. 스트리밍 중 내리기 시험 추가</td></tr>
+<tr><td>C안: 미리 올리기 없이 질문하면 첫 글자가 2~3.5초 늦음</td><td><span class="tag w">중간</span></td><td>창 열기·첫 입력 때 <code>/warm</code>. 오래 쉰 뒤 차가운 디스크 몫(1초 안팎 추정)은 실측 뒤 판단</td></tr>
+<tr><td>C안: 내린 뒤 남는 몫(최대 약 405MB)</td><td><span class="tag g">낮음</span></td><td>더 늘지 않음을 8회 되풀이로 확인. 필요하면 <code>HeapCompact</code>(약 300MB로)</td></tr>
+<tr><td>C안: 백엔드 재선택·프로브가 다시 돎</td><td><span class="tag g">낮음</span></td><td>내릴 때 <code>backend</code> 값은 남겨 두고 모델만 버림. 다시 올릴 때 프로브를 하지 않음</td></tr>
+</table></div>
+</section>
+
+<section id="s9">
+<h2>11. 검증 계획·합격 기준</h2>
+<ol>
+  <li><b>payload 동일성(A안):</b> 설치본 인덱스 28만 점 전체에 대해 <code>payloads(all)</code>의 old와 new가 같아야 합니다. <span class="tag g">합격: 28만/28만 같음</span></li>
+  <li><b>검색 결과(A안만):</b> 골든 v2 204문항의 근거 id 목록이 지금과 완전히 같아야 합니다. <span class="tag g">합격: 204/204</span></li>
+  <li><b>검색 품질(A+B안):</b> 골든 v2 검색 적중(근거에 정답 출처)과 핵심어 점수를 f32와 비교합니다. 기존 측정 관례대로 McNemar로 판정합니다. <span class="tag w">합격: 적중 감소 0문항, 또는 유의하지 않은 ±1문항 이내</span></li>
+  <li><b>모두 찾기·폴더 한정:</b> 표본 질의 20개 결과가 같아야 합니다. 벡터를 쓰지 않으므로 완전히 같아야 합니다.</li>
+  <li><b>비슷한 문서:</b> 표본 문서 20개의 상위 10 목록을 비교합니다. <span class="tag w">합격: 평균 겹침 9.5/10 이상, 사본·다른 판 판정은 같음</span></li>
+  <li><b>메모리:</b> <code>mem_profile</code>로 다시 쟀을 때 저장소 단계가 +700MB 이하여야 합니다(목표 약 650MB).</li>
+  <li><b>재구축 벡터 재사용:</b> 작은 폴더로 <code>--rebuild</code>를 한 뒤 재사용된 청크의 BLOB이 재구축 전 BLOB과 바이트까지 같아야 합니다.</li>
+  <li><b>속도:</b> dense 검색 시간과 비슷한 문서 찾기 시간이 지금보다 짧거나 같아야 합니다.</li>
+  <li><b>C안 메모리:</b> 설치본에서 <code>idle_unload_min: 1</code>로 두고 질문 → 1분 대기 → 질문을 5번 되풀이합니다. 작업 관리자와 카운터로 쉬는 동안의 전용 메모리와 공유 GPU를 봅니다. <span class="tag g">합격: 쉬는 동안 공유 GPU 50MB 이하, 전용 메모리가 되풀이할수록 늘지 않음</span></li>
+  <li><b>C안 첫 글자 시간:</b> 내린 상태에서 (가) 창을 열고 5초 뒤 질문할 때와 (나) 바로 질문할 때의 TTFT를, 모델이 올라와 있을 때와 비교합니다. <span class="tag w">합격: (가) +1초 이내, (나) +4초 이내</span></li>
+  <li><b>C안 안전:</b> 긴 답을 스트리밍하는 중에 감시 주기를 강제로 돌려도 답이 끊기지 않아야 합니다. 내린 상태에서 검색·모두 찾기·자동 인덱싱이 그대로 돼야 합니다.</li>
+</ol>
+<p>측정할 때는 기억해 둔 관례대로 벡터 지연을 끄고, 실행 중인 MoAI-S는 닫은 뒤 잽니다(램 압박으로 시간이 부풀지 않게).</p>
+</section>
+
+<section id="s10">
+<h2>12. 작업 순서</h2>
+<ol>
+  <li><b>A안</b>: <code>store.rs</code>의 <code>Point</code>와 <code>DocKey</code>, 쓰기 경로 통일, 함수별 필드 접근 교체. 검증 1·2·4·6(A안만).</li>
+  <li><b>AVX 내적</b>(f32): <code>search</code>와 <code>scan_part</code>를 <code>dot</code>으로 통일하고 AVX·FMA 경로를 추가합니다. 결과가 순서까지 그대로인지 확인합니다(부동소수 덧셈 순서가 바뀌므로 점수 끝자리 차이는 허용).</li>
+  <li><b>B안</b>: <code>vecf16.rs</code>, 적재 변환, <code>points_of</code>·<code>take_vectors</code> sqlite 읽기, 스위치. 검증 3·5·6·7·8.</li>
+  <li><b>C안</b>: <code>unload()</code>·사용 중 카운터·감시 스레드·<code>/warm</code>(워커), 창 열기·첫 입력 때 <code>/warm</code> 보내기(RAGSearchBox), 설정값. 검증 9·10·11.</li>
+  <li>버전을 올릴 때 <code>docs/changelog.html</code>과 릴리스 설명에 "쉬는 동안 메모리 약 3GB 절감(공유 GPU 포함), 인덱스 다시 만들 필요 없음"을 적습니다.</li>
+</ol>
+<p>각 단계는 따로 커밋합니다. B안의 품질 검증이 기준에 못 미치면 B안만 빼고 냅니다.
+C안은 A·B안과 겹치는 파일이 없어(<code>store.rs</code> 밖) 순서를 바꾸거나 따로 낼 수 있습니다. <b>쉬는 동안 효과가 가장 크므로 C안을 먼저 하는 것도 방법입니다</b>(<a href="#s11">결정할 것 ⑦</a>).</p>
+</section>
+
+<section id="s11">
+<h2>13. 결정할 것</h2>
+<div class="dec"><b class="q">① f16 기본값</b>골든 v2에서 적중 감소가 0이면 기본 켬을 권합니다. ±1문항(유의하지 않음)이면 어떻게 할지 정해야 합니다.
+제안: 켬. 경계 접전 청크라서 리랭커가 흡수할 것으로 봅니다.</div>
+<div class="dec"><b class="q">② AVX 내적을 A안과 같이 낼지</b>f16과 무관하게 dense 검색이 질문당 약 40ms 빨라집니다. 결과 순서가 끝자리 반올림 때문에 아주 드물게 바뀔 수 있습니다.
+제안: 같이 내고, 검증 2를 "id 목록 같음"으로 확인합니다.</div>
+<div class="dec"><b class="q">③ 본문 두 벌(약 107MB) 없애기</b>원문 JSON을 본문 앞뒤 토막으로 잘라 들면 107MB를 더 줄일 수 있습니다. 대신 풀 때 이어 붙이는 코드와 따옴표 처리(escape)를 신경 써야 합니다.
+제안: 이번에는 하지 않습니다. 메모리가 더 필요해지면 다음 과제로 합니다.</div>
+<div class="dec"><b class="q">④ int8 벡터</b>f16 대신 int8로 하면 벡터가 약 104MB가 되어 103MB를 더 줄입니다. 대신 순위 변화가 f16보다 커질 수 있고 따로 실측해야 합니다.
+제안: 이번 범위 밖입니다.</div>
+<div class="dec"><b class="q">⑤ 내린 뒤 HeapCompact</b>남는 몫이 405MB에서 약 300MB로 줄어듭니다. Win32 호출 한 줄이면 됩니다.
+제안: 넣습니다. 내릴 때 한 번만 부르므로 부담이 없습니다.</div>
+<div class="dec"><b class="q">⑥ 리랭커 토크나이저는 남겨 두기</b>다시 올리는 시간이 약 0.6초 줄어듭니다. 대신 토크나이저 메모리(재 보지 않았으며 수십 MB로 추정)가 상주합니다.
+제안: 토크나이저 메모리를 잰 뒤 정합니다.</div>
+<div class="dec"><b class="q">⑦ C안 기본값과 순서</b>기본 10분 켬을 권합니다. 0이면 끕니다. 쉬는 동안 효과가 가장 크므로 C안을 A·B안보다 먼저 하는 것도 방법입니다.
+제안: C안 먼저 → A안 → AVX 내적 → B안 순서로 합니다.</div>
+</section>
+
+<section id="s12">
+<h2>14. 부록 — 측정 재현</h2>
+<p>측정 예제 다섯 개는 <code>rust/simplerag/examples/</code>에 있습니다(mem_profile · store_mem · f16_check · unload_check · onnx_cache). 설치본 데이터로 돌리려면 환경변수를 설치 폴더로 맞춥니다.</p>
+<pre>$d = "$env:LOCALAPPDATA\Programs\MoAISearch"
+$env:SIMPLERAG_HOME = $d
+$env:SIMPLERAG_VULKAN_LIB = "$d\runtime\llama_vulkan"
+$env:SIMPLERAG_CPU_LIB = "$d\runtime\llama_cpu"
+$env:ORT_DYLIB_PATH = "$d\onnxruntime.dll"
+
+# chat 워커 구성요소별 메모리
+cargo run --release --example mem_profile -- "연차 휴가는 며칠인가요?"
+# 저장소 보관 방식별 메모리 (방식마다 따로 실행)
+cargo run --release --example store_mem -- "$d\rag_index\points.sqlite" hybrid
+# f16 순위·속도 (질문 파일 = 골든 v2 q 한 줄씩)
+cargo run --release --example f16_check -- "$d\rag_index\points.sqlite" golden_q.txt
+# 생성 모델·리랭커 내렸다 올리기 (both | rr | gen), TRIM=1 이면 내린 뒤 HeapCompact
+cargo run --release --example unload_check -- 8 both
+# ONNX 최적화 저장본 적재 시간 (모델 폴더, onnx 파일, 저장 폴더, 스레드, inter1)
+cargo run --release --example onnx_cache -- "$d\models\bge-reranker-base-int8" model_int8.onnx $env:TEMP 4 1</pre>
+<p>2026-11-13 측정 조건: 설치본 0.1.3, 282,953청크, 실행 중인 MoAI-S와 함께 실행(램 89%). 그래서 <b>시간</b> 값은 부풀었을 수 있습니다. 메모리 크기와 순위 비교는 이 영향을 받지 않습니다.</p>
+</section>
+
+<footer>SimpleRAG · plan/저장소_메모리절감_설계서_20261113.html · 측정 근거: examples/mem_profile.rs · store_mem.rs · f16_check.rs · unload_check.rs · onnx_cache.rs</footer>
+</div>
+</body>
+</html>

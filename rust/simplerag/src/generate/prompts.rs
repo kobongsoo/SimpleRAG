@@ -97,6 +97,21 @@ pub fn build_chat_prompt(system: &str, user: &str, alias: &str) -> String {
         "kanana" => format!(
             "<|start_header_id|>system<|end_header_id|>\n\n\n<|eot_id|><|start_header_id|>system<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
             system, user),
+        // 일반 Llama-3(Kanana Nano) — 빈 시스템 블록 없이, 턴 내용은 앞뒤 공백을 걷어 낸다 (Python chatformat._llama3 와 같다)
+        "llama3" => format!(
+            "<|start_header_id|>system<|end_header_id|>
+
+{}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+",
+            system.trim(), user.trim()),
+        // LFM2 · LFM2.5 (Liquid AI) — ChatML 모양, 사고 블록이 없는 지시형이라 빈 <think> 를 넣지 않는다.
+        //   앞머리 BOS(<|startoftext|>)는 토크나이저가 붙인다 (Python chatformat._lfm2 와 같다)
+        "lfm2" => format!(
+            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            system, user),
         _ => format!(
             "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
             system, user),
@@ -113,7 +128,7 @@ pub fn build_prompt(system: &str, user: &str) -> String {
 //------------------------------------------------------------------
 pub fn stop_strings(alias: &str) -> Vec<&'static str> {
     match config::gen_format(alias) {
-        "midm" | "kanana" => vec!["<|eot_id|>", "<|end_of_text|>"],
+        "midm" | "kanana" | "llama3" => vec!["<|eot_id|>", "<|end_of_text|>"],
         _ => vec!["<|im_end|>", "<|endoftext|>"],
     }
 }

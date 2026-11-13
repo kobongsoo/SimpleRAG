@@ -638,6 +638,33 @@ fn read_line() -> Option<String> {
 }
 
 //------------------------------------------------------------------
+// 쉬면 생성 모델·리랭커 내리기 — 감시 스레드 (메모리 절감 설계서 C안)
+//=> 30초마다 두 모델의 '마지막 사용 뒤 지난 시간'을 보고 generation.idle_unload_min 분이 넘으면 내린다.
+//   검색 · 모두 찾기 · 자동 인덱싱은 두 모델이 필요 없으므로 그대로 돈다.
+//   내린 사실은 stderr 로그로만 남긴다(stdout 은 질문 응답 줄이라 섞지 않는다).
+//
+// -in: app = 워커 앱(임베딩·저장소·BM25 는 상주, 생성 모델·리랭커만 내린다)
+//
+// -out: 없음 (설정이 0 이면 스레드를 띄우지 않는다)
+// -out: error = 없음
+//------------------------------------------------------------------
+fn start_idle_unloader(app: &std::sync::Arc<App>) {
+    let min = cfg().gen_idle_unload_min;
+    if min <= 0 {
+        return;
+    }
+    let idle = std::time::Duration::from_secs(min as u64 * 60);
+    let app = app.clone();
+    std::thread::Builder::new().name("idle-unload".into()).spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let gone = app.unload_idle(idle);
+        if !gone.is_empty() {
+            log(&format!("[idle] {}분 쉬어 내림: {} — 다음 질문이나 채팅 창을 열 때 다시 올립니다", min, gone.join(" · ")));
+        }
+    }).ok();
+}
+
+//------------------------------------------------------------------
 // 대화형 명령 (워커) — 모델을 한 번 올리고 질문을 계속 받는다
 //------------------------------------------------------------------
 pub fn cmd_chat(a: &Args) -> i32 {
@@ -662,6 +689,11 @@ pub fn cmd_chat(a: &Args) -> i32 {
             log(&format!("[warmup] {} 실패 — {}", k, e));
         }
     }
+    // 답변 모델을 못 올렸으면 앱도 알게 stdout 에 한 줄 — 설정 > 모델이 이전 모델로 되돌린다(모델 받기 설계서 §6-4).
+    //   검색 · 찾기는 되므로 워커는 그대로 둔다
+    if let Some(e) = warm.items.get("llm").and_then(|v| v.as_str()) {
+        outln(&format!("답변 모델 오류: {}", e));
+    }
     outln(&format!("준비 완료 ({:.1}초) — {}청크 / {} ({} 모드)", warm.total_ms / 1000.0, pyutil::comma(count as i64),
         config::gen_file(&alias).unwrap_or(&alias), model_mode(&alias)));
     outln(&format!("생성 {} / 리랭킹 {}", backend::label(&warm.backend),
@@ -671,14 +703,21 @@ pub fn cmd_chat(a: &Args) -> i32 {
     }
     outln(&format!("모델: 임베딩 {} / 리랭커 {}", pyutil::basename(pyutil::rstrip_chars(&cfg().model_dir, "\\/")),
         pyutil::basename(pyutil::rstrip_chars(&cfg().rerank_dir, "\\/"))));
-    outln("기능: ask-folder index-commands ask-prev upload find brief cancel find-all similar");
+    outln("기능: ask-folder index-commands ask-prev upload find brief cancel find-all similar warm");
     outln("질문을 입력하세요.  종료: exit 또는 Ctrl+D   도움말: /help\n");
+    // 쉬면 생성 모델·리랭커 내리기(메모리 절감 설계서 C안) — 0 이면 끔
+    start_idle_unloader(&app);
     // 입력은 따로 읽는다 — 답을 쓰는 동안에도 /cancel 을 받아야 다음 찾기가 기다리지 않는다
     let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let app_in = app.clone();
     std::thread::spawn(move || {
         while let Some(l) = read_line() {
-            if pyutil::strip(&l) == "/cancel" {
+            let s = pyutil::strip(&l);
+            if s == "/cancel" {
                 INTERRUPT.store(true, Ordering::SeqCst);
+            } else if s == "/warm" {
+                // 미리 올리기 — 대답 줄을 내지 않으므로 질문 사이가 아니어도 받는다(답 쓰는 중에도)
+                app_in.prewarm();
             } else if tx.send(l).is_err() {
                 break;
             }
@@ -699,6 +738,11 @@ pub fn cmd_chat(a: &Args) -> i32 {
         }
         if ["exit", "quit", "종료", "/exit", "/quit"].contains(&query.to_lowercase().as_str()) {
             break;
+        }
+        // 답변 모델이 필요한 요청(질문 · /ask · /brief)이면, 쉬느라 내려가 있던 모델을 지금 뒤에서 올리기 시작한다.
+        //   검색(임베딩·BM25·리랭킹)과 겹쳐 올라가므로, 차례로 올릴 때보다 첫 글자가 빨라진다. 올라가 있으면 아무 일도 없다
+        if !query.starts_with('/') || query.starts_with("/ask") || query.starts_with("/brief") {
+            app.prewarm();
         }
         let mut ask_folder = chat_folder.clone();
         // /ask 의 prev — 같은 대화의 바로 앞 질문(멀티턴이 검색에 이어 붙인다)
@@ -741,6 +785,7 @@ pub fn cmd_chat(a: &Args) -> i32 {
                 outln("  /find {\"q\": 검색어, \"folder\": 폴더}  탐색기 모드 찾기 — 문서 ▸ 쪽 (@find 줄)");
                 outln("  /brief {\"q\": 검색어, \"items\": [문서들]}  탐색기 모드 AI 정리 — 상위 문서별 한 줄");
                 outln("  /cancel     지금 쓰는 답 멈추기");
+                outln("  /warm       쉬느라 내린 답변 모델·리랭커를 미리 올리기(출력 없음)");
                 outln("  /find {..., \"all\": true}  모두 찾기 — 글자 일치 문서를 묶음별로(문서마다 앞 5쪽)");
                 outln("  /find-doc {\"kws\": [낱말], \"paths\": [문서]}  모두 찾기 — 문서들의 나머지 쪽 줄");
                 outln("  /find-page {\"ids\": [청크 id]}  모두 찾기 — 쪽 본문(글 미리 보기)");

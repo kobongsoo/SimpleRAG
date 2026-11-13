@@ -72,6 +72,29 @@ pub struct App {
     // 백그라운드 리랭커 적재 결과: None(안 함·진행 중) | Ok(ms) | Err(사유)
     pub rerank_load: Arc<Mutex<Option<Result<f64, String>>>>,
     rerank_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    // 미리 올리기(/warm)가 도는 중 — 겹쳐 오면 한 번만 한다
+    warming: Arc<std::sync::atomic::AtomicBool>,
+}
+
+//------------------------------------------------------------------
+// 프로세스 힙 정리 — 비어 있는 힙 덩어리를 Windows 에 돌려준다
+//=> 모델을 내린 뒤 부른다. 실측(2026-11-13)으로 내린 뒤 남는 몫이 약 405MB → 300MB 로 줄었다.
+//
+// -in: 없음
+//
+// -out: 없음
+// -out: error = 없음 (실패해도 무시 — 정리는 덤이다)
+//------------------------------------------------------------------
+pub fn trim_heaps() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Memory::{GetProcessHeaps, HeapCompact};
+        let mut hs: Vec<windows_sys::Win32::Foundation::HANDLE> = vec![std::ptr::null_mut(); 256];
+        let n = GetProcessHeaps(hs.len() as u32, hs.as_mut_ptr()) as usize;
+        for h in &hs[..n.min(hs.len())] {
+            HeapCompact(*h, 0);
+        }
+    }
 }
 
 impl App {
@@ -90,7 +113,82 @@ impl App {
             backend: Mutex::new(None),
             rerank_load: Arc::new(Mutex::new(None)),
             rerank_thread: Mutex::new(None),
+            warming: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    //------------------------------------------------------------------
+    // 오래 쉬었으면 생성 모델·리랭커 내리기 (메모리 절감 설계서 C안)
+    //=> 검색·모두 찾기·자동 인덱싱에는 두 모델이 필요 없다. 쉬는 동안 내려 램과 공유 GPU 를 돌려준다.
+    //    1) 각각 '마지막 사용 뒤 idle 지남 + 지금 안 씀' 일 때만 내린다
+    //    2) 하나라도 내렸으면 힙을 정리한다
+    //   다시 쓸 때는 stream · score 가 ensure_loaded 로 그 자리에서 올린다(또는 /warm 이 미리).
+    //
+    // -in: idle = 이만큼 안 썼으면 내린다
+    //
+    // -out: 내린 것 이름들("생성 모델" · "리랭커") — 없으면 빈 목록
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn unload_idle(&self, idle: std::time::Duration) -> Vec<&'static str> {
+        let mut out = vec![];
+        if self.generator.unload_if_idle(idle) {
+            out.push("생성 모델");
+        }
+        if self.reranker.unload_if_idle(idle) {
+            out.push("리랭커");
+        }
+        if !out.is_empty() {
+            trim_heaps();
+        }
+        out
+    }
+
+    //------------------------------------------------------------------
+    // 미리 올리기 (/warm — 채팅 창을 열 때 RAGSearchBox 가 보낸다)
+    //=> 내려가 있는 생성 모델 · 리랭커를 뒤에서 올려, 사용자가 질문을 치는 동안 끝나게 한다.
+    //    1) 둘 다 '지금 썼다'로 쳐서 쉬는 시간을 다시 센다(곧 쓸 테니 내리지 않게)
+    //    2) 이미 올라가 있거나 미리 올리기가 도는 중이면 아무것도 안 한다
+    //    3) 리랭커(켜져 있을 때만)와 생성 모델(올린 뒤 예열)을 스레드 두 개로 동시에 올린다
+    //   출력(stdout)에는 아무것도 쓰지 않는다 — 질문 응답 줄과 섞이지 않게. 결과는 stderr 로그로만.
+    //
+    // -in: 없음
+    //
+    // -out: true = 올리기를 시작했다 / false = 할 일 없음
+    // -out: error = 없음 (적재 실패는 로그만 — 질문 때 다시 시도한다)
+    //------------------------------------------------------------------
+    pub fn prewarm(self: &Arc<Self>) -> bool {
+        use std::sync::atomic::Ordering;
+        self.generator.touch();
+        self.reranker.touch();
+        let use_rr = self.retriever.reranker.lock().unwrap().is_some();
+        let need_gen = !self.generator.is_ready();
+        let need_rr = use_rr && !self.reranker.is_ready();
+        if !(need_gen || need_rr) || self.warming.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let t0 = Instant::now();
+            // 리랭커는 따로 스레드 — 생성 모델 적재와 겹쳐 가장 느린 하나로 끝나게
+            let rr = if need_rr {
+                let r = me.reranker.clone();
+                Some(std::thread::spawn(move || r.ensure_loaded()))
+            } else {
+                None
+            };
+            let g = if need_gen { Some(me.generator.warm()) } else { None };
+            let r = rr.map(|h| h.join().unwrap_or_else(|_| Err("리랭커 스레드 실패".into())));
+            me.warming.store(false, Ordering::SeqCst);
+            let mut parts = vec![];
+            if let Some(g) = g {
+                parts.push(match g { Ok(_) => "생성 모델".to_string(), Err(e) => format!("생성 모델 실패({})", err_short(&e)) });
+            }
+            if let Some(r) = r {
+                parts.push(match r { Ok(_) => "리랭커".to_string(), Err(e) => format!("리랭커 실패({})", err_short(&e)) });
+            }
+            eprintln!("[idle] 미리 올림: {} ({:.1}초)", parts.join(" · "), t0.elapsed().as_secs_f64());
+        });
+        true
     }
 
     //------------------------------------------------------------------

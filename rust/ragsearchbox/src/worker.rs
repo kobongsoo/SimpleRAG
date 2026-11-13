@@ -289,6 +289,8 @@ struct Inner {
     embed_model: String,
     rerank_model: String,
     ready_line: String,
+    // 답변 모델을 못 올렸다는 워커 줄("답변 모델 오류: …") — 설정 > 모델이 이전 모델로 되돌린다
+    llm_error: Option<String>,
     features: HashSet<String>,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
@@ -353,7 +355,7 @@ impl Worker {
             idle_unload: Duration::from_secs(idle_unload_min.max(0) as u64 * 60),
             inner: Mutex::new(Inner {
                 state: STOPPED.into(), detail: "시작 전".into(), backend: String::new(), model: String::new(), rerank_note: None,
-                embed_model: String::new(), rerank_model: String::new(), ready_line: String::new(), features: HashSet::new(),
+                embed_model: String::new(), rerank_model: String::new(), ready_line: String::new(), llm_error: None, features: HashSet::new(),
                 child: None, stdin: None, parser: ChatParser::new(), pending: None, brief: None, brief_on: false, current: None,
                 t_state: Instant::now(), t_last_ask: Instant::now(), t_last_work: Instant::now(), restarts: vec![], blocked: None, stderr_tail: vec![], probe: (None, None), load_pct: 0,
                 want_running: false, cmds: VecDeque::new(), cmd: None, cmd_buf: String::new(), hold: None, gen: 0,
@@ -388,11 +390,13 @@ impl Worker {
         g.push((key.to_string(), value.to_string()));
     }
 
-    // 모델을 올려 두라
+    // 모델을 올려 두라 — 사용자가 일부러 올리는 것(다시 올리기 · 설정 바꿈)이므로 죽음 횟수도 새로 센다.
+    //   (예전에는 설정 > 모델에서 몇 번 바꾸면 내렸다 올린 것까지 세어 "재시작 한도 초과"에 걸렸다)
     pub fn ensure_started(&self) {
         let mut g = self.inner.lock().unwrap();
         g.want_running = true;
         g.blocked = None;
+        g.restarts.clear();
     }
 
     //------------------------------------------------------------------
@@ -457,6 +461,29 @@ impl Worker {
             crate::warn!("worker", "취소 전송 실패: {}", e);
         }
         true
+    }
+
+    //------------------------------------------------------------------
+    // 미리 올리기 알림 — 사용자가 질문을 치기 시작했다 (메모리 절감 설계서 C안)
+    //=> 워커는 쉬는 동안 답변 모델·리랭커를 내린다. "/warm" 한 줄을 보내 치는 동안 다시 올리게 한다.
+    //    · 워커 입력 스레드가 바로 처리하고 대답 줄을 내지 않으므로 프롬프트를 기다리지 않고 보낸다(/cancel 처럼)
+    //    · 워커가 떠 있고 "warm" 을 알 때만(옛 워커에 보내면 질문으로 읽힌다)
+    //    · 쉬는 시간도 다시 센다 — 치는 도중에 워커째 내려가지 않게
+    //
+    // -in: 없음
+    //
+    // -out: 없음
+    // -out: error = 없음 — 쓰기 실패는 경고만 남긴다
+    //------------------------------------------------------------------
+    pub fn prewarm(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if g.child.is_none() || !g.features.contains("warm") || ![READY, BUSY, INDEXING].contains(&g.state.as_str()) {
+            return;
+        }
+        g.t_last_ask = Instant::now();
+        if let Err(e) = self.write_line(&mut g, "/warm") {
+            crate::warn!("worker", "미리 올리기 전송 실패: {}", e);
+        }
     }
 
     // 사용자가 찾기를 눌렀다 — 질문과 같이 센다. 벡터 채우기 · 키워드 색인 같은 뒷일이 비켜 주고, 유휴로 내려가지 않게
@@ -585,6 +612,11 @@ impl Worker {
     //------------------------------------------------------------------
     // 설정 창용 모델 정보
     //------------------------------------------------------------------
+    // 이번 실행에서 답변 모델을 못 올렸으면 그 사유
+    pub fn llm_error(&self) -> Option<String> {
+        self.inner.lock().unwrap().llm_error.clone()
+    }
+
     pub fn info(&self) -> Value {
         let g = self.inner.lock().unwrap();
         let line = g.backend.trim();
@@ -672,6 +704,7 @@ impl Worker {
             g.embed_model.clear();
             g.rerank_model.clear();
             g.ready_line.clear();
+            g.llm_error = None;
             g.features.clear();
             g.gen += 1;
             gen = g.gen;
@@ -724,6 +757,8 @@ impl Worker {
                                 g.backend = g.backend.replace(RERANK_LOADING, &n);
                             }
                         }
+                    } else if let Some(e) = ln.strip_prefix("답변 모델 오류:") {
+                        g.llm_error = Some(e.trim().to_string());
                     } else if ln.starts_with("준비 완료") {
                         g.model = ln.split_whitespace().find(|w| w.ends_with(".gguf")).unwrap_or("").to_string();
                         g.ready_line = ln.trim().to_string();

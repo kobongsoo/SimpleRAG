@@ -23,19 +23,150 @@ use crate::pyutil;
 pub type Payload = Map<String, Value>;
 
 //------------------------------------------------------------------
-// 점 하나
-// -필드: vec = 정규화된 벡터 / payload = 본문·출처 등
+// 문서 단위 열쇠 — 같은 문서의 청크들이 한 벌을 나눠 가진다(Arc)
+//=> 경로·내용 해시는 청크마다 똑같은 값이 되풀이된다. 한 벌만 두면 메모리가 줄고,
+//   normcase(경로)를 미리 구해 두면 폴더 한정 · 비슷한 문서가 점마다 다시 계산하지 않는다.
+// -필드: path = doc_path 원래 글자 / norm = pyutil::normcase(path) / content_hash = 파일 내용 sha1
+//------------------------------------------------------------------
+#[derive(Debug)]
+pub struct DocKey {
+    pub path: Box<str>,
+    pub norm: Box<str>,
+    pub content_hash: Box<str>,
+}
+
+//------------------------------------------------------------------
+// 점 하나 (메모리 절감 설계서 A안 — payload 원문 보관)
+//=> 예전에는 payload 를 serde_json Map 으로 풀어 들고 있었다. 청크 28만 × 필드 14개라
+//   그릇 부담이 내용의 4.5배(디스크 242MB → 램 약 1.1GB)였다.
+//   이제 디스크에 쓴 JSON 글자(raw)를 그대로 들고 있다가 돌려줄 때만 풀고(1개 약 15µs),
+//   전체를 훑는 일(모두 찾기 · 폴더 한정 · 비슷한 문서 · BM25 재구축)이 쓰는 필드만 따로 꺼내 둔다.
+//   raw 를 그대로 풀므로 돌려주는 Map 은 예전과 글자 하나 다르지 않다(필드 순서 · 숫자 표기 포함).
+// -필드: vec = 정규화된 벡터(빈 벡터 = 벡터 대기) — f16 또는 f32 (B안)
+// -필드: raw = payload JSON 글자 / text = 본문 / doc = 문서 열쇠(공유)
+// -필드: chunk_idx = payload chunk_idx(없으면 0 — 정렬 기본값과 같게) / section_id = payload section_id
 //------------------------------------------------------------------
 #[derive(Debug, Clone)]
 pub struct Point {
-    pub vec: Vec<f32>,
-    pub payload: Payload,
+    vec: Vector,
+    raw: Box<str>,
+    text: Box<str>,
+    doc: std::sync::Arc<DocKey>,
+    chunk_idx: i64,
+    section_id: Option<i64>,
+}
+
+//------------------------------------------------------------------
+// 메모리 벡터 한 개 — f32 또는 반 정밀도 f16 (메모리 절감 설계서 B안)
+//=> 디스크는 늘 f32. 메모리만 f16 으로 들면 벡터 몫이 절반(약 434 → 217MB)이 된다.
+//   어느 쪽인지는 저장소를 열 때 index.vector_f16(기본 켬)으로 정한다.
+//   메모리 값을 디스크로 다시 쓰는 길(문서 복사 · 재구축 재사용)은 여기서 꺼내지 않고 sqlite 의 f32 를 읽는다
+//   — f16 으로 깎인 값이 디스크에 쌓이지 않게(points_of · take_vectors).
+//------------------------------------------------------------------
+#[derive(Debug, Clone)]
+enum Vector {
+    F32(Vec<f32>),
+    F16(Vec<u16>),
+}
+
+impl Default for Vector {
+    fn default() -> Self {
+        Vector::F32(vec![])
+    }
+}
+
+impl Vector {
+    // 정규화된 f32 벡터를 저장 방식에 맞게 담기
+    fn new(f16: bool, v: Vec<f32>) -> Vector {
+        if f16 { Vector::F16(crate::vecf16::encode(&v)) } else { Vector::F32(v) }
+    }
+
+    // 벡터 대기 점(길이 0)인가
+    fn is_empty(&self) -> bool {
+        match self {
+            Vector::F32(v) => v.is_empty(),
+            Vector::F16(v) => v.is_empty(),
+        }
+    }
+
+    // 정규화된 질의 q 와의 내적(f16 이면 칸을 풀면서 f32 로 더한다)
+    fn dot(&self, q: &[f32]) -> f32 {
+        match self {
+            Vector::F32(v) => dot(v, q),
+            Vector::F16(v) => crate::vecf16::dot(v, q),
+        }
+    }
+
+    // f32 로 꺼내기 — 질의로만 쓰는 곳(비슷한 문서의 기준 문서)
+    fn to_f32(&self) -> Vec<f32> {
+        match self {
+            Vector::F32(v) => v.clone(),
+            Vector::F16(v) => crate::vecf16::decode(v),
+        }
+    }
+}
+
+// 문서 열쇠 공유 표 — "경로\0내용해시" → 열쇠
+type DocTable = HashMap<String, std::sync::Arc<DocKey>>;
+
+impl Point {
+    //------------------------------------------------------------------
+    // payload JSON 글자로 점 만들기 — 적재 · 넣기 · 고치기가 모두 이 길로 만든다
+    //=> raw 와 훑기 필드를 늘 함께 만들어 둘이 어긋나지 않게 한다.
+    //    1) JSON 을 한 번 풀어 훑기 필드(본문 · 경로 · 해시 · 청크 번호 · 절 번호)를 꺼낸다
+    //    2) 같은 (경로, 해시) 문서 열쇠가 표에 있으면 그것을 나눠 쓰고, 없으면 새로 넣는다
+    //    3) 푼 Map 은 버리고 글자만 남긴다
+    //
+    // -in: vec = 정규화된 벡터 / raw = payload JSON 글자 / docs = 문서 열쇠 공유 표
+    //
+    // -out: 점
+    // -out: error = 없음 (JSON 이 깨졌으면 빈 payload 로 본다 — 예전 unwrap_or_default 와 같다)
+    //------------------------------------------------------------------
+    fn from_raw(vec: Vector, raw: String, docs: &mut DocTable) -> Point {
+        // 깨진 JSON 은 예전처럼 빈 payload — 돌려줄 때도 빈 Map 이 되게 "{}" 로 둔다
+        let (m, raw) = match serde_json::from_str::<Payload>(&raw) {
+            Ok(m) => (m, raw),
+            Err(_) => (Payload::new(), "{}".to_string()),
+        };
+        let path = pl_str(&m, "doc_path");
+        let hash = pl_str(&m, "content_hash");
+        let doc = docs.entry(format!("{}\0{}", path, hash)).or_insert_with(|| std::sync::Arc::new(DocKey {
+            path: path.into(),
+            norm: pyutil::normcase(path).into(),
+            content_hash: hash.into(),
+        })).clone();
+        Point {
+            vec,
+            text: pl_str(&m, "text").into(),
+            doc,
+            chunk_idx: m.get("chunk_idx").and_then(|x| x.as_i64()).unwrap_or(0),
+            section_id: m.get("section_id").and_then(|x| x.as_i64()),
+            raw: raw.into_boxed_str(),
+        }
+    }
+
+    // payload Map 으로 점 만들기 — 디스크에 쓰는 글자와 같은 글자를 raw 로
+    fn from_payload(vec: Vector, p: &Payload, docs: &mut DocTable) -> Point {
+        Point::from_raw(vec, Value::Object(p.clone()).to_string(), docs)
+    }
+
+    //------------------------------------------------------------------
+    // payload 풀기 — 돌려줄 때만 부른다(1개 약 15µs)
+    // -out: payload Map / error = 없음 (from_raw 가 늘 풀리는 글자만 남긴다)
+    //------------------------------------------------------------------
+    pub fn payload(&self) -> Payload {
+        serde_json::from_str(&self.raw).unwrap_or_default()
+    }
 }
 
 struct Inner {
     conn: Connection,
     _lock: std::fs::File,
     points: BTreeMap<i64, Point>,
+    // 문서 열쇠 공유 표 — 점을 지울 때 아무도 안 쓰는 열쇠는 걷어 낸다
+    docs: DocTable,
+    // 메모리 벡터를 f16 으로 드나(열 때 index.vector_f16 으로 정한다)
+    f16: bool,
 }
 
 //------------------------------------------------------------------
@@ -111,7 +242,76 @@ pub struct DocScan {
 // -out: 내적
 // -out: error = 없음 (길이가 다르면 짧은 쪽까지만)
 //------------------------------------------------------------------
-fn dot(a: &[f32], b: &[f32]) -> f32 {
+pub fn dot(a: &[f32], b: &[f32]) -> f32 {
+    // AVX·FMA 가 있으면 8칸을 한 명령으로 곱해 더한다(시작 때 한 번 확인한 값)
+    #[cfg(target_arch = "x86_64")]
+    if *USE_AVX {
+        // SAFETY: USE_AVX 가 참이면 이 CPU 에 avx · fma 가 있다
+        return unsafe { dot_avx(a, b) };
+    }
+    dot_plain(a, b)
+}
+
+// AVX·FMA 를 쓸까 — CPU 에 있고, SIMPLERAG_NO_AVX=1 로 끄지 않았을 때(비교 측정용 스위치)
+#[cfg(target_arch = "x86_64")]
+static USE_AVX: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
+    std::env::var("SIMPLERAG_NO_AVX").map(|v| v.trim() != "1").unwrap_or(true)
+        && is_x86_feature_detected!("avx")
+        && is_x86_feature_detected!("fma")
+});
+
+//------------------------------------------------------------------
+// 내적 — AVX·FMA 판 (메모리 절감 설계서 §5-2)
+//=> 빌드가 AVX 를 켜지 않아(기본 x86-64) dot_plain 은 SSE 4칸만 쓴다. 이 판은 8칸을 FMA 로 곱해 더한다.
+//   실측(2026-11-13, 28만 × 384): 질문당 전체 훑기 68.7ms → 28.8ms.
+//   더하는 순서가 dot_plain 과 달라 점수 끝자리(1e-7 안팎)가 다를 수 있다.
+//
+// -in: a · b = 같은 길이의 벡터
+//
+// -out: 내적
+// -out: error = 없음 (길이가 다르면 짧은 쪽까지만)
+//------------------------------------------------------------------
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx,fma")]
+unsafe fn dot_avx(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let n = a.len().min(b.len());
+    let mut acc = _mm256_setzero_ps();
+    let mut i = 0;
+    while i + 8 <= n {
+        acc = _mm256_fmadd_ps(_mm256_loadu_ps(a.as_ptr().add(i)), _mm256_loadu_ps(b.as_ptr().add(i)), acc);
+        i += 8;
+    }
+    let mut t = [0f32; 8];
+    _mm256_storeu_ps(t.as_mut_ptr(), acc);
+    let mut s: f32 = t.iter().sum();
+    // 8 로 나눠떨어지지 않는 꼬리
+    while i < n {
+        s += a[i] * b[i];
+        i += 1;
+    }
+    s
+}
+
+//------------------------------------------------------------------
+// 디스크(sqlite)의 벡터 한 개 — 정규화한 f32
+//=> 메모리 벡터는 f16 일 수 있어, 디스크로 다시 쓸 벡터(문서 복사 · 재구축 재사용)는 여기서 읽는다.
+//   정규화까지 하므로 f32 모드에서는 예전 메모리 값과 똑같다. 벡터 대기 점은 빈 벡터.
+//
+// -in: st = "SELECT vec FROM points WHERE id = ?1" 문 / id = 점 id
+//
+// -out: 정규화한 벡터
+// -out: error = sqlite 읽기 실패(점이 없음 포함)면 Err
+//------------------------------------------------------------------
+fn disk_vec(st: &mut rusqlite::Statement, id: i64) -> Result<Vec<f32>, String> {
+    let b: Vec<u8> = st.query_row(params![id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let mut v = from_blob(&b);
+    normalize(&mut v);
+    Ok(v)
+}
+
+// 내적 — 명령 없는 판(8칸 묶음, 컴파일러가 SSE 로 묶는다)
+fn dot_plain(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len().min(b.len());
     let mut acc = [0f32; 8];
     let mut i = 0;
@@ -143,7 +343,7 @@ fn scan_part(part: &[(&i64, &Point)], qs: &[Vec<f32>], bodies: &HashSet<u64>, bo
     let mut out = DocScan::default();
     let mut at: HashMap<&str, usize> = HashMap::new();
     for (id, p) in part {
-        let d = pl_str(&p.payload, "doc_path");
+        let d: &str = &p.doc.path;
         let j = match at.get(d) {
             Some(&j) => j,
             None => {
@@ -152,17 +352,18 @@ fn scan_part(part: &[(&i64, &Point)], qs: &[Vec<f32>], bodies: &HashSet<u64>, bo
                 out.best.push(vec![(-1.0, -1); qs.len()]);
                 out.same.push(HashSet::new());
                 out.chunks.push(0);
-                out.first.push((**id, p.payload.clone()));
+                // 대표 payload 는 id 만 적어 두고, 합친 뒤 문서마다 한 번만 푼다(doc_max_scan)
+                out.first.push((**id, Payload::new()));
                 out.docs.len() - 1
             }
         };
         out.chunks[j] += 1;
         if **id < out.first[j].0 {
-            out.first[j] = (**id, p.payload.clone());
+            out.first[j].0 = **id;
         }
         // 본문이 기준 문서와 그대로 같은가 — 사본 · 다른 판 판정
         if !bodies.is_empty() {
-            if let Some(k) = body_key(pl_str(&p.payload, "text")) {
+            if let Some(k) = body_key(&p.text) {
                 if bodies.contains(&k) {
                     out.same[j].insert(k);
                 }
@@ -173,7 +374,7 @@ fn scan_part(part: &[(&i64, &Point)], qs: &[Vec<f32>], bodies: &HashSet<u64>, bo
             continue;
         }
         for (q, qv) in qs.iter().enumerate() {
-            let s = dot(&p.vec, qv);
+            let s = p.vec.dot(qv);
             if s > out.best[j][q].0 {
                 out.best[j][q] = (s, **id);
             }
@@ -221,6 +422,8 @@ impl VectorStore {
             CREATE TABLE IF NOT EXISTS bm25_tf (id INTEGER PRIMARY KEY, terms BLOB NOT NULL);")
             .map_err(|e| e.to_string())?;
         let mut points = BTreeMap::new();
+        let mut docs = DocTable::new();
+        let f16 = cfg().vector_f16;
         {
             let mut st = conn.prepare("SELECT id, vec, payload FROM points").map_err(|e| e.to_string())?;
             let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, String>(2)?)))
@@ -228,11 +431,11 @@ impl VectorStore {
             for row in rows.flatten() {
                 let mut v = from_blob(&row.1);
                 normalize(&mut v);
-                let payload = serde_json::from_str::<Payload>(&row.2).unwrap_or_default();
-                points.insert(row.0, Point { vec: v, payload });
+                // payload 는 디스크 글자 그대로 들고 훑기 필드만 꺼낸다(A안)
+                points.insert(row.0, Point::from_raw(Vector::new(f16, v), row.2, &mut docs));
             }
         }
-        *self.inner.lock().unwrap() = Some(Inner { conn, _lock: lock, points });
+        *self.inner.lock().unwrap() = Some(Inner { conn, _lock: lock, points, docs, f16 });
         Ok(t0.elapsed().as_secs_f64() * 1000.0)
     }
 
@@ -250,13 +453,15 @@ impl VectorStore {
     //    1) 점마다 key(payload) 로 지문을 구한다(같은 지문은 처음 것 하나만 — 같은 글이면 벡터도 같다)
     //    2) 벡터가 빈 점(벡터 대기)은 넣지 않는다 — 다시 쓸 것이 없다
     //    3) 모델 확인용 견본 (글, 벡터) 를 고르게 최대 n_sample 개 함께 돌려준다
-    //   메모리의 벡터를 옮겨 오므로(복사 아님) 이 뒤에는 반드시 recreate() 로 비워야 한다.
+    //   벡터는 메모리(f16 일 수 있음)가 아니라 sqlite 의 f32 를 읽어 정규화한다 — 재구축을 거칠 때마다
+    //   f16 으로 깎인 값이 디스크에 쌓이지 않게(B안). f32 모드에서는 예전 메모리 값과 똑같다.
+    //   읽은 점의 메모리 벡터는 비운다 — 이 뒤에는 반드시 recreate() 로 비워야 한다.
     //
     // -in: key      = payload → 청크 지문
     // -in: n_sample = 견본 수
     //
     // -out: (지문 → 벡터, 견본 [(글, 벡터)])
-    // -out: error = 저장소 적재 실패면 Err
+    // -out: error = 저장소 적재 · sqlite 읽기 실패면 Err
     //------------------------------------------------------------------
     pub fn take_vectors(&self, key: impl Fn(&Payload) -> String, n_sample: usize)
                         -> Result<(HashMap<String, Vec<f32>>, Vec<(String, Vec<f32>)>), String> {
@@ -266,17 +471,22 @@ impl VectorStore {
             let step = (n / n_sample.max(1)).max(1);
             let mut pool: HashMap<String, Vec<f32>> = HashMap::with_capacity(n);
             let mut samples = vec![];
-            for (i, p) in inn.points.values_mut().enumerate() {
+            let mut st = inn.conn.prepare("SELECT vec FROM points WHERE id = ?1").map_err(|e| e.to_string())?;
+            for (i, (id, p)) in inn.points.iter_mut().enumerate() {
                 if p.vec.is_empty() {
                     continue;
                 }
-                if i % step == 0 && samples.len() < n_sample {
-                    samples.push((pl_str(&p.payload, "text").to_string(), p.vec.clone()));
+                let need_sample = i % step == 0 && samples.len() < n_sample;
+                // 지문 함수는 payload 를 받는다 — 재구축 때 한 번뿐이라 점마다 풀어 넘긴다
+                let k = key(&p.payload());
+                if need_sample || !pool.contains_key(&k) {
+                    let v = disk_vec(&mut st, *id)?;
+                    if need_sample {
+                        samples.push((p.text.to_string(), v.clone()));
+                    }
+                    pool.entry(k).or_insert(v);
                 }
-                let k = key(&p.payload);
-                if !pool.contains_key(&k) {
-                    pool.insert(k, std::mem::take(&mut p.vec));
-                }
+                p.vec = Vector::default();
             }
             Ok((pool, samples))
         })
@@ -291,6 +501,7 @@ impl VectorStore {
             // id 를 0 부터 다시 쓰므로 옛 토큰 표도 비운다
             inn.conn.execute("DELETE FROM bm25_tf", []).map_err(|e| e.to_string())?;
             inn.points.clear();
+            inn.docs.clear();
             let left: i64 = inn.conn.query_row("SELECT COUNT(*) FROM points", [], |r| r.get(0)).map_err(|e| e.to_string())?;
             if left != 0 {
                 return Err(format!("RuntimeError: 컬렉션을 비우지 못했습니다(점 {}개 남음): {}", pyutil::comma(left), self.path));
@@ -315,8 +526,11 @@ impl VectorStore {
             for ((id, v), p) in ids.iter().zip(vectors).zip(payloads) {
                 let mut vv = v.clone();
                 normalize(&mut vv);
-                inn.points.insert(*id, Point { vec: vv, payload: p.clone() });
+                // 디스크에 쓴 것과 같은 글자를 raw 로 — 같은 id 를 바꾸면 옛 점의 문서 열쇠는 아래 청소가 걷는다
+                let pt = Point::from_payload(Vector::new(inn.f16, vv), p, &mut inn.docs);
+                inn.points.insert(*id, pt);
             }
+            Self::prune_docs(inn);
             Ok(())
         })
     }
@@ -340,7 +554,13 @@ impl VectorStore {
         for id in ids {
             inn.points.remove(id);
         }
+        Self::prune_docs(inn);
         Ok(())
+    }
+
+    // 아무 점도 안 쓰는 문서 열쇠 걷어 내기(표 자신만 쥐고 있으면 strong_count 가 1)
+    fn prune_docs(inn: &mut Inner) {
+        inn.docs.retain(|_, d| std::sync::Arc::strong_count(d) > 1);
     }
 
     //------------------------------------------------------------------
@@ -348,7 +568,7 @@ impl VectorStore {
     //------------------------------------------------------------------
     pub fn delete_doc(&self, doc_path: &str) -> Result<(), String> {
         self.with(|inn| {
-            let ids: Vec<i64> = inn.points.iter().filter(|(_, p)| pl_str(&p.payload, "doc_path") == doc_path).map(|(i, _)| *i).collect();
+            let ids: Vec<i64> = inn.points.iter().filter(|(_, p)| &*p.doc.path == doc_path).map(|(i, _)| *i).collect();
             Self::delete_where(inn, &ids)
         })
     }
@@ -360,7 +580,7 @@ impl VectorStore {
         let keep: HashSet<i64> = keep_ids.iter().copied().collect();
         self.with(|inn| {
             let ids: Vec<i64> = inn.points.iter()
-                .filter(|(i, p)| pl_str(&p.payload, "doc_path") == doc_path && !keep.contains(i))
+                .filter(|(i, p)| &*p.doc.path == doc_path && !keep.contains(i))
                 .map(|(i, _)| *i).collect();
             Self::delete_where(inn, &ids)
         })
@@ -379,29 +599,38 @@ impl VectorStore {
                 let mut st = tx.prepare("UPDATE points SET payload = ?2 WHERE id = ?1").map_err(|e| e.to_string())?;
                 for id in ids {
                     if let Some(p) = inn.points.get_mut(id) {
+                        // 풀어서 덮어쓰고 다시 점으로 — raw 와 훑기 필드(경로 등)를 함께 새로 만든다
+                        let mut pl = p.payload();
                         for (k, v) in payload {
-                            p.payload.insert(k.clone(), v.clone());
+                            pl.insert(k.clone(), v.clone());
                         }
-                        st.execute(params![id, Value::Object(p.payload.clone()).to_string()]).map_err(|e| e.to_string())?;
+                        let vec = std::mem::take(&mut p.vec);
+                        *p = Point::from_payload(vec, &pl, &mut inn.docs);
+                        st.execute(params![id, &*p.raw]).map_err(|e| e.to_string())?;
                     }
                 }
             }
-            tx.commit().map_err(|e| e.to_string())
+            tx.commit().map_err(|e| e.to_string())?;
+            Self::prune_docs(inn);
+            Ok(())
         })
     }
 
     //------------------------------------------------------------------
     // 점들의 벡터·payload 읽기(문서 복사본) — 하나라도 없으면 None
+    //=> 돌려준 벡터는 새 점으로 디스크에 다시 쓰인다. 그래서 메모리(f16 일 수 있음)가 아니라
+    //   sqlite 의 f32 를 읽는다(disk_vec — 정규화까지 해 f32 모드에서는 예전과 같다).
     //------------------------------------------------------------------
     pub fn points_of(&self, ids: &[i64]) -> Result<Option<(Vec<Vec<f32>>, Vec<Payload>)>, String> {
         self.with(|inn| {
             let mut vs = vec![];
             let mut ps = vec![];
+            let mut st = inn.conn.prepare("SELECT vec FROM points WHERE id = ?1").map_err(|e| e.to_string())?;
             for id in ids {
                 match inn.points.get(id) {
                     Some(p) => {
-                        vs.push(p.vec.clone());
-                        ps.push(p.payload.clone());
+                        vs.push(disk_vec(&mut st, *id)?);
+                        ps.push(p.payload());
                     }
                     None => return Ok(None),
                 }
@@ -425,10 +654,18 @@ impl VectorStore {
             // 벡터 대기 점(길이 0)은 건너뛴다 — 0점으로 줄 세우지 않는다(BM25 로만 찾힌다)
             let mut scored: Vec<(f32, i64)> = inn.points.iter()
                 .filter(|(i, p)| !p.vec.is_empty() && allow.map(|a| a.contains(i)).unwrap_or(true))
-                .map(|(i, p)| (p.vec.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>(), *i)).collect();
-            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
-            scored.truncate(limit);
-            Ok(scored.into_iter().map(|(s, i)| (i, s, inn.points[&i].payload.clone())).collect())
+                // 내적은 비슷한 문서 찾기와 같은 dot(AVX) — 예전 한 칸씩 더하기보다 몇 배 빠르다
+                .map(|(i, p)| (p.vec.dot(&q), *i)).collect();
+            let cmp = |a: &(f32, i64), b: &(f32, i64)| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1));
+            // 28만 개를 다 정렬하지 않고 상위 limit 개만 골라 정렬한다 — 비교에 id 가 들어가 동점이 없으므로
+            //   고른 묶음 · 순서가 전체 정렬과 똑같다
+            if limit < scored.len() {
+                scored.select_nth_unstable_by(limit, cmp);
+                scored.truncate(limit);
+            }
+            scored.sort_by(cmp);
+            // 돌려줄 점만 payload 를 푼다
+            Ok(scored.into_iter().map(|(s, i)| (i, s, inn.points[&i].payload())).collect())
         })
     }
 
@@ -444,12 +681,13 @@ impl VectorStore {
     pub fn doc_points(&self, doc_path: &str) -> Result<Vec<(i64, Vec<f32>, Payload)>, String> {
         let want = pyutil::normcase(doc_path);
         self.with(|inn| {
-            let mut v: Vec<(i64, Vec<f32>, Payload)> = inn.points.iter()
-                .filter(|(_, p)| pyutil::normcase(pl_str(&p.payload, "doc_path")) == want)
-                .map(|(i, p)| (*i, p.vec.clone(), p.payload.clone())).collect();
+            let mut v: Vec<(i64, &Point)> = inn.points.iter()
+                .filter(|(_, p)| *p.doc.norm == *want)
+                .map(|(i, p)| (*i, p)).collect();
             // 문서 순서대로 — 고른 간격으로 뽑을 때 문서 전체에 고르게 퍼지게
-            v.sort_by_key(|(i, _, p)| (p.get("chunk_idx").and_then(|x| x.as_i64()).unwrap_or(0), *i));
-            Ok(v)
+            v.sort_by_key(|(i, p)| (p.chunk_idx, *i));
+            // 기준 문서 벡터는 질의로만 쓴다 — f16 이면 f32 로 풀어 준다
+            Ok(v.into_iter().map(|(i, p)| (i, p.vec.to_f32(), p.payload())).collect())
         })
     }
 
@@ -467,8 +705,8 @@ impl VectorStore {
             return Ok(None);
         }
         self.with(|inn| {
-            Ok(inn.points.values().filter(|p| pl_str(&p.payload, "content_hash") == hash)
-                .map(|p| pl_str(&p.payload, "doc_path").to_string()).min())
+            Ok(inn.points.values().filter(|p| &*p.doc.content_hash == hash)
+                .map(|p| p.doc.path.to_string()).min())
         })
     }
 
@@ -536,6 +774,12 @@ impl VectorStore {
                     }
                 }
             }
+            // 대표 payload 는 문서마다 한 번만 푼다(A안 — 점마다 복사하지 않는다)
+            for f in out.first.iter_mut() {
+                if let Some(pt) = inn.points.get(&f.0) {
+                    f.1 = pt.payload();
+                }
+            }
             Ok(out)
         })
     }
@@ -544,7 +788,7 @@ impl VectorStore {
     // id 들의 payload (없는 id 는 빠진다)
     //------------------------------------------------------------------
     pub fn payloads(&self, ids: &[i64]) -> Result<HashMap<i64, Payload>, String> {
-        self.with(|inn| Ok(ids.iter().filter_map(|i| inn.points.get(i).map(|p| (*i, p.payload.clone()))).collect()))
+        self.with(|inn| Ok(ids.iter().filter_map(|i| inn.points.get(i).map(|p| (*i, p.payload()))).collect()))
     }
 
     //------------------------------------------------------------------
@@ -557,9 +801,9 @@ impl VectorStore {
             let mut docs = HashSet::new();
             let mut ids = HashSet::new();
             for (i, p) in &inn.points {
-                let d = pl_str(&p.payload, "doc_path");
-                if under(&pyutil::normcase(d), &f) {
-                    docs.insert(d.to_string());
+                // normcase 는 문서 열쇠에 미리 구해 둔 값
+                if under(&p.doc.norm, &f) {
+                    docs.insert(p.doc.path.to_string());
                     ids.insert(*i);
                 }
             }
@@ -582,9 +826,9 @@ impl VectorStore {
             let mut seen = HashSet::new();
             let mut ids = HashSet::new();
             for (i, p) in &inn.points {
-                let d = pyutil::normcase(pl_str(&p.payload, "doc_path"));
-                if want.contains(&d) && f.as_ref().map_or(true, |f| under(&d, f)) {
-                    seen.insert(d);
+                let d: &str = &p.doc.norm;
+                if want.contains(d) && f.as_ref().map_or(true, |f| under(d, f)) {
+                    seen.insert(d.to_string());
                     ids.insert(*i);
                 }
             }
@@ -597,11 +841,11 @@ impl VectorStore {
     //------------------------------------------------------------------
     pub fn section_chunks(&self, doc_path: &str, section_id: i64) -> Result<Vec<Payload>, String> {
         self.with(|inn| {
-            let mut v: Vec<Payload> = inn.points.values()
-                .filter(|p| pl_str(&p.payload, "doc_path") == doc_path && p.payload.get("section_id").and_then(|x| x.as_i64()) == Some(section_id))
-                .map(|p| p.payload.clone()).collect();
-            v.sort_by_key(|p| p.get("chunk_idx").and_then(|x| x.as_i64()).unwrap_or(0));
-            Ok(v)
+            let mut v: Vec<&Point> = inn.points.values()
+                .filter(|p| &*p.doc.path == doc_path && p.section_id == Some(section_id))
+                .collect();
+            v.sort_by_key(|p| p.chunk_idx);
+            Ok(v.into_iter().map(|p| p.payload()).collect())
         })
     }
 
@@ -609,14 +853,14 @@ impl VectorStore {
     // 모든 점의 (id, 본문, doc_path) — id 순 (BM25 재구축·고아 청소)
     //------------------------------------------------------------------
     pub fn scroll_all(&self) -> Result<Vec<(i64, String, String)>, String> {
-        self.with(|inn| Ok(inn.points.iter().map(|(i, p)| (*i, pl_str(&p.payload, "text").to_string(), pl_str(&p.payload, "doc_path").to_string())).collect()))
+        self.with(|inn| Ok(inn.points.iter().map(|(i, p)| (*i, p.text.to_string(), p.doc.path.to_string())).collect()))
     }
 
     //------------------------------------------------------------------
     // 모든 점의 (id, doc_path) — id 순 (고아 청소 — 본문은 읽지 않는다)
     //------------------------------------------------------------------
     pub fn doc_paths(&self) -> Result<Vec<(i64, String)>, String> {
-        self.with(|inn| Ok(inn.points.iter().map(|(i, p)| (*i, pl_str(&p.payload, "doc_path").to_string())).collect()))
+        self.with(|inn| Ok(inn.points.iter().map(|(i, p)| (*i, p.doc.path.to_string())).collect()))
     }
 
     //------------------------------------------------------------------
@@ -651,7 +895,7 @@ impl VectorStore {
                 if allow.is_some_and(|a| !a.contains(i)) {
                     continue;
                 }
-                let text = pl_str(&p.payload, "text");
+                let text: &str = &p.text;
                 let body = if text.starts_with('[') { text.find("]\n").map_or(text, |k| &text[k + 2..]) } else { text };
                 let low;
                 let hay: &str = if fold {
@@ -668,7 +912,7 @@ impl VectorStore {
                     }
                 }
                 if mask != 0 {
-                    out.push((*i, mask, pl_str(&p.payload, "doc_path").to_string()));
+                    out.push((*i, mask, p.doc.path.to_string()));
                 }
             }
             Ok(out)
@@ -676,7 +920,7 @@ impl VectorStore {
     }
 
     pub fn texts_of(&self, ids: &[i64]) -> Result<Vec<String>, String> {
-        self.with(|inn| Ok(ids.iter().map(|i| inn.points.get(i).map(|p| pl_str(&p.payload, "text").to_string()).unwrap_or_default()).collect()))
+        self.with(|inn| Ok(ids.iter().map(|i| inn.points.get(i).map(|p| p.text.to_string()).unwrap_or_default()).collect()))
     }
 
     //------------------------------------------------------------------
@@ -762,7 +1006,7 @@ impl VectorStore {
     //------------------------------------------------------------------
     pub fn pending_batch(&self, limit: usize) -> Result<Vec<(i64, String, String)>, String> {
         self.with(|inn| Ok(inn.points.iter().filter(|(_, p)| p.vec.is_empty()).take(limit)
-            .map(|(i, p)| (*i, pl_str(&p.payload, "text").to_string(), pl_str(&p.payload, "doc_path").to_string())).collect()))
+            .map(|(i, p)| (*i, p.text.to_string(), p.doc.path.to_string())).collect()))
     }
 
     //------------------------------------------------------------------
@@ -792,7 +1036,7 @@ impl VectorStore {
                 if let Some(p) = inn.points.get_mut(id) {
                     let mut vv = v.clone();
                     normalize(&mut vv);
-                    p.vec = vv;
+                    p.vec = Vector::new(inn.f16, vv);
                 }
             }
             Ok(n)
@@ -837,4 +1081,64 @@ pub fn norm_dir(path: &str) -> String {
 // doc 이 폴더 아래(하위 포함)인가
 pub fn under(doc_norm: &str, folder_norm: &str) -> bool {
     doc_norm.starts_with(&format!("{}\\", folder_norm))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 시험용 payload — 문서 경로 · 본문 · 청크 번호
+    fn pl(doc: &str, text: &str, ci: i64) -> Payload {
+        let mut m = Payload::new();
+        m.insert("doc_path".into(), Value::String(doc.into()));
+        m.insert("text".into(), Value::String(text.into()));
+        m.insert("chunk_idx".into(), Value::from(ci));
+        m.insert("content_hash".into(), Value::String(format!("h-{}", doc)));
+        m
+    }
+
+    //------------------------------------------------------------------
+    // f16 이 디스크로 새지 않는가 (메모리 절감 설계서 B안 §5-4)
+    //=> 메모리는 f16(설정 기본)이어도, 문서 복사(points_of) · 재구축 재사용(take_vectors)이 돌려주는 벡터는
+    //   디스크 f32 를 정규화한 값과 '비트까지' 같아야 한다. f16 왕복 값이면 끝자리가 달라 실패한다.
+    //   payload 는 넣은 것과 같고(A안), 검색 · 기준 문서 벡터도 f16 오차 안에서 맞아야 한다.
+    //------------------------------------------------------------------
+    #[test]
+    fn disk_vectors_not_rounded() {
+        let dir = std::env::temp_dir().join(format!("srag_store_f16_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = VectorStore::new(Some(dir.to_string_lossy().to_string()));
+        // f16 으로 딱 떨어지지 않는 값들
+        let raw: Vec<Vec<f32>> = (0..3).map(|k| (0..16).map(|i| 0.1 + (i as f32) * 0.0123 + k as f32 * 0.37).collect()).collect();
+        let pls = vec![pl("D:/a/x.txt", "가 나", 0), pl("D:/a/x.txt", "다 라", 1), pl("D:/b/y.txt", "마", 0)];
+        store.upsert(&[1, 2, 3], &raw, &pls).unwrap();
+        let norm = |v: &Vec<f32>| {
+            let mut w = v.clone();
+            normalize(&mut w);
+            w
+        };
+        // payload 그대로
+        let got = store.payloads(&[1, 2, 3]).unwrap();
+        assert_eq!(got[&2], pls[1]);
+        // 문서 복사 — 디스크 f32 정규화 값과 비트까지 같다
+        let (vs, ps) = store.points_of(&[1, 3]).unwrap().unwrap();
+        assert_eq!(vs[0], norm(&raw[0]));
+        assert_eq!(vs[1], norm(&raw[2]));
+        assert_eq!(ps[1], pls[2]);
+        // 메모리가 f16 이면 기준 문서 벡터는 f16 오차 안
+        let dp = store.doc_points("d:/a/x.txt").unwrap();
+        assert_eq!(dp.len(), 2);
+        for (a, b) in dp[0].1.iter().zip(norm(&raw[0]).iter()) {
+            assert!((a - b).abs() < 2e-3);
+        }
+        // 검색 — 자기 자신이 1등
+        let hit = store.search(&raw[2], 1, None).unwrap();
+        assert_eq!(hit[0].0, 3);
+        // 재구축 재사용 — 지문(본문)별 벡터도 디스크 값 그대로
+        let (pool, samples) = store.take_vectors(|p| pl_str(p, "text").to_string(), 2).unwrap();
+        assert_eq!(pool["다 라"], norm(&raw[1]));
+        assert!(!samples.is_empty());
+        store.close();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

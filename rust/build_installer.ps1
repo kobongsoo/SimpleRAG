@@ -1,8 +1,8 @@
 ﻿# ------------------------------------------------------------------
 # 설치 파일 만들기
-# => dist-rust 의 배포 파일로 설치 파일 2개를 dist-rust 에 만든다.
-#    · MoAISearch_Setup_<버전>.exe               = 프로그램 + 기본 모델
-#    · MoAISearch_PrecisionModel_Setup_<버전>.exe = 정밀 모드 모델(Qwen3-4B) 추가 설치
+# => dist-rust 의 배포 파일로 MoAISearch_Setup_<버전>.exe(프로그램 + 기본 모델 Qwen3-1.7B)를 dist-rust 에 만든다.
+#    다른 답변 모델은 앱 버전과 따로 rust\build_model_installers.py 로 모델별 설치 파일을 만들어
+#    GitHub 릴리스 models-1 에 올린다 — 설정 > 모델에서 받는다(모델 받기 설계서 §7). 예전 정밀 모드 설치 파일은 없앴다.
 #    1) 개발 PC 폴더가 들어 있지 않은 빈 ini 를 만든다(저장소의 RAGSearchBox\RAGSearchBox.ini 기준)
 #    2) Inno Setup 으로 묶는다 — 먼저 build_dist.ps1 을 실행해 둔다
 #
@@ -35,10 +35,4 @@ Push-Location $rust
 $code = $LASTEXITCODE
 Pop-Location
 if ($code -ne 0) { throw "Inno Setup 실패 ($code)" }
-# 정밀 모드 모델은 2.5GB 라 따로 묶는다
-Push-Location $rust
-& $iscc "/DAppVersion=$ver" "/DDist=$dist" "installer_precision.iss"
-$code = $LASTEXITCODE
-Pop-Location
-if ($code -ne 0) { throw "Inno Setup 실패 - 정밀 모드 모델 ($code)" }
-"완료 — $dist\MoAISearch_Setup_$ver.exe · MoAISearch_PrecisionModel_Setup_$ver.exe"
+"완료 — $dist\MoAISearch_Setup_$ver.exe (모델별 설치 파일은 rust\build_model_installers.py)"

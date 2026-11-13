@@ -79,6 +79,24 @@ def _choice(*choices):
 
 
 #------------------------------------------------------------------
+# 모델 별칭 검사 — 모양만 본다(소문자 영숫자 · '.' · '-' · '_', 64자까지)
+#=> 설정 > 모델에서 받은 모델(qwen3.5-4b-q4 등)도 고를 수 있게 선택지를 고정하지 않는다.
+#   별칭이 모델 표에 실제로 있는지는 config.py 가 GEN_MODELS 로 본다(Rust 판 Check::Alias 와 같다).
+#
+# -in: v = 값
+#
+# -out: (소문자 별칭, 오류문 또는 None)
+# -out: error = 없음
+#------------------------------------------------------------------
+def _alias(v):
+    s = str(v).strip().lower()
+    # 비었거나 너무 길거나 허용 밖 글자가 섞이면 오타로 본다
+    if not s or len(s) > 64 or not all(c.isascii() and (c.isalnum() or c in ".-_") for c in s):
+        return v, "모델 별칭(예: qwen3-1.7b-q4)이어야 합니다"
+    return s, None
+
+
+#------------------------------------------------------------------
 # 참/거짓 검사
 #
 # -in: v = 값
@@ -235,6 +253,8 @@ SCHEMA = {
     "index": {
         # 새로 임베딩할 청크가 이보다 많으면 BM25 먼저 · 벡터는 나중에(단계형, 0 = 끔)
         "defer_vectors_over": _int(0, 100_000_000),
+        # 메모리 벡터를 반 정밀도(f16)로 — Rust 판 저장소만 쓴다(메모리 절감 설계서 B안). 여기서는 검사만
+        "vector_f16": _bool,
     },
     "rerank": {
         "mode": _rerank_mode,
@@ -243,16 +263,20 @@ SCHEMA = {
     "generation": {
         "top_k": _int(1, 20),
         "max_tokens": _int(16, 1024),             # 답변 토큰 상한 — n_ctx(2048) 안에 근거 자리를 남긴다
+        # 쉬면 생성 모델·리랭커 내리기(분, 0 = 끔) — Rust 판 chat 워커만 쓴다(메모리 절감 설계서 C안). 여기서는 검사만
+        "idle_unload_min": _int(0, 1440),
         # 시스템 지시문 — v0 | v4 | v5 는 generate/prompts.py PROMPTS, custom 은 아래 system_prompt 글
         "prompt": _choice("v0", "v4", "v5", "custom"),
         "system_prompt": _text(1000),             # prompt: custom 일 때 쓰는 지시문 글
-        # 기본 생성 모델 — 빠름(0.6B) | 정밀(1.7B, 기본) | 한국어(Mi:dm 2.0 Mini). config.USER_GEN_MODELS 와 같게
-        "model": _choice("qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"),
+        # 답변 모델 별칭 — 모델 표(config.GEN_MODELS)에 있는지는 config.py 가 본다(설정 > 모델에서 받은 모델 포함)
+        "model": _alias,
         # 근거 표를 "머리글: 값" 평문으로 펴서 넣는다(계획서 3-3, tableflat.py)
         "flatten_tables": _bool,
         # 지시문 되뱉기 거르기 — 켜면 화면 첫 글자가 약 2초 늦어진다(기본 끔)
         "echo_filter": _bool,
         "precision": _bool,
+        # 근거에 이웃 청크 붙이기 — auto(모델마다, 기본) | on | off
+        "neighbors": _rerank_mode,
         "multiturn": _bool,
         # Parent-Child 실험 A — sLLM 에 청크 대신 그 청크의 절(부모)을 넣는다(재설계서 §12)
         "parent": _parent_mode,                     # off | section — YAML 의 off(=false)도 받는다

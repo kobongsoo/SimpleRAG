@@ -18,7 +18,9 @@ mod logview;
 mod monitor;
 mod panel;
 mod people;
-mod precision;
+mod cfgline;
+mod hwinfo;
+mod models;
 mod scope;
 mod settings;
 mod synonyms;
@@ -110,8 +112,10 @@ struct InfoWin {
     ppl_msg: String,
     ppl_done: Arc<Mutex<Option<String>>>,
     ppl_running: Arc<std::sync::atomic::AtomicBool>,
-    // 마지막 정밀 모드 바꾸기 결과(체크 아래 안내 줄)
-    prec_msg: String,
+    // 설정 > 모델 마지막 결과 글 · 모델 탭을 보고 있나 · 상세 화면 내용을 보냈나
+    model_msg: String,
+    models_open: bool,
+    models_info_sent: bool,
     // 마지막 이어서 묻기(멀티턴) 바꾸기 결과
     mt_msg: String,
     // 마지막 인덱싱 확장자 바꾸기 결과
@@ -253,6 +257,10 @@ struct App {
     // 모델 준비 막대를 보이는 중인가 · 마지막으로 보낸 때
     load_shown: bool,
     t_load: Instant,
+    // 설정 > 모델 — 목록 · 받기 관리, 이 PC 사양(읽은 때와 함께, 10초 묵히기), 바꾸는 중인 모델(이전 별칭, 새 별칭)
+    models: models::Models,
+    hw: Option<(hwinfo::Hw, Instant)>,
+    model_switch: Option<(String, String)>,
 }
 
 //------------------------------------------------------------------
@@ -345,6 +353,12 @@ impl App {
         if let Some(e) = &self.worker_error {
             self.tray.notify("MoAI-S", e);
         }
+        // 0.1.3 정밀 모드 → 설정 > 모델 (워커를 올리기 전에 — 워커는 시작할 때 config.yaml 을 읽는다)
+        let old4b = self.model_dirs().iter().any(|d| d.join(cfgline::OLD_PRECISION_FILE).is_file());
+        if let Some(msg) = cfgline::migrate_precision(self.config_path().as_deref(), old4b) {
+            crate::info!("app", "{}", msg);
+            self.info.model_msg = msg;
+        }
         if self.s.searchbox_trigger {
             crate::warn!("app", "[Trigger] SearchBox=1(검색창 ? 질문)은 Rust 판에서 지원하지 않는다 — 폴더 패널만 동작한다");
         }
@@ -421,6 +435,7 @@ impl App {
         }
         self.pump_uploads();
         self.pump_finds();
+        self.pump_models();
         if self.t_cand.elapsed() >= Duration::from_secs(60) {
             self.t_cand = Instant::now();
             self.check_candidates();
@@ -1385,6 +1400,7 @@ impl App {
     fn on_worker(&mut self, ev: WEvent) {
         match ev {
             WEvent::State(state, detail) => {
+                self.check_model_switch(&state, &detail);
                 if state == worker::STARTING {
                     self.panel.set_state("모델 준비 중 (첫 질문)");
                 } else if state == worker::STOPPED && detail.contains("인덱스") {
@@ -1526,30 +1542,214 @@ impl App {
     }
 
     //------------------------------------------------------------------
-    // 설정 창 [정밀 모드]·[이어서 묻기] 체크 — config.yaml 의 generation 한 줄을 바꾸고 모델을 다시 올린다
+    // 설정 창 [이어서 묻기] 체크 — config.yaml 의 generation 한 줄을 바꾸고 모델을 다시 올린다
     //   (Python _set_flag 와 같다). 워커는 시작할 때만 config.yaml 을 읽는다.
     //   올라가 있으면 내렸다 다시 올리고, 내려가 있으면 다음 질문 때 새 설정으로 올라간다
-    //   key = precision | multiturn · label = 안내 글의 이름 · wait = 다시 올리는 데 걸리는 시간 안내
+    //   key = multiturn · label = 안내 글의 이름 · wait = 다시 올리는 데 걸리는 시간 안내
     //------------------------------------------------------------------
     fn set_flag(&mut self, key: &str, label: &str, on: bool, wait: &str) -> String {
-        let (home, app) = (self.data_home(), self.app_dir());
-        let cfgp = precision::config_path(home.as_deref(), app.as_deref());
-        let mut msg = match precision::save(cfgp.as_deref(), on, key, label) {
+        let cfgp = self.config_path();
+        let mut msg = match cfgline::save(cfgp.as_deref(), on, key, label) {
             Ok(m) => m,
             Err(e) => return e,
         };
         crate::info!("app", "{} {}: {}", label, if on { "켬" } else { "끔" }, msg);
-        if let Some(w) = &self.worker {
-            if w.availability() != "down" {
-                w.unload(&format!("{} 변경", label));
+        msg += &self.restart_worker(label, wait);
+        msg
+    }
+
+    // 워커가 떠 있으면 내렸다 다시 올린다 — 돌려줌: 덧붙일 안내 글
+    fn restart_worker(&mut self, why: &str, wait: &str) -> String {
+        match &self.worker {
+            Some(w) if w.availability() != "down" => {
+                w.unload(&format!("{} 변경", why));
                 w.start();
                 w.ensure_started();
-                msg += &format!(" — 모델을 다시 올리는 중입니다 ({})", wait);
-            } else {
-                msg += " — 다음 질문 때 새 설정으로 모델을 올립니다";
+                format!(" — 모델을 다시 올리는 중입니다 ({})", wait)
+            }
+            Some(_) => " — 다음 질문 때 새 설정으로 모델을 올립니다".into(),
+            None => String::new(),
+        }
+    }
+
+    // 워커가 읽는 config.yaml
+    fn config_path(&self) -> Option<String> {
+        cfgline::config_path(self.data_home().as_deref(), self.app_dir().as_deref())
+    }
+
+    //------------------------------------------------------------------
+    // 모델을 찾을 폴더들 — SIMPLERAG_MODELS_DIR → 데이터 폴더 models → 프로그램 폴더 models → 옆 Python 배포본 models
+    //   (워커 config.rs find_model_file 과 같은 순서). 첫 칸이 모델이 설치될 폴더다
+    //------------------------------------------------------------------
+    fn model_dirs(&self) -> Vec<std::path::PathBuf> {
+        let mut dirs: Vec<std::path::PathBuf> = vec![];
+        if let Ok(d) = std::env::var("SIMPLERAG_MODELS_DIR") {
+            if !d.is_empty() {
+                dirs.push(d.into());
             }
         }
-        msg
+        let app = self.app_dir();
+        for d in [self.data_home(), app.clone()].into_iter().flatten() {
+            let p = std::path::Path::new(&d).join("models");
+            if !dirs.contains(&p) {
+                dirs.push(p);
+            }
+        }
+        if let Some(up) = app.as_deref().and_then(|a| std::path::Path::new(a).parent()) {
+            dirs.push(up.join("simplerag").join("models"));
+            dirs.push(up.join("dist").join("simplerag").join("models"));
+        }
+        dirs
+    }
+
+    // 설치 파일이 모델을 넣는 폴더 — 설치된 프로그램 폴더의 models(설치 파일은 레지스트리의 설치 위치를 쓴다)
+    fn install_models_dir(&self) -> String {
+        self.app_dir().map(|a| std::path::Path::new(&a).join("models").to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    // 이 PC 사양 — 10초 안에 읽은 것이 있으면 그것(디스크 · 메모리 여유가 바뀌므로 오래 묵히지 않는다)
+    fn hw_now(&mut self) -> hwinfo::Hw {
+        if let Some((h, t)) = &self.hw {
+            if t.elapsed() < Duration::from_secs(10) {
+                return h.clone();
+            }
+        }
+        let bj = self.data_home().map(|h| std::path::Path::new(&h).join("gen_backend.json").to_string_lossy().into_owned());
+        let h = hwinfo::read(&self.install_models_dir(), bj.as_deref());
+        self.hw = Some((h.clone(), Instant::now()));
+        h
+    }
+
+    //------------------------------------------------------------------
+    // 설정 > 모델 [사용] — config.yaml 의 generation.model 을 바꾸고 다시 올린다 (모델 받기 설계서 §6-3)
+    //=> 답을 만드는 중이면 막는다. 올리다 실패하면 on_worker 가 이전 모델로 되돌린다(model_switch).
+    //------------------------------------------------------------------
+    fn use_model(&mut self, alias: &str) -> String {
+        if let Some(w) = &self.worker {
+            if w.availability() == "up" && !w.is_idle() {
+                return "답을 만드는 중입니다 — 답이 끝난 뒤 다시 누르세요".into();
+            }
+        }
+        let dirs = self.model_dirs();
+        let cat = self.models.catalog();
+        let Some(m) = cat["models"].as_array().and_then(|a| a.iter().find(|m| m["alias"] == alias)).cloned() else {
+            return "목록에 없는 모델입니다".into();
+        };
+        if !models::installed(&m, &dirs) {
+            return "설치되지 않은 모델입니다 — 먼저 [받기] 를 누르세요".into();
+        }
+        if !models::app_ok(m["min_app"].as_str().unwrap_or("")) {
+            return format!("이 모델은 MoAI-S {} 이상에서 쓸 수 있습니다", m["min_app"].as_str().unwrap_or(""));
+        }
+        let cfgp = self.config_path();
+        let prev = cfgline::read_model(cfgp.as_deref());
+        if prev == alias {
+            return "이미 쓰는 모델입니다".into();
+        }
+        if let Err(e) = cfgline::save_value(cfgp.as_deref(), "model", alias) {
+            return e;
+        }
+        let name = m["name"].as_str().unwrap_or(alias).to_string();
+        crate::info!("app", "답변 모델 바꿈: {} → {}", prev, alias);
+        let tier_wait = if m["tier"] == "precise" { "정밀 모델은 20초 안팎 · 이 PC 에서 처음 올리면 측정으로 1~2분" } else { "10초 안팎" };
+        let up = self.worker.as_ref().map(|w| w.availability() != "down").unwrap_or(false);
+        self.model_switch = if up { Some((prev, alias.to_string())) } else { None };
+        format!("{} 로 바꿨습니다{}", name, self.restart_worker("답변 모델", tier_wait))
+    }
+
+    //------------------------------------------------------------------
+    // 모델을 바꾼 뒤 워커 상태 보기 — 다 올라오면 끝, 올리다 멈추면 이전 모델로 되돌린다
+    //------------------------------------------------------------------
+    fn check_model_switch(&mut self, state: &str, detail: &str) {
+        let Some((prev, new)) = self.model_switch.clone() else { return };
+        // 워커는 답변 모델을 못 올려도 검색은 되므로 "준비됨"으로 올라온다 — 그 줄("답변 모델 오류")을 실패로 본다
+        let llm_err = if state == worker::READY { self.worker.as_ref().and_then(|w| w.llm_error()) } else { None };
+        if state == worker::READY && llm_err.is_none() {
+            self.model_switch = None;
+            self.info.model_msg = format!("{} 로 답합니다", self.models.name(&new));
+        } else if llm_err.is_some() || (state == worker::STOPPED && !detail.starts_with("내려감") && !detail.contains("인덱스")) {
+            self.model_switch = None;
+            // 자세한 사유(경로가 든 긴 글)는 로그에만, 화면에는 짧게
+            let why = if llm_err.is_some() { "모델 파일이 손상되었을 수 있습니다".to_string() } else { detail.to_string() };
+            crate::warn!("app", "새 모델({})을 올리지 못해 되돌림: {}", new, llm_err.as_deref().unwrap_or(detail));
+            let _ = cfgline::save_value(self.config_path().as_deref(), "model", &prev);
+            self.restart_worker("답변 모델 되돌리기", "10초 안팎");
+            self.info.model_msg = format!("{} 를 올리지 못해 이전 모델({})로 되돌렸습니다 — {}. 까닭은 설정 > 로그에 있습니다",
+                                          self.models.name(&new), self.models.name(&prev), why);
+            self.tray.notify("MoAI-S", &self.info.model_msg.clone());
+        }
+    }
+
+    // 끝난 모델 받기를 트레이로 알린다 — 누르면 설정 > 모델
+    fn pump_models(&mut self) {
+        for (_alias, ok, msg) in self.models.take_finished() {
+            self.tray.notify_action(if ok { "MoAI-S 모델 설치" } else { "MoAI-S 모델 받기 실패" }, &msg, Some("models"));
+            self.info.model_msg = msg;
+            self.info.models_info_sent = false;
+        }
+    }
+
+    // 설정 창을 모델 탭으로 연다
+    fn open_models_tab(&mut self) {
+        self.show_info();
+        if self.info.ready {
+            let _ = self.info.webview.evaluate_script("showTab('model')");
+        }
+    }
+
+    //------------------------------------------------------------------
+    // 설정 > 모델 화면이 보낸 메시지 — 돌려줌: 처리했으면 true
+    //------------------------------------------------------------------
+    fn on_models_ipc(&mut self, m: &Value) -> bool {
+        let alias = m["alias"].as_str().unwrap_or("").to_string();
+        let msg = match m["type"].as_str().unwrap_or("") {
+            "models_open" => {
+                self.info.models_open = true;
+                self.info.models_info_sent = false;
+                self.models.refresh_catalog(false);
+                String::new()
+            }
+            "models_close" => {
+                self.info.models_open = false;
+                return true;
+            }
+            "models_refresh" => {
+                self.models.refresh_catalog(true);
+                self.info.models_info_sent = false;
+                "목록을 새로 받는 중입니다".into()
+            }
+            "model_get" => {
+                let dir = self.install_models_dir();
+                self.models.get(&alias, &dir).unwrap_or_else(|e| e)
+            }
+            "model_cancel" => self.models.cancel(&alias),
+            "model_discard" => self.models.discard(&alias),
+            "model_use" => self.use_model(&alias),
+            "model_delete" => {
+                let cur = cfgline::read_model(self.config_path().as_deref());
+                let dirs = self.model_dirs();
+                self.models.delete(&alias, &cur, &dirs).unwrap_or_else(|e| e)
+            }
+            "model_source" => match self.models.source_url(&alias) {
+                Some(u) => win::open_path(&u).err().unwrap_or_default(),
+                None => "원본 주소가 없습니다".into(),
+            },
+            "open_release" => {
+                let u = self.models.release_url();
+                win::open_path(&u).err().unwrap_or_default()
+            }
+            "model_license" => {
+                let t = self.models.license_text(&alias, &self.model_dirs());
+                let _ = self.info.webview.evaluate_script(&format!("showLicense({}, {})", json!(alias), json!(t)));
+                return true;
+            }
+            _ => return false,
+        };
+        if !msg.is_empty() {
+            self.info.model_msg = msg;
+        }
+        self.refresh_info();
+        true
     }
 
     //------------------------------------------------------------------
@@ -1713,6 +1913,12 @@ impl App {
                     }
                 }
             }
+            "typing" => {
+                // 질문을 치기 시작했다 — 쉬느라 내린 답변 모델·리랭커를 미리 올리게 한다(메모리 절감 설계서 C안)
+                if let Some(w) = &self.worker {
+                    w.prewarm();
+                }
+            }
             "upload_pick" => {
                 let conv = m["conv"].as_str().unwrap_or("").to_string();
                 self.upload_pick(&conv, m["have"].as_u64().unwrap_or(0) as usize, &str_list(&m["names"]));
@@ -1816,6 +2022,8 @@ impl App {
         match name {
             // 사전 후보 알림을 눌렀다
             "candidates" => self.open_candidates(),
+            // 모델 설치 알림을 누름 — 설정 > 모델
+            "models" => self.open_models_tab(),
             // 트레이 "사용 안내" — 탐색기 창을 열고 1단계부터
             "tour" => {
                 self.open_browse(None, None, Value::Null);
@@ -2201,16 +2409,25 @@ impl App {
             }
         }
         info["autorun"] = json!(win::autorun_value().is_some());
-        // 정밀 모드 — config.yaml 을 못 찾으면 null(체크를 잠근다)
-        let (home, app) = (self.data_home(), self.app_dir());
-        let cfgp = precision::config_path(home.as_deref(), app.as_deref());
-        info["precision"] = cfgp.as_deref().map(|p| json!(precision::read(p, "precision"))).unwrap_or(Value::Null);
-        // 멀티턴 — 줄이 없으면 기본 켬
-        info["multiturn"] = cfgp.as_deref().map(|p| json!(precision::read(p, "multiturn"))).unwrap_or(Value::Null);
-        info["multiturn_note"] = json!([precision::MULTITURN_NOTE, self.info.mt_msg.as_str()].iter()
+        let cfgp = self.config_path();
+        // 멀티턴 — 줄이 없으면 기본 켬. config.yaml 을 못 찾으면 null(체크를 잠근다)
+        info["multiturn"] = cfgp.as_deref().map(|p| json!(cfgline::read(p, "multiturn"))).unwrap_or(Value::Null);
+        info["multiturn_note"] = json!([cfgline::MULTITURN_NOTE, self.info.mt_msg.as_str()].iter()
             .filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("\n"));
-        info["precision_note"] = json!(precision::note(precision::model_present(home.as_deref(), app.as_deref()),
-                                                       cfgp.is_some(), &self.info.prec_msg));
+        // 답변 모델 — 기본 탭 한 줄 · 모델 탭(보고 있을 때만 사양을 읽고 줄을 만든다)
+        let cur = cfgline::read_model(cfgp.as_deref());
+        info["answer_model"] = json!({"alias": cur, "name": self.models.name(&cur),
+            "icon": self.models.catalog()["models"].as_array().and_then(|a| a.iter().find(|m| m["alias"] == cur.as_str()))
+                .map(|m| m["icon"].clone()).unwrap_or(Value::Null)});
+        info["model_msg"] = json!(self.info.model_msg);
+        if self.info.models_open {
+            let hw = self.hw_now();
+            let dirs = self.model_dirs();
+            let locked = self.worker.as_ref().map(|w| w.availability() == "up" && !w.is_idle()).unwrap_or(false);
+            let with_info = !self.info.models_info_sent;
+            info["models"] = self.models.state_json(&hw, &cur, &dirs, locked, with_info);
+            self.info.models_info_sent = true;
+        }
         let folders = match &self.jobs {
             Some(j) => j.roots.clone(),
             None => {
@@ -2400,9 +2617,14 @@ impl App {
         if m["type"] != "ready" {
             self.t_user = Instant::now();
         }
+        // 설정 > 모델 메시지는 따로 — 처리했으면 끝
+        if self.on_models_ipc(&m) {
+            return;
+        }
         match m["type"].as_str().unwrap_or("") {
             "ready" => {
                 self.info.ready = true;
+                self.info.models_info_sent = false;
                 self.refresh_info();
             }
             "unload" => {
@@ -2430,8 +2652,6 @@ impl App {
                     match win::autorun_enable() { Ok(_) => "로그인할 때 자동으로 시작합니다".into(), Err(e) => e }
                 };
             }
-            "precision" => self.info.prec_msg = self.set_flag("precision", "정밀 모드", m["on"].as_bool().unwrap_or(false),
-                "4B 는 20초 안팎 · 이 PC 에서 4B 를 처음 올리면 CPU·iGPU 측정으로 1~2분"),
             "multiturn" => self.info.mt_msg = self.set_flag("multiturn", "이어서 묻기", m["on"].as_bool().unwrap_or(true), "10초 안팎"),
             "add_folder" => {
                 let msg = self.add_folder_dialog();
@@ -2955,7 +3175,11 @@ fn main() {
         info: InfoWin { window: iwin, webview: iview, visible: false, ready: false, action_msg: String::new(), folder_msg: String::new(),
                        syn_msg: String::new(), syn_done: Arc::new(Mutex::new(None)), syn_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                        ppl_msg: String::new(), ppl_done: Arc::new(Mutex::new(None)), ppl_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                       prec_msg: String::new(), mt_msg: String::new(), ext_msg: String::new() },
+                       model_msg: String::new(), models_open: false, models_info_sent: false,
+                       mt_msg: String::new(), ext_msg: String::new() },
+        models: models::Models::new(),
+        hw: None,
+        model_switch: None,
         history: history::load(&history_path),
         history_path,
         s,

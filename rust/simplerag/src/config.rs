@@ -46,14 +46,88 @@ pub const GEN_MODELS: &[(&str, &str, &str)] = &[
     ("qwen3-1.7b-q4", "Qwen3-1.7B-Q4_K_M.gguf", "qwen3"),
     ("midm-2.0-mini-q4", "Midm-2.0-Mini-Instruct-Q4_K_M.gguf", "midm"),
     ("kanana-1.5-2.1b-q4", "kanana-1.5-2.1b-instruct-Q4_K_M.gguf", "kanana"),
-    // 정밀 모드(generation.precision) 전용 — 골든 100문항 이웃 청크와 함께 정답 50 → 59, 답 완료 약 2배
+    // 이전 정밀 모드 모델(0.1.3 까지) — 골든 100문항 이웃 청크와 함께 정답 50 → 59, 답 완료 약 2배
     ("qwen3-4b-q4", "Qwen3-4B-Q4_K_M.gguf", "qwen3"),
+    // Qwen3.5 (unsloth GGUF) — 기존 qwen3 형식 그대로(빈 <think> 로 사고 끔). 4B 가 새 정밀 모델(모델 받기 설계서 §3)
+    ("qwen3.5-2b-q4", "Qwen3.5-2B-Q4_K_M.gguf", "qwen3"),
+    ("qwen3.5-4b-q4", "Qwen3.5-4B-Q4_K_M.gguf", "qwen3"),
+    // Liquid AI LFM2.5 1.2B (공식 GGUF) — LFM Open License(연 매출 1천만 달러 이상 회사는 상업 사용 불가)
+    ("lfm2.5-1.2b-q4", "LFM2.5-1.2B-Instruct-Q4_K_M.gguf", "lfm2"),
+    // 카카오 Kanana Nano 2.1B (mradermacher GGUF) — CC-BY-NC-4.0, MoAI-S 는 비상업 용도
+    ("kanana-nano-2.1b-q4", "kanana-nano-2.1b-instruct-Q4_K_M.gguf", "llama3"),
 ];
 pub const FAST_GEN_MODEL: &str = "qwen3-0.6b-q4";
 pub const PRECISE_GEN_MODEL: &str = "qwen3-1.7b-q4";
 pub const KOREAN_GEN_MODEL: &str = "midm-2.0-mini-q4";
 pub const PRECISION_GEN_MODEL: &str = "qwen3-4b-q4";
 pub const USER_GEN_MODELS: &[&str] = &[FAST_GEN_MODEL, PRECISE_GEN_MODEL, KOREAN_GEN_MODEL];
+// 근거에 이웃 청크를 붙이면 나아지는 모델(generation.neighbors: auto 일 때) — 2026-10-29 측정:
+//   Qwen3-4B 54 → 59 로 늘고, Qwen3.5-4B 는 59 → 55 로 줄었다
+pub const NEIGHBOR_MODELS: &[&str] = &[PRECISION_GEN_MODEL];
+
+//------------------------------------------------------------------
+// 모델 옆 설명 파일(<별칭>.model.json)로 늘린 생성 모델 — 모델 설치 파일이 함께 넣는다(모델 받기 설계서 §7-3)
+//=> 이미 있는 대화 형식을 쓰는 모델은 프로그램을 다시 배포하지 않고 늘릴 수 있게.
+//   한 번만 읽어 프로세스 끝까지 쓴다(문자열은 'static 으로 남긴다 — 몇 개뿐이라 괜찮다)
+//   항목: (별칭, 파일, 형식, 이웃 청크)
+//------------------------------------------------------------------
+type ExtraModel = (&'static str, &'static str, &'static str, bool);
+static EXTRA_MODELS: OnceLock<Vec<ExtraModel>> = OnceLock::new();
+const KNOWN_FORMATS: &[&str] = &["qwen3", "midm", "kanana", "lfm2", "llama3"];
+
+fn extra_models() -> &'static [ExtraModel] {
+    EXTRA_MODELS.get().map(|v| v.as_slice()).unwrap_or(&[])
+}
+
+//------------------------------------------------------------------
+// models 폴더들의 *.model.json 읽기 — 표에 이미 있는 별칭 · 모르는 대화 형식 · 깨진 파일은 건너뛴다
+//   돌려줌: (모델 목록, 건너뛴 까닭들)
+//------------------------------------------------------------------
+fn scan_model_sidecars(dirs: &[String]) -> (Vec<ExtraModel>, Vec<String>) {
+    let mut out: Vec<ExtraModel> = Vec::new();
+    let mut skipped = Vec::new();
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        let mut names: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path())
+            .filter(|p| p.to_string_lossy().to_lowercase().ends_with(".model.json")).collect();
+        names.sort();
+        for p in names {
+            let Ok(raw) = std::fs::read_to_string(&p) else { continue };
+            let v: serde_json::Value = match serde_json::from_str(raw.trim_start_matches('\u{feff}')) {
+                Ok(v) => v,
+                Err(e) => {
+                    skipped.push(format!("{}: 읽지 못함({})", p.display(), e));
+                    continue;
+                }
+            };
+            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let (alias, file, format) = (s("alias").to_lowercase(), s("file"), s("format"));
+            if alias.is_empty() || file.is_empty() {
+                skipped.push(format!("{}: alias · file 이 없음", p.display()));
+                continue;
+            }
+            // 대화 형식을 모르면 답이 깨진다 — 프로그램 업데이트가 필요한 모델이다
+            if !KNOWN_FORMATS.contains(&format.as_str()) {
+                skipped.push(format!("{}: 이 판이 모르는 대화 형식 {:?}", p.display(), format));
+                continue;
+            }
+            if GEN_MODELS.iter().any(|m| m.0 == alias) || out.iter().any(|m| m.0 == alias) {
+                continue;
+            }
+            let neighbors = v.get("neighbors").and_then(|x| x.as_bool()).unwrap_or(false);
+            out.push((Box::leak(alias.into_boxed_str()), Box::leak(file.into_boxed_str()),
+                      Box::leak(format.into_boxed_str()), neighbors));
+        }
+    }
+    (out, skipped)
+}
+
+//------------------------------------------------------------------
+// 이 모델은 근거에 이웃 청크를 붙이나 (generation.neighbors: auto 일 때)
+//------------------------------------------------------------------
+pub fn model_wants_neighbors(alias: &str) -> bool {
+    NEIGHBOR_MODELS.contains(&alias) || extra_models().iter().any(|m| m.0 == alias && m.3)
+}
 
 // 고정 상수(Python config.py 와 같은 값 — 실측 근거는 원본 주석 참고)
 pub const EMBED_DIM: usize = 384;
@@ -130,11 +204,15 @@ pub struct Config {
     pub rerank_dir: String,
     pub rerank_defer_load: bool,
     pub default_gen_model: String,
-    // 정밀 모드(generation.precision, 기본 끔) — 4B 모델 + 근거에 이웃 청크(retrieve::attach_neighbors)
+    // 옛 정밀 모드(generation.precision, 기본 끔) — 켜면 Qwen3-4B 로 답한다(이웃 청크는 neighbors 가 정한다)
     pub precision: bool,
+    // 근거에 이웃 청크 붙이기(generation.neighbors, 기본 auto = 모델마다) — retrieve::attach_neighbors
+    pub neighbors: bool,
     // 멀티턴(generation.multiturn, 기본 켬) — /ask 의 앞 질문을 검색어에 이어 붙인다(app::turn_queries)
     pub multiturn: bool,
     pub gen_max_tokens: i64,
+    // 쉬면 생성 모델·리랭커 내리기(generation.idle_unload_min, 분, 기본 10, 0 = 끔) — 메모리 절감 설계서 C안
+    pub gen_idle_unload_min: i64,
     pub prompt: String,
     pub system_prompt_text: String,
     pub flatten_tables: bool,
@@ -155,6 +233,9 @@ pub struct Config {
     pub defer_vectors_over: i64,
     // 앱 워커의 문서 반영은 벡터를 모두 뒤로 미룬다(index.vectors_background, 기본 켬 — 벡터 백그라운드 설계서 §7)
     pub vectors_background: bool,
+    // 메모리의 벡터를 반 정밀도(f16)로 든다(index.vector_f16, 기본 켬 — 메모리 절감 설계서 B안).
+    //   디스크는 그대로 f32. 끄면 예전처럼 f32 — Python 판과 결과를 맞대 볼 때 SIMPLERAG_VECTOR_F16=0
+    pub vector_f16: bool,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -269,6 +350,9 @@ fn build() -> Result<Config, ConfigError> {
         }
     };
     let models_dir = env("SIMPLERAG_MODELS_DIR").unwrap_or_else(|| pyutil::join(&root, "models"));
+    // 받기로 더한 모델(<별칭>.model.json)을 모델 표 뒤에 붙인다 — 아래 generation.model 검사보다 먼저
+    let (extra, extra_skipped) = scan_model_sidecars(&[models_dir.clone(), pyutil::join(&app_dir, "models")]);
+    let _ = EXTRA_MODELS.set(extra);
 
     let chunk_tokens = pick_int(&y, "chunk.tokens", 128, Some("SIMPLERAG_CHUNK_TOKENS"))?;
     let chunk_overlap = pick_int(&y, "chunk.overlap", std::cmp::max(8, chunk_tokens / 8), Some("SIMPLERAG_CHUNK_OVERLAP"))?;
@@ -335,15 +419,17 @@ fn build() -> Result<Config, ConfigError> {
 
     let mut warnings = check_resolved(chunk_tokens, chunk_overlap, min_chunk_tokens, table_header_max_tokens,
                                   top_k, rerank_pool, dense_top_k, bm25_top_k)?;
+    warnings.extend(extra_skipped.into_iter().map(|s| format!("모델 설명 파일 건너뜀 — {}", s)));
 
     let mut default_gen_model = pick_str(&y, "generation.model", PRECISE_GEN_MODEL, Some("SIMPLERAG_GEN_MODEL")).trim().to_lowercase();
     if gen_file(&default_gen_model).is_none() {
         return Err(ConfigError(format!(
             "SIMPLERAG_GEN_MODEL={:?} — {} 중 하나여야 합니다", default_gen_model,
-            GEN_MODELS.iter().map(|m| m.0).collect::<Vec<_>>().join(" | "))));
+            GEN_MODELS.iter().map(|m| m.0).chain(extra_models().iter().map(|m| m.0)).collect::<Vec<_>>().join(" | "))));
     }
-    // 정밀 모드 — 켜면 generation.model 보다 앞서 4B 로 답한다(Python config.PRECISION 과 같다).
-    //   ⚠️ 첫 글자 중앙 2.2 → 7.1초 · 답 완료 7.6 → 14.7초. 4B 파일이 없으면 경고만 내고 원래 모델로
+    // 옛 정밀 모드(0.1.3 까지) — 켜져 있으면 generation.model 보다 앞서 Qwen3-4B 로 답한다(Python config.PRECISION 과 같다).
+    //   이제 앱은 설정 > 모델에서 generation.model 을 바꾸고 이 값은 false 로 적는다. 측정 스크립트용으로 읽기는 남긴다.
+    //   4B 파일이 없으면 경고만 내고 원래 모델로
     let precision = match env("SIMPLERAG_PRECISION") {
         Some(v) => v != "0",
         None => pick_bool(&y, "generation.precision", false),
@@ -361,7 +447,19 @@ fn build() -> Result<Config, ConfigError> {
             warnings.push(format!("정밀 모드: {} 가 models 폴더에 없어 {} 로 답합니다", file, default_gen_model));
         }
     }
+    // 근거에 이웃 청크 붙이기(generation.neighbors) — auto 면 모델마다 측정으로 정한 값(NEIGHBOR_MODELS · 설명 파일),
+    //   on/off 면 그대로. SIMPLERAG_NEIGHBORS=1/0 이 앞선다
+    let neighbors = match env("SIMPLERAG_NEIGHBORS").map(|v| v.trim().to_lowercase()) {
+        Some(v) if v != "auto" => !["0", "off", "false", "no"].contains(&v.as_str()),
+        _ => match pick_str(&y, "generation.neighbors", "auto", None).as_str() {
+            "1" => true,
+            "0" => false,
+            _ => model_wants_neighbors(&default_gen_model),
+        },
+    };
     let gen_max_tokens = pick_int(&y, "generation.max_tokens", 200, Some("SIMPLERAG_GEN_MAX_TOKENS"))?;
+    // 음수는 0(끔)으로 — 환경변수는 스키마 검사를 거치지 않는다
+    let gen_idle_unload_min = pick_int(&y, "generation.idle_unload_min", 10, Some("SIMPLERAG_IDLE_UNLOAD_MIN"))?.max(0);
     let prompt = pick_str(&y, "generation.prompt", "v0", Some("SIMPLERAG_PROMPT")).trim().to_lowercase();
     if !["v0", "v4", "v5", "custom"].contains(&prompt.as_str()) {
         return Err(ConfigError(format!(
@@ -409,6 +507,10 @@ fn build() -> Result<Config, ConfigError> {
     let vectors_background = match env("SIMPLERAG_VECTORS_BACKGROUND") {
         Some(v) => v != "0",
         None => pick_bool(&y, "index.vectors_background", true),
+    };
+    let vector_f16 = match env("SIMPLERAG_VECTOR_F16") {
+        Some(v) => v.trim() != "0",
+        None => pick_bool(&y, "index.vector_f16", true),
     };
 
     let gen_backend = std::env::var("SIMPLERAG_GEN_BACKEND").unwrap_or_else(|_| "auto".into()).trim().to_lowercase();
@@ -458,8 +560,10 @@ fn build() -> Result<Config, ConfigError> {
         rerank_defer_load,
         default_gen_model,
         precision,
+        neighbors,
         multiturn,
         gen_max_tokens,
+        gen_idle_unload_min,
         prompt,
         system_prompt_text,
         flatten_tables,
@@ -474,6 +578,7 @@ fn build() -> Result<Config, ConfigError> {
         embed_prefetch,
         defer_vectors_over,
         vectors_background,
+        vector_f16,
     })
 }
 
@@ -542,13 +647,15 @@ pub fn bm25_threads() -> usize {
 //------------------------------------------------------------------
 pub fn gen_file(alias: &str) -> Option<&'static str> {
     GEN_MODELS.iter().find(|m| m.0 == alias).map(|m| m.1)
+        .or_else(|| extra_models().iter().find(|m| m.0 == alias).map(|m| m.1))
 }
 
 //------------------------------------------------------------------
 // 별칭 → 채팅 형식 이름(없으면 qwen3)
 //------------------------------------------------------------------
 pub fn gen_format(alias: &str) -> &'static str {
-    GEN_MODELS.iter().find(|m| m.0 == alias).map(|m| m.2).unwrap_or("qwen3")
+    GEN_MODELS.iter().find(|m| m.0 == alias).map(|m| m.2)
+        .or_else(|| extra_models().iter().find(|m| m.0 == alias).map(|m| m.2)).unwrap_or("qwen3")
 }
 
 //------------------------------------------------------------------
@@ -592,6 +699,8 @@ enum Check {
     Text(usize),
     ParentMode,
     Threads,
+    // 모델 별칭 — 소문자 영숫자 · '.' · '-' 만(64자까지)
+    Alias,
 }
 
 // 섹션 → 키 → 검사기. 여기에 없는 키는 오타로 보고 오류를 낸다
@@ -632,6 +741,7 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
         ("index", vec![
             ("defer_vectors_over", Check::Int(0, 100_000_000)),
             ("vectors_background", Check::Bool),
+            ("vector_f16", Check::Bool),
         ]),
         ("rerank", vec![
             ("mode", Check::RerankMode),
@@ -640,12 +750,15 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
         ("generation", vec![
             ("top_k", Check::Int(1, 20)),
             ("max_tokens", Check::Int(16, 1024)),
+            ("idle_unload_min", Check::Int(0, 1440)),
             ("prompt", Check::Choice(&["v0", "v4", "v5", "custom"])),
             ("system_prompt", Check::Text(1000)),
-            ("model", Check::Choice(&["qwen3-0.6b-q4", "qwen3-1.7b-q4", "midm-2.0-mini-q4"])),
+            // 별칭이 모델 표 · 설명 파일에 있는지는 build() 가 본다(받기로 더한 모델도 고를 수 있게)
+            ("model", Check::Alias),
             ("flatten_tables", Check::Bool),
             ("echo_filter", Check::Bool),
             ("precision", Check::Bool),
+            ("neighbors", Check::RerankMode),
             ("multiturn", Check::Bool),
             ("parent", Check::ParentMode),
             ("parent_max_tokens", Check::Int(64, 1500)),
@@ -750,6 +863,14 @@ fn run_check(ch: &Check, v: &Y) -> Result<Option<SVal>, String> {
             }
             _ => Err("글(문자열)이어야 합니다".into()),
         },
+        Check::Alias => {
+            let s = pyutil::strip(&yshow(v)).to_lowercase();
+            if !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+                Ok(Some(SVal::Str(s)))
+            } else {
+                Err("모델 별칭(예: qwen3-1.7b-q4)이어야 합니다".into())
+            }
+        }
         Check::Threads => match v {
             // auto 는 값을 넣지 않는다(코드 기본값 = auto)
             Y::String(s) if pyutil::strip(s).eq_ignore_ascii_case("auto") => Ok(None),
@@ -968,5 +1089,28 @@ mod tests {
     fn ratio_hint() {
         assert_eq!(hint("token", &["tokens", "mode"]), " (혹시 'tokens'?)");
         assert_eq!(hint("zzz", &["tokens"]), "");
+    }
+
+    // 모델 설명 파일 — 아는 형식만 받고, 표에 있는 별칭 · 모르는 형식 · 깨진 파일은 건너뛴다
+    #[test]
+    fn model_sidecars() {
+        let d = std::env::temp_dir().join(format!("srag_sidecar_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("new-1b-q4.model.json"), r#"{"alias":"New-1B-Q4","file":"New-1B.gguf","format":"qwen3","neighbors":true}"#).unwrap();
+        std::fs::write(d.join("odd.model.json"), r#"{"alias":"odd-1b-q4","file":"Odd.gguf","format":"odd9"}"#).unwrap();
+        std::fs::write(d.join("dup.model.json"), r#"{"alias":"qwen3-1.7b-q4","file":"x.gguf","format":"qwen3"}"#).unwrap();
+        std::fs::write(d.join("bad.model.json"), "{").unwrap();
+        let (got, skipped) = scan_model_sidecars(&[d.to_string_lossy().into_owned()]);
+        assert_eq!(got, vec![("new-1b-q4", "New-1B.gguf", "qwen3", true)]);
+        assert_eq!(skipped.len(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn neighbor_default_per_model() {
+        assert!(model_wants_neighbors("qwen3-4b-q4"));
+        assert!(!model_wants_neighbors("qwen3.5-4b-q4"));
+        assert!(!model_wants_neighbors("qwen3-1.7b-q4"));
     }
 }

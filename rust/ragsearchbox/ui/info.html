@@ -6,7 +6,8 @@
 <!--
   설정 창 (Python info_window.py 와 같은 구성)
   - 왼쪽 메뉴: 기본 · 동의어 · 이름별칭 — 누르면 오른쪽 흰 판이 바뀐다
-  - 기본: 묶음 상자 — 모델(1초마다 새 값 · 내리기/다시 올리기 · 올리는 중 진행 막대 %) · 인덱싱 폴더 · 인덱싱 확장자 · 시작 · 대화(이어서 묻기) · 정밀 모드
+  - 기본: 묶음 상자 — 모델(1초마다 새 값 · 내리기/다시 올리기 · 올리는 중 진행 막대 %) · 인덱싱 폴더 · 인덱싱 확장자 · 시작 · 대화(이어서 묻기) · 답변 모델 한 줄
+  - 모델: 이 PC 사양 · 추천 · 기본/정밀 모델 목록(받기 · 사용 · 삭제) · 상세 화면 (모델 받기 설계서 §5)
   - 로그: 인덱싱 실패 문서(원인 · 할 일 · [열기] [폴더] [다시 시도]) · 로그 경고·오류(최근 7일, 같은 내용은 묶어 횟수) · 로그 폴더 (로그 보기 설계서)
   - 동의어: 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 동의어 [빼기] (동의어 설계서 4단계)
   - 이름별칭: 이름 별칭 후보 승인([맞음] [아님] · [후보 만들기]) · 직접 추가 · 승인한 별칭 [빼기] · "나" (메타데이터 검색 설계서 §7-2)
@@ -107,11 +108,51 @@
   .lv-e { color: #b91c1c; font-weight: bold; white-space: nowrap; }
   .t-warn { color: #b45309; }
   .gone { color: #a3aab6; }
+  /* 모델 판 (모델 받기 설계서 §5) — 아이콘 · 배지 · 진행 막대 · 상세 화면 */
+  #tab_model fieldset { min-width: 0; }
+  #tab_model { overflow-x: hidden; }
+  .mic { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 7px; flex: none;
+    color: #fff; font-weight: bold; font-size: 12px; letter-spacing: -.02em; }
+  .mic.big { width: 52px; height: 52px; border-radius: 11px; font-size: 19px; }
+  .mic.sm { width: 20px; height: 20px; border-radius: 5px; font-size: 9px; margin-right: 6px; }
+  .hw { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 2px 14px; }
+  .hw .k { color: var(--sub); margin-right: 5px; }
+  .recl { margin-top: 6px; padding: 5px 8px; background: #fff7f8; border: 1px solid #f5c2cd; border-radius: 4px; }
+  table.mt td { padding: 6px 4px; border-bottom: 1px solid #eceef2; vertical-align: middle; word-break: keep-all; }
+  table.mt tr:last-child td { border-bottom: 0; }
+  table.mt .mc { display: flex; gap: 8px; align-items: center; }
+  table.mt .nm { font-weight: bold; cursor: pointer; }
+  table.mt .nm:hover { text-decoration: underline; }
+  table.mt .sub, .mdet .sub { color: var(--sub); font-size: calc(var(--fs) - 1px); }
+  table.mt .acts { white-space: nowrap; text-align: right; width: 1%; }
+  table.mt .acts .st { margin-bottom: 3px; }
+  table.mt .acts button, .mdet .act button { padding: 1px 8px; margin: 0 0 0 3px; }
+  .bd { display: inline-block; font-size: calc(var(--fs) - 2px); padding: 0 6px; border-radius: 9px; margin-left: 4px; white-space: nowrap; font-weight: normal; }
+  .bd.rec { background: #fde7ec; color: #c2133a; }
+  .bd.use { background: var(--ink); color: #fff; }
+  .bd.kr { background: #e3ebf7; color: #2c5aa0; }
+  .bd.slow, .bd.mem { background: #fdf2dd; color: #a8701a; }
+  .bd.old { background: var(--bg); color: var(--sub); }
+  .prog { display: inline-block; width: 80px; height: 7px; background: #e5e7eb; border-radius: 4px; vertical-align: middle; overflow: hidden; }
+  .prog i { display: block; height: 100%; background: #2c5aa0; }
+  button.lnk { border: 0; background: none; color: #2c5aa0; padding: 0; margin: 0; text-decoration: underline; }
+  .mdet .back { margin-bottom: 4px; }
+  .mdet .dh { display: flex; gap: 12px; align-items: center; margin: 4px 0 8px; }
+  .mdet .dh .t { font-size: calc(var(--fs) + 5px); font-weight: bold; }
+  .mdet .chips .chip { padding: 0 8px; border-radius: 10px; background: #fff; }
+  .mdet .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; word-break: keep-all; }
+  .mdet .good { color: #2a7a57; } .mdet .bad { color: #a8701a; }
+  .mdet table.bt td, .mdet table.bt th { padding: 3px 6px; border-bottom: 1px solid #eceef2; width: auto; }
+  .mdet .act { display: flex; justify-content: flex-end; align-items: center; gap: 4px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; position: sticky; bottom: -10px; background: #fff; padding-bottom: 8px; }
+  .mdet .act .grow { flex: 1; color: var(--sub); }
+  .mdet .act button.pri { background: #2c5aa0; color: #fff; border-color: #2c5aa0; }
+  .lic { white-space: pre-wrap; font-family: Consolas, "D2Coding", monospace; font-size: calc(var(--fs) - 1px); max-height: 50vh; overflow: auto;
+    background: var(--bg); padding: 6px 8px; border-radius: 3px; }
 </style>
 </head>
 <body>
 <div class="main">
-<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div><div id="t_log"><span class="ic">&#x2630;</span><span id="t_log_text">로그</span></div></div>
+<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_model"><span class="ic">&#x25a3;</span>모델</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div><div id="t_log"><span class="ic">&#x2630;</span><span id="t_log_text">로그</span></div></div>
 <div class="panel">
 <div id="tab_basic">
 <fieldset><legend>모델</legend>
@@ -158,10 +199,24 @@
   <label><input type="checkbox" id="multiturn"> 이어서 묻기 (멀티턴 — 같은 대화의 앞 질문 이어 받기 · 기본 켬)</label>
   <div class="note ind" id="mtnote"></div>
 </fieldset>
-<fieldset><legend>정밀 모드</legend>
-  <label><input type="checkbox" id="precision"> 정밀 모드 켜기 (Qwen3-4B 모델 + 이웃 청크 · 기본 끔)</label>
-  <div class="note warn" id="precnote"></div>
+<fieldset><legend>답변 모델</legend>
+  <div class="row" style="align-items:center"><span id="am_icon"></span><b id="am_name" class="grow"></b><button id="b_am" style="margin:0">모델 바꾸기…</button></div>
+  <div class="note" id="am_note">기본 · 정밀 모델을 받거나 바꾸려면 [모델 바꾸기…] 를 누르세요. 정밀 모드는 설정 &gt; 모델로 옮겨졌습니다.</div>
 </fieldset>
+</div>
+<div id="tab_model" class="hidden">
+<div id="mv_list">
+<fieldset><legend>이 PC</legend>
+  <div class="hw" id="mv_hw"></div>
+  <div class="recl hidden" id="mv_rec"></div>
+</fieldset>
+<div class="note t-warn" id="mv_msg"></div>
+<fieldset><legend>기본 모델 (3B 이하) — 빠른 답</legend><table class="mt" id="mv_base"></table></fieldset>
+<fieldset><legend>정밀 모델 (3B 이상) — 더 정확, 느림</legend><table class="mt" id="mv_prec"></table></fieldset>
+<div class="note" id="mv_note"></div>
+<div class="note">받기가 안 되면(회사망 차단 등) <button id="b_release" class="lnk">배포 페이지 열기</button> 에서 설치 파일을 직접 받아 실행하세요. 설치하면 이 목록에 바로 나타납니다.</div>
+</div>
+<div id="mv_detail" class="hidden"></div>
 </div>
 <div id="tab_syn" class="hidden">
 <fieldset><legend>후보 승인</legend>
@@ -268,11 +323,14 @@ window.rsb = {
     if (info.exts) syncExts(info);
     if (typeof info.autorun === "boolean") $("autorun").checked = info.autorun;
     if (typeof info.cand_notify === "boolean") $("candnotify").checked = info.cand_notify;
-    // 정밀 모드 — config.yaml 값으로 매번 맞춘다(파일을 직접 고쳐도 따라간다). 못 찾으면 잠근다
-    $("precision").disabled = typeof info.precision !== "boolean";
-    if (typeof info.precision === "boolean") $("precision").checked = info.precision;
-    $("precnote").textContent = info.precision_note || "";
-    // 이어서 묻기(멀티턴) — 정밀 모드와 같이 config.yaml 값으로 맞춘다
+    // 답변 모델 한 줄(기본 판) · 모델 판(보고 있을 때만 값이 온다)
+    if (info.answer_model) {
+      $("am_icon").innerHTML = modelIcon(info.answer_model.icon, info.answer_model.name, "sm");
+      $("am_name").textContent = info.answer_model.name || info.answer_model.alias;
+    }
+    mvMsg = info.model_msg || "";
+    if (info.models) drawModels(info.models);
+    // 이어서 묻기(멀티턴) — config.yaml 값으로 매번 맞춘다(파일을 직접 고쳐도 따라간다). 못 찾으면 잠근다
     $("multiturn").disabled = typeof info.multiturn !== "boolean";
     if (typeof info.multiturn === "boolean") $("multiturn").checked = info.multiturn;
     $("mtnote").textContent = info.multiturn_note || "";
@@ -373,16 +431,24 @@ $("b_ext_apply").onclick = () => {
   send({ type: "set_exts", exts: extDraft });
 };
 
-// 왼쪽 메뉴로 판 바꾸기 — 기본 · 동의어 · 사람 · 로그
+// 왼쪽 메뉴로 판 바꾸기 — 기본 · 모델 · 동의어 · 사람 · 로그
+let curTab = "basic";
 function showTab(name) {
-  for (const t of ["basic", "syn", "ppl", "log"]) {
+  for (const t of ["basic", "model", "syn", "ppl", "log"]) {
     $("tab_" + t).classList.toggle("hidden", t !== name);
     $("t_" + t).classList.toggle("on", t === name);
   }
   // 로그 판은 1초 주기로 받지 않는다 — 열 때마다 한 번 읽는다
   if (name === "log") loadLog();
+  // 모델 판은 보고 있을 때만 앱이 사양을 읽고 줄을 만든다 — 열 때는 목록으로
+  if (name === "model" && curTab !== "model") { showModelList(); send({ type: "models_open" }); }
+  if (name !== "model" && curTab === "model") send({ type: "models_close" });
+  curTab = name;
 }
 $("t_basic").onclick = () => showTab("basic");
+$("t_model").onclick = () => showTab("model");
+$("b_am").onclick = () => showTab("model");
+$("b_release").onclick = () => send({ type: "open_release" });
 $("t_syn").onclick = () => showTab("syn");
 $("t_ppl").onclick = () => showTab("ppl");
 $("t_log").onclick = () => showTab("log");
@@ -654,7 +720,6 @@ function confirmByName(path, note, onOk) {
 $("b_rescan").onclick = () => send({ type: "rescan" });
 $("autorun").onchange = () => send({ type: "autorun" });
 $("candnotify").onchange = () => send({ type: "cand_notify", on: $("candnotify").checked });
-$("precision").onchange = () => send({ type: "precision", on: $("precision").checked });
 $("multiturn").onchange = () => send({ type: "multiturn", on: $("multiturn").checked });
 for (const id of ["m_explorer", "m_rag"]) $(id).onchange = () => send({ type: "ui_mode", value: $(id).value });
 $("dock").onchange = () => send({ type: "dock", value: $("dock").checked });
@@ -663,7 +728,232 @@ $("folder_icon").onchange = () => send({ type: "folder_icon", on: $("folder_icon
 $("b_logs").onclick = () => send({ type: "open_logs" });
 $("b_open").onclick = () => send({ type: "open" });
 $("b_close").onclick = () => send({ type: "hide" });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") send({ type: "hide" }); });
+// Esc — 모델 상세 화면이면 목록으로, 아니면 창 닫기
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (curTab === "model" && mvDetail) { showModelList(); return; }
+  send({ type: "hide" });
+});
+
+// ── 모델 판 (모델 받기 설계서 §5) ──────────────────────────────
+let mvData = null, mvInfo = {}, mvDetail = null, mvMsg = "", mvScroll = 0, mvSig = "", mvDetSig = "";
+const mvLic = {};
+const fmtGB = (mb) => (mb / 1024).toFixed(1) + "GB";
+const sec1 = (s) => Number(s).toFixed(1) + "초";
+
+// 모델 아이콘 — 개발사 색 + 1~2글자(공식 로고는 상표 지침을 확인한 뒤 목록 파일 icon.file 로)
+function modelIcon(icon, name, size) {
+  const ic = icon || {};
+  const mono = ic.mono || String(name || "?").slice(0, 1);
+  return `<span class="mic ${size || ""}" style="background:${esc(ic.color || "#64748b")};color:${esc(ic.ink || "#fff")}">${esc(mono)}</span>`;
+}
+
+// 예상 첫 글자 글
+function estText(r) {
+  if (r.est == null) return "측정 전";
+  return `약 ${sec1(r.est)} · ${r.grade}` + (r.by_spec ? " (사양으로 어림)" : "");
+}
+
+// 배지 — 추천 · 사용 중 · 한국어 · 느림 · 메모리 부족 · 이전 정밀 (두 개까지)
+function badges(r) {
+  const b = [];
+  if (r.recommended) b.push('<span class="bd rec">추천</span>');
+  if (r.state === "inuse") b.push('<span class="bd use">사용 중</span>');
+  if (!r.mem_ok) b.push('<span class="bd mem">메모리 부족</span>');
+  if (r.retired) b.push('<span class="bd old">이전 정밀</span>');
+  if (r.grade === "느림") b.push('<span class="bd slow">느림</span>');
+  if (r.korean) b.push('<span class="bd kr">한국어</span>');
+  return b.slice(0, 2).join("");
+}
+
+// 상태 칸 글 · 진행 막대
+function stateCell(r) {
+  switch (r.state) {
+    case "inuse": return "사용 중";
+    case "builtin": return "내장";
+    case "installed": return "설치됨";
+    case "queued": return "대기 중";
+    case "verifying": return "확인 중…";
+    case "installing": return "설치 중…";
+    case "paused": return "멈춤";
+    case "downloading": {
+      const eta = r.eta >= 0 ? ` · 약 ${r.eta >= 60 ? Math.ceil(r.eta / 60) + "분" : r.eta + "초"} 남음` : "";
+      return `받는 중 <span class="prog"><i style="width:${r.pct || 0}%"></i></span> ${r.pct || 0}%<br>` +
+             `<span class="sub">${fmtGB(r.done_mb || 0)} / ${fmtGB(r.total_mb || 0)} · ${r.speed || 0}MB/초${eta}</span>`;
+    }
+    default:
+      if (!r.app_ok) return `<span class="sub">MoAI-S ${esc(r.min_app)} 이상 필요</span>`;
+      if (!r.available) return '<span class="sub">설치 파일 준비 중</span>';
+      return '<span class="sub">받지 않음</span>';
+  }
+}
+
+// 상태별 단추 — [상세] 는 늘 맨 앞 (설계서 §5-2)
+function actButtons(r, detail) {
+  const b = [];
+  const B = (t, cmd, extra) => `<button data-cmd="${cmd}" data-a="${esc(r.alias)}" ${extra || ""}>${t}</button>`;
+  if (!detail) b.push(B("상세", "detail"));
+  switch (r.state) {
+    case "builtin": case "installed":
+      b.push(B("사용", "use", r.locked ? 'disabled title="답을 만드는 중"' : ""));
+      if (r.state === "installed") b.push(B("삭제", "delete"));
+      break;
+    case "none":
+      b.push(B(detail ? `받기 ${fmtGB(r.size_mb)}` : "받기", "get", (r.available && r.app_ok ? "" : "disabled") + (detail ? ' class="pri"' : "")));
+      break;
+    case "queued": case "downloading": case "verifying": b.push(B("취소", "cancel")); break;
+    case "paused": b.push(B("이어 받기", "get")); b.push(B("지우기", "discard")); break;
+  }
+  return b.join("");
+}
+
+// 줄 순서 — 추천 → 사용 중 → 설치·내장 → 받는 중들 → 받지 않음, 같은 묶음 안에서는 품질 순위
+function rowOrder(r) {
+  if (r.recommended) return 0;
+  if (r.state === "inuse") return 1;
+  if (r.state === "installed" || r.state === "builtin") return 2;
+  if (r.state === "none") return 4;
+  return 3;
+}
+
+function drawModels(d) {
+  mvData = d;
+  if (d.info) mvInfo = d.info;
+  const hw = d.hw || {};
+  const cur = d.current_ttft != null ? `약 ${sec1(d.current_ttft)} (${esc(d.current_name)})` : esc(d.current_name || "");
+  const hwHtml = `<div><span class="k">메모리</span>${esc(hw.ram)}</div><div><span class="k">그래픽</span>${esc(hw.gpu)}</div>` +
+    `<div><span class="k">CPU</span>${esc(hw.cpu)}</div><div><span class="k">디스크 여유</span>${esc(hw.disk)}</div>` +
+    `<div><span class="k">지금 첫 글자</span>${cur}${d.base_by_spec ? " · 사양으로 어림" : ""}</div>`;
+  // 추천 줄
+  const nm = (a) => { const r = (d.rows || []).find((x) => x.alias === a); return r ? `<b>${esc(r.name)}</b>` : ""; };
+  let rec = "";
+  if (d.rec_base || d.rec_prec) {
+    const p = [];
+    if (d.rec_base) p.push("기본은 " + nm(d.rec_base));
+    if (d.rec_prec) p.push("정밀은 " + nm(d.rec_prec));
+    rec = "추천: " + p.join(", ");
+    const pr = (d.rows || []).find((x) => x.alias === d.rec_prec);
+    if (pr && pr.est != null) rec += ` — 정밀 모델은 답이 정확한 대신 첫 글자가 약 ${sec1(pr.est)}로 늦습니다.`;
+  }
+  if (!d.rec_prec && d.prec_fastest != null) rec += (rec ? " " : "") + `이 PC 에서는 정밀 모델이 느립니다(약 ${sec1(d.prec_fastest)}).`;
+  // 같은 값이면 다시 그리지 않는다(눌러 둔 단추·스크롤이 튀지 않게)
+  const sig = JSON.stringify([d.rows, hwHtml, rec, d.note, mvMsg]);
+  if (sig !== mvSig) {
+    mvSig = sig;
+    $("mv_hw").innerHTML = hwHtml;
+    $("mv_rec").innerHTML = rec;
+    $("mv_rec").classList.toggle("hidden", !rec);
+    $("mv_msg").textContent = mvMsg;
+    $("mv_note").textContent = d.note || "";
+    for (const [tier, id] of [["base", "mv_base"], ["precise", "mv_prec"]]) {
+      const rows = (d.rows || []).filter((r) => r.tier === tier).sort((a, b) => rowOrder(a) - rowOrder(b) || (a.rank || 99) - (b.rank || 99));
+      // 창이 좁아(약 710px) 칸을 둘로 — 왼쪽: 이름 · 설명 · 크기와 예상 첫 글자 / 오른쪽: 상태 · 단추
+      $(id).innerHTML = rows.map((r) =>
+        `<tr><td><div class="mc">${modelIcon(r.icon, r.name)}<div><span class="nm" data-cmd="detail" data-a="${esc(r.alias)}">${esc(r.name)}</span>${badges(r)}` +
+        `<br><span class="sub">${esc(r.vendor)} · ${esc(r.summary)}</span>` +
+        `<br><span class="sub">${fmtGB(r.size_mb)} · 이 PC 예상 첫 글자 ${estText(r)}</span>` +
+        `${r.msg ? `<br><span class="sub t-warn">${esc(r.msg)}</span>` : ""}</div></div></td>` +
+        `<td class="acts"><div class="st">${stateCell(r)}</div>${actButtons(r, false)}</td></tr>`
+      ).join("") || '<tr><td class="sub">보일 모델이 없습니다</td></tr>';
+    }
+  }
+  if (mvDetail) drawDetail(mvDetail);
+}
+
+// 단추 누름 — 목록 · 상세 화면 공통
+function modelCmd(cmd, a) {
+  const r = (mvData && mvData.rows || []).find((x) => x.alias === a);
+  if (cmd === "detail") { mvScroll = document.querySelector(".panel").scrollTop; mvDetail = a; drawDetail(a); return; }
+  if (cmd === "get" && r && !r.mem_ok && !confirm(`이 PC 메모리로는 ${r.name} 가 느리거나 열리지 않을 수 있습니다(필요 약 ${r.need_gb}GB).\n그래도 받을까요?`)) return;
+  if (cmd === "delete" && !confirm(`${r ? r.name : a} 를 지울까요?\n\n다시 쓰려면 다시 받아야 합니다(${r ? fmtGB(r.size_mb) : ""}).`)) return;
+  if (cmd === "discard" && !confirm("받은 부분을 지울까요?")) return;
+  const map = { get: "model_get", cancel: "model_cancel", discard: "model_discard", use: "model_use", delete: "model_delete",
+                source: "model_source", license: "model_license" };
+  if (map[cmd]) send({ type: map[cmd], alias: a });
+}
+$("tab_model").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-cmd]");
+  if (!el || el.disabled) return;
+  if (el.dataset.cmd === "back") { showModelList(); return; }
+  modelCmd(el.dataset.cmd, el.dataset.a);
+});
+
+function showModelList() {
+  mvDetail = null;
+  mvDetSig = "";
+  $("mv_detail").classList.add("hidden");
+  $("mv_list").classList.remove("hidden");
+  document.querySelector(".panel").scrollTop = mvScroll;
+}
+
+// 상세 화면 (설계서 §5-3) — 목록 파일 내용만으로 그린다(인터넷 · 외부 페이지 없이)
+function drawDetail(a) {
+  const r = (mvData && mvData.rows || []).find((x) => x.alias === a);
+  const m = mvInfo[a] || {};
+  if (!r) { showModelList(); return; }
+  // 같은 값이면 다시 그리지 않는다(라이선스 글 · 스크롤이 1초마다 풀리지 않게)
+  const sig = JSON.stringify([a, r, m, mvData.current, mvData.hw]);
+  if (sig === mvDetSig && !$("mv_detail").classList.contains("hidden")) return;
+  mvDetSig = sig;
+  const base = (mvData.rows || []).find((x) => x.state === "builtin" || x.alias === "qwen3-1.7b-q4");
+  const bb = (base && mvInfo[base.alias] && mvInfo[base.alias].bench) || {};
+  const b = m.bench || null;
+  const tier = r.tier === "precise" ? "정밀 모델" : "기본 모델";
+  const chips = [m.params_b ? `매개변수 ${m.params_b}B` : "", `파일 ${fmtGB(r.size_mb)}`, `필요 메모리 약 ${r.need_gb}GB`,
+                 r.korean ? "한국어 특화" : (m.languages || ""), m.license ? `${m.license}` : ""].filter(Boolean);
+  // 이 PC 에서 — 지금 모델과 비교 · 근거 한 줄
+  const curR = (mvData.rows || []).find((x) => x.alias === mvData.current);
+  let pc = r.est == null ? "아직 재지 않아 예상할 수 없습니다." : `예상 첫 글자 <b>약 ${sec1(r.est)}</b> · ${r.grade}`;
+  if (r.est != null && curR && curR.alias !== r.alias && curR.est) {
+    const k = r.est / curR.est;
+    pc += ` — 지금 쓰는 ${esc(curR.name)}(${sec1(curR.est)})보다 ` + (k >= 1.15 ? `약 ${k.toFixed(1)}배 늦습니다.` : k <= 0.87 ? "빠릅니다." : "비슷합니다.");
+  }
+  const why = [];
+  why.push(r.mem_ok ? `메모리 ${esc(mvData.hw.ram.split(" ")[0])} 로 충분` : `메모리 부족(필요 약 ${r.need_gb}GB)`);
+  if (mvData.hw.gpu) why.push(esc(mvData.hw.gpu));
+  if (m.ttft_ratio) why.push((r.by_spec ? "사양으로 어림한" : "이 PC 에서 잰") + ` 내장 모델 속도 × ${m.ttft_ratio}`);
+  // 시험 결과 표
+  const pct = (v) => (v == null ? "—" : Math.round(v * 100) + "%");
+  const val = (v) => (v == null ? "—" : v);
+  let bench = '<div class="sub">아직 재지 않았습니다.</div>';
+  if (b) {
+    const same = base && base.alias === a;
+    const col = (x) => same ? "" : `<td>${x}</td>`;
+    bench = `<table class="bt"><tr><th></th><th>이 모델</th>${same ? "" : `<th>내장 ${esc(base ? base.name : "")}</th>`}</tr>` +
+      `<tr><td>정답 (질문 ${b.of}개)</td><td><b>${val(b.correct)}</b></td>${col(val(bb.correct))}</tr>` +
+      `<tr><td>근거에 없는 말이 섞인 정도 (낮을수록 좋음)</td><td><b>${pct(b.ungrounded)}</b></td>${col(pct(bb.ungrounded))}</tr>` +
+      `<tr><td>"답할 수 없습니다"로 피한 답</td><td>${val(b.evasive)}</td>${col(val(bb.evasive))}</tr>` +
+      `<tr><td>첫 글자 (개발 PC)</td><td>${b.ttft_s == null ? "—" : b.ttft_s + "초"}</td>${col(bb.ttft_s == null ? "—" : bb.ttft_s + "초")}</tr></table>` +
+      `<div class="two"><div class="good">좋은 점${(m.pros || []).map((x) => "<br>· " + esc(x)).join("")}</div>` +
+      `<div class="bad">아쉬운 점${(m.cons || []).map((x) => "<br>· " + esc(x)).join("")}</div></div>` +
+      `<div class="sub">${esc(b.date)} 측정 · 사내 문서 골든셋</div>`;
+  }
+  const st = ["downloading", "queued", "verifying", "installing", "paused"].includes(r.state) ? stateCell(r) : (r.msg ? esc(r.msg) : "");
+  $("mv_detail").innerHTML = `<div class="mdet">` +
+    `<div class="back"><button class="lnk" data-cmd="back">← 모델 목록</button></div>` +
+    `<div class="dh">${modelIcon(r.icon, r.name, "big")}<div><div class="t">${esc(r.name)}${badges(r)}</div>` +
+    `<div class="sub">${esc(r.vendor)} · ${tier}${m.released ? " · " + esc(m.released) + "년 공개" : ""}</div></div></div>` +
+    `<div class="chips">${chips.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>` +
+    `<fieldset><legend>이 PC 에서</legend>${pc}<br><span class="sub">근거: ${why.join(" · ")}</span></fieldset>` +
+    `<fieldset><legend>소개</legend>${esc(m.intro || r.summary || "")}</fieldset>` +
+    `<fieldset><legend>사내 문서 시험 결과</legend>${bench}</fieldset>` +
+    `<fieldset><legend>라이선스 · 출처</legend>${esc(m.license || "")}${m.license_note ? " — " + esc(m.license_note) : ""}<br>` +
+    `<div class="btns"><button data-cmd="license" data-a="${esc(a)}">라이선스 전문</button>` +
+    (m.has_source ? `<button data-cmd="source" data-a="${esc(a)}">원본 모델 카드 열기 ↗</button>` : "") + `</div>` +
+    `<div class="lic${mvLic[a] ? "" : " hidden"}" id="mv_lic">${esc(mvLic[a] || "")}</div></fieldset>` +
+    `<div class="act"><span class="grow">${st}</span>${actButtons(r, true)}</div></div>`;
+  $("mv_list").classList.add("hidden");
+  $("mv_detail").classList.remove("hidden");
+}
+
+// 앱이 보낸 라이선스 글
+function showLicense(a, text) {
+  if (mvDetail !== a || !$("mv_lic")) return;
+  mvLic[a] = text || "라이선스 글이 없습니다.";
+  $("mv_lic").textContent = mvLic[a];
+  $("mv_lic").classList.remove("hidden");
+}
+
 send({ type: "ready" });
 </script>
 </body>

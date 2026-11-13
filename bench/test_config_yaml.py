@@ -31,7 +31,7 @@ KEYS = ["CHUNK_TOKENS", "CHUNK_OVERLAP", "CHUNK_MODE", "MIN_CHUNK_TOKENS",
         "TABLE_HEADER_MAX_TOKENS", "DENSE_TOP_K", "BM25_TOP_K", "RRF_K", "BM25_K1",
         "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT", "DEFAULT_GEN_MODEL",
         "PARENT_MODE", "PARENT_MAX_TOKENS", "FLATTEN_TABLES", "PDF_INFER_HEADINGS",
-        "SYSTEM_PROMPT_TEXT"]
+        "SYSTEM_PROMPT_TEXT", "NEIGHBORS"]
 
 
 #------------------------------------------------------------------
@@ -165,8 +165,15 @@ generation:
     check("generation.model 로 빠름을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "qwen3-0.6b-q4", (rc, v, err))
     rc, v, err = load_in_child("generation:\n  model: midm-2.0-mini-q4\n", tmp=tmp)
     check("generation.model 로 Mi:dm 을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "midm-2.0-mini-q4", (rc, v, err))
-    rc, v, err = load_in_child("generation:\n  model: kanana-1.5-2.1b-q4\n", tmp=tmp)
-    check("generation.model 에 측정용 kanana 는 못 넣는다", rc != 0, (rc, err[-200:]))
+    # 설정 > 모델에서 받은 모델도 고를 수 있게 별칭은 모델 표 전체에서 받는다(모델 받기 설계서 §8)
+    rc, v, err = load_in_child("generation:\n  model: qwen3.5-4b-q4\n", tmp=tmp)
+    check("generation.model 로 받은 모델(Qwen3.5-4B)을 기본으로", rc == 0 and v["DEFAULT_GEN_MODEL"] == "qwen3.5-4b-q4", (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  model: no-such-model\n", tmp=tmp)
+    check("generation.model 에 모델 표에 없는 별칭은 못 넣는다", rc != 0, (rc, err[-200:]))
+    rc, v, err = load_in_child("generation:\n  model: qwen3-4b-q4\n", tmp=tmp)
+    check("neighbors auto — Qwen3-4B 는 이웃 청크를 붙인다", rc == 0 and v["NEIGHBORS"] is True, (rc, v, err))
+    rc, v, err = load_in_child("generation:\n  model: qwen3.5-4b-q4\n  neighbors: on\n", tmp=tmp)
+    check("neighbors on — 모델과 상관없이 붙인다", rc == 0 and v["NEIGHBORS"] is True, (rc, v, err))
 
     # 실험 옵션 — config.yaml 에 적힌 대로 읽히는지(기본은 모두 끔)
     check("실험 옵션 기본값은 모두 끔", d0 and (d0["PARENT_MODE"], d0["PARENT_MAX_TOKENS"], d0["FLATTEN_TABLES"],

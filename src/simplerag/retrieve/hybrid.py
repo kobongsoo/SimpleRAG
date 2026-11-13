@@ -124,7 +124,7 @@ _HEAD = re.compile(r"^\[[^\]\n]*\]\n")
 #=> 답이 다음 청크로 잘려 넘어간 근거를 채운다. 근거마다 같은 문서의 바로 앞·뒤 청크(±1) 가운데
 #   리랭커 후보(pool) 안에 든 것만 붙인다 — 질문과 상관있다고 이미 뽑힌 것만 붙여 근거가 덜 길어진다
 #   (C1~C5 다섯 조건 중 토큰당 가장 나음: 정답 발췌 63 → 73, 근거 340 → 458 토큰).
-#    1) 설정(generation.precision)이 꺼졌으면 그대로 돌려준다
+#    1) 설정(generation.neighbors — auto 면 모델마다)이 꺼졌으면 그대로 돌려준다
 #    2) 근거마다 (문서, 청크 번호 ±1) 를 후보에서 찾는다. 이미 근거로 든 청크는 붙이지 않는다
 #    3) 앞 이웃은 머리 줄 뒤·본문 앞에, 뒤 이웃은 본문 뒤에 머리 줄을 떼고 잇는다
 #
@@ -135,7 +135,8 @@ _HEAD = re.compile(r"^\[[^\]\n]*\]\n")
 # -out: error = 없음
 #------------------------------------------------------------------
 def attach_neighbors(picked, pool):
-    if not config.PRECISION:
+    # 모델마다 정한 이웃 청크 설정(config.NEIGHBORS — auto 면 Qwen3-4B 만)
+    if not config.NEIGHBORS:
         return picked, 0
     by = {(c.get("doc_path"), c.get("chunk_idx")): c for c in pool}
     out, n = [], 0

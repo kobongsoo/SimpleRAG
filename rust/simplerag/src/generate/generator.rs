@@ -54,6 +54,32 @@ pub struct Generator {
     pub last_warm_ms: Mutex<Option<f64>>,
     model: Mutex<Option<Model>>,
     load_lock: Mutex<()>,
+    // 마지막으로 모델을 쓴 때 — 쉬는 동안 내리기(메모리 절감 설계서 C안)가 본다
+    last_used: Mutex<Instant>,
+}
+
+//------------------------------------------------------------------
+// 모델을 쓰는 동안 쥐는 잠금
+//=> 생성 내내 모델 잠금을 쥐므로 그사이 내리기(unload_if_idle)는 끼어들지 못한다.
+//   다 쓰고 놓을 때 '마지막 사용 시각'을 새로 적는다 — 긴 답이 끝난 뒤부터 쉬는 시간을 센다.
+// -필드: g = 모델 잠금 / last = 마지막 사용 시각 칸
+//------------------------------------------------------------------
+struct ModelUse<'a> {
+    g: std::sync::MutexGuard<'a, Option<Model>>,
+    last: &'a Mutex<Instant>,
+}
+
+impl ModelUse<'_> {
+    // 쥔 모델 — lock_model 이 Some 일 때만 만든다
+    fn m(&mut self) -> &mut Model {
+        self.g.as_mut().expect("lock_model 이 확인한 모델")
+    }
+}
+
+impl Drop for ModelUse<'_> {
+    fn drop(&mut self) {
+        *self.last.lock().unwrap() = Instant::now();
+    }
 }
 
 impl Generator {
@@ -64,11 +90,60 @@ impl Generator {
             last_warm_ms: Mutex::new(None),
             model: Mutex::new(None),
             load_lock: Mutex::new(()),
+            last_used: Mutex::new(Instant::now()),
         }
     }
 
     pub fn is_ready(&self) -> bool {
         self.model.lock().unwrap().is_some()
+    }
+
+    //------------------------------------------------------------------
+    // 모델 잠그기 — 내려가 있으면 다시 올린 뒤 잠근다
+    //=> ensure_loaded 와 잠금 사이에 쉬는-내리기가 끼어들 수 있어, 잠근 뒤 비어 있으면 다시 올린다.
+    //
+    // -in: 없음
+    //
+    // -out: ModelUse = 모델 잠금(놓을 때 마지막 사용 시각을 적는다)
+    // -out: error = 적재 실패면 Err, 세 번 연달아 비어 있으면 Err("GenerateError: …")
+    //------------------------------------------------------------------
+    fn lock_model(&self) -> Result<ModelUse<'_>, String> {
+        for _ in 0..3 {
+            self.ensure_loaded()?;
+            let g = self.model.lock().unwrap();
+            if g.is_some() {
+                return Ok(ModelUse { g, last: &self.last_used });
+            }
+        }
+        Err("GenerateError: 모델을 올리지 못했습니다(내리기와 겹침)".into())
+    }
+
+    //------------------------------------------------------------------
+    // 오래 쉬었으면 모델 내리기 (메모리 절감 설계서 C안)
+    //=> 마지막으로 쓴 뒤 idle 이 지났으면 모델·컨텍스트를 버려 램과 공유 GPU 메모리를 돌려준다.
+    //    1) 올리는 중(load_lock)이거나 쓰는 중(모델 잠금)이면 건드리지 않는다 — try_lock
+    //    2) 쉰 시간이 모자라면 그대로 둔다
+    //    3) None 으로 바꾸면 Model 의 Drop 이 llama_free · model_free 를 부른다
+    //   백엔드(cpu|vulkan) 값은 남겨 두므로 다시 올릴 때 측정(프로브)을 하지 않는다.
+    //
+    // -in: idle = 이만큼 안 썼으면 내린다
+    //
+    // -out: true = 내렸다 / false = 안 내림(안 올라가 있음 · 쓰는 중 · 아직 덜 쉼)
+    // -out: error = 없음
+    //------------------------------------------------------------------
+    pub fn unload_if_idle(&self, idle: std::time::Duration) -> bool {
+        let Ok(_l) = self.load_lock.try_lock() else { return false };
+        let Ok(mut g) = self.model.try_lock() else { return false };
+        if g.is_none() || self.last_used.lock().unwrap().elapsed() < idle {
+            return false;
+        }
+        *g = None;
+        true
+    }
+
+    // 지금 쓴 것으로 치기 — 미리 올리기(/warm)가 부른다. 곧 쓸 테니 쉬는 시간을 다시 센다
+    pub fn touch(&self) {
+        *self.last_used.lock().unwrap() = Instant::now();
     }
 
     pub fn backend(&self) -> String {
@@ -109,6 +184,8 @@ impl Generator {
         };
         let t0 = Instant::now();
         let m = Model::load(api, &path, &opts).map_err(|e| format!("GenerateError: 모델 로딩 실패: {}", e))?;
+        // 막 올린 모델이 옛 '마지막 사용 시각' 때문에 곧바로 다시 내려가지 않게
+        self.touch();
         *self.model.lock().unwrap() = Some(m);
         Ok(t0.elapsed().as_secs_f64() * 1000.0)
     }
@@ -169,9 +246,8 @@ impl Generator {
     //------------------------------------------------------------------
     pub fn stream(&self, query: &str, chunks: &[String], max_tokens: Option<usize>, system: Option<&str>,
                   on_piece: &mut dyn FnMut(&str)) -> Result<GenOut, String> {
-        self.ensure_loaded()?;
-        let mut g = self.model.lock().unwrap();
-        let m = g.as_mut().unwrap();
+        let mut u = self.lock_model()?;
+        let m = u.m();
         let n_out = max_tokens.unwrap_or(cfg().gen_max_tokens as usize);
         let sys = system.map(|s| s.to_string()).unwrap_or_else(active_system_prompt);
         let prompt = self.fit_prompt(m, &sys, query, chunks, n_out);
@@ -190,9 +266,8 @@ impl Generator {
     //------------------------------------------------------------------
     pub fn stream_chat(&self, system: &str, user: &str, max_tokens: usize, stop: Option<&str>,
                        on_piece: &mut dyn FnMut(&str)) -> Result<GenOut, String> {
-        self.ensure_loaded()?;
-        let mut g = self.model.lock().unwrap();
-        let m = g.as_mut().unwrap();
+        let mut u = self.lock_model()?;
+        let m = u.m();
         let prompt = build_chat_prompt(system, user, &self.alias);
         self.run_prompt(m, &prompt, max_tokens, stop, on_piece)
     }
@@ -257,9 +332,8 @@ impl Generator {
     // -out: error = 적재·디코드 실패면 Err
     //------------------------------------------------------------------
     pub fn complete(&self, prompt: &str, max_tokens: usize) -> Result<String, String> {
-        self.ensure_loaded()?;
-        let mut g = self.model.lock().unwrap();
-        let m = g.as_mut().unwrap();
+        let mut u = self.lock_model()?;
+        let m = u.m();
         let ptoks = m.prompt_tokens(prompt);
         let mut logits = m.eval_prompt(&ptoks)?;
         let mut bytes: Vec<u8> = vec![];

@@ -627,6 +627,13 @@ $("send").onclick = doSend;
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); doSend(); }
 });
+// 질문을 치기 시작하면 워커에 알린다 — 쉬느라 내린 답변 모델·리랭커를 치는 동안 미리 올린다(메모리 절감 설계서 C안).
+//   30초에 한 번만 보낸다(글자마다 보내지 않게)
+let typingAt = 0;
+$("input").addEventListener("input", () => {
+  const now = Date.now();
+  if (now - typingAt > 30000) { typingAt = now; send({ type: "typing" }); }
+});
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if ($("pop").style.display === "block") { $("pop").style.display = "none"; return; }
