@@ -651,7 +651,9 @@ fn read_line() -> Option<String> {
 
 //------------------------------------------------------------------
 // 쉬면 생성 모델·리랭커 내리기 — 감시 스레드 (메모리 절감 설계서 C안)
-//=> 30초마다 두 모델의 '마지막 사용 뒤 지난 시간'을 보고 generation.idle_unload_min 분이 넘으면 내린다.
+//=> 30초마다 두 모델의 '마지막 사용 뒤 지난 시간'을 보고 generation.idle_unload_min 분(기본 5)이 넘으면 내린다.
+//   스캔 문서 OCR 이 도는 중이면(최근 2분 안에 /ocr-step) 3분만 쉬어도 내린다 — OCR 은 답변 모델이 필요 없고,
+//   그동안 iGPU 에 올린 답변 모델(약 2GB)을 쥐고 있을 까닭이 없다(2026-11-13 실측).
 //   검색 · 모두 찾기 · 자동 인덱싱은 두 모델이 필요 없으므로 그대로 돈다.
 //   내린 사실은 stderr 로그로만 남긴다(stdout 은 질문 응답 줄이라 섞지 않는다).
 //
@@ -660,18 +662,24 @@ fn read_line() -> Option<String> {
 // -out: 없음 (설정이 0 이면 스레드를 띄우지 않는다)
 // -out: error = 없음
 //------------------------------------------------------------------
+// OCR 이 도는 동안 답변 모델 · 리랭커를 내리는 쉼 시간(분)
+const OCR_IDLE_UNLOAD_MIN: i64 = 3;
+
 fn start_idle_unloader(app: &std::sync::Arc<App>) {
     let min = cfg().gen_idle_unload_min;
     if min <= 0 {
         return;
     }
-    let idle = std::time::Duration::from_secs(min as u64 * 60);
     let app = app.clone();
     std::thread::Builder::new().name("idle-unload".into()).spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
-        let gone = app.unload_idle(idle);
+        // OCR 이 돌고 있으면 더 짧게(설정이 3분보다 짧으면 설정대로)
+        let ocr = crate::commands::ocr_active_within(std::time::Duration::from_secs(120));
+        let m = if ocr { min.min(OCR_IDLE_UNLOAD_MIN) } else { min };
+        let gone = app.unload_idle(std::time::Duration::from_secs(m as u64 * 60));
         if !gone.is_empty() {
-            log(&format!("[idle] {}분 쉬어 내림: {} — 다음 질문이나 채팅 창을 열 때 다시 올립니다", min, gone.join(" · ")));
+            log(&format!("[idle] {}분 쉬어 내림{}: {} — 다음 질문이나 채팅 창을 열 때 다시 올립니다",
+                         m, if ocr { "(스캔 문서 읽는 중)" } else { "" }, gone.join(" · ")));
         }
     }).ok();
 }

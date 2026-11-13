@@ -244,6 +244,19 @@ fn embed_pending(app: &App, max: usize) -> Result<Map<String, Value>, String> {
     Ok(obj(json!({"ok": true, "filled": 0, "pending": 0, "retitle": left, "retitled": done})))
 }
 
+// 마지막으로 OCR 대기열을 처리한 때 — 대기열이 남아 있을 때만 적는다
+static OCR_LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+//------------------------------------------------------------------
+// 스캔 문서 OCR 이 도는 중인가 — 최근 within 안에 대기열이 남은 채로 /ocr-step 을 처리했나
+//
+// -in: within = 얼마 안에(예: 2분)
+// -out: true = 도는 중 / error = 없음
+//------------------------------------------------------------------
+pub fn ocr_active_within(within: std::time::Duration) -> bool {
+    OCR_LAST.lock().unwrap_or_else(|p| p.into_inner()).map(|t| t.elapsed() <= within).unwrap_or(false)
+}
+
 //------------------------------------------------------------------
 // OCR 대기열 조금씩 처리 (OCR 설계서 §6)
 //=> 대기열에서 최대 pages 쪽만 OCR 한다(엔진은 대기열이 빌 때까지 올려 둔다). 문서 하나를 끝내면
@@ -258,6 +271,10 @@ fn ocr_step(app: &App, pages: usize) -> Result<Map<String, Value>, String> {
     let mut st = state()?;
     let enabled = crate::ocr::enabled();
     let (d, p) = indexer::ocr_queue_size(&st);
+    // 대기열이 남아 있으면 'OCR 이 도는 중' 으로 적는다 — 쉬면 내리기가 답변 모델을 일찍 내린다(cli::start_idle_unloader)
+    if enabled && d > 0 && pages > 0 {
+        *OCR_LAST.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+    }
     if !enabled || pages == 0 || d == 0 {
         if d == 0 {
             crate::ocr::unload();

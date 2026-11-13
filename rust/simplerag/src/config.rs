@@ -232,7 +232,7 @@ pub struct Config {
     // 멀티턴(generation.multiturn, 기본 켬) — /ask 의 앞 질문을 검색어에 이어 붙인다(app::turn_queries)
     pub multiturn: bool,
     pub gen_max_tokens: i64,
-    // 쉬면 생성 모델·리랭커 내리기(generation.idle_unload_min, 분, 기본 10, 0 = 끔) — 메모리 절감 설계서 C안
+    // 쉬면 생성 모델·리랭커 내리기(generation.idle_unload_min, 분, 기본 5 · 스캔 문서 OCR 중이면 3, 0 = 끔) — 메모리 절감 설계서 C안
     pub gen_idle_unload_min: i64,
     pub prompt: String,
     pub system_prompt_text: String,
@@ -504,7 +504,7 @@ fn build() -> Result<Config, ConfigError> {
     };
     let gen_max_tokens = pick_int(&y, "generation.max_tokens", 200, Some("SIMPLERAG_GEN_MAX_TOKENS"))?;
     // 음수는 0(끔)으로 — 환경변수는 스키마 검사를 거치지 않는다
-    let gen_idle_unload_min = pick_int(&y, "generation.idle_unload_min", 10, Some("SIMPLERAG_IDLE_UNLOAD_MIN"))?.max(0);
+    let gen_idle_unload_min = pick_int(&y, "generation.idle_unload_min", 5, Some("SIMPLERAG_IDLE_UNLOAD_MIN"))?.max(0);
     let prompt = pick_str(&y, "generation.prompt", "v0", Some("SIMPLERAG_PROMPT")).trim().to_lowercase();
     if !["v0", "v4", "v5", "custom"].contains(&prompt.as_str()) {
         return Err(ConfigError(format!(
