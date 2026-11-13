@@ -71,6 +71,9 @@ pub struct Api {
     vocab_get_add_bos: unsafe extern "C" fn(*const c_void) -> bool,
     vocab_get_add_eos: unsafe extern "C" fn(*const c_void) -> bool,
     vocab_sep: Option<unsafe extern "C" fn(*const c_void) -> Token>,
+    // 메모리 통째로 비우기(llama_memory_clear(mem, data)) — 순환 메모리 모델(Qwen3.5 등)은 seq_rm(-1, 0, -1) 로 비우면
+    //   다음 계산에서 GGML_ASSERT(cell.has_seq_id(seq_id)) 로 멈춘다. 옛 DLL 에 없으면 seq_rm 으로 대신한다
+    memory_clear: Option<unsafe extern "C" fn(*mut c_void, bool)>,
 }
 
 unsafe impl Send for Api {}
@@ -139,6 +142,7 @@ fn load(dir: &str) -> Result<Api, String> {
             vocab_get_add_bos: sym!(b"llama_vocab_get_add_bos\0"),
             vocab_get_add_eos: sym!(b"llama_vocab_get_add_eos\0"),
             vocab_sep: opt!(b"llama_vocab_sep\0"),
+            memory_clear: opt!(b"llama_memory_clear\0"),
             _libs: vec![lib],
         };
         if let Some(ls) = api.log_set {
@@ -333,8 +337,9 @@ impl Model {
         }
         unsafe {
             let mem = (self.api.get_memory)(self.ctx);
-            if !(self.api.memory_seq_rm)(mem, -1, keep as i32, -1) {
-                (self.api.memory_seq_rm)(mem, -1, 0, -1);
+            // 앞부분을 남기고 뒤만 지운다 — 순환 메모리 모델은 부분 지우기를 못 해 false 를 돌려주므로 통째로 비운다
+            if keep == 0 || !(self.api.memory_seq_rm)(mem, -1, keep as i32, -1) {
+                clear_memory(self.api, mem);
                 keep = 0;
             }
         }
@@ -370,9 +375,26 @@ impl Model {
     pub fn reset(&mut self) {
         unsafe {
             let mem = (self.api.get_memory)(self.ctx);
-            (self.api.memory_seq_rm)(mem, -1, 0, -1);
+            clear_memory(self.api, mem);
         }
         self.cache.clear();
+    }
+}
+
+//------------------------------------------------------------------
+// 메모리(KV · 순환 상태) 통째로 비우기
+//=> llama_memory_clear 가 있으면 그것으로(순환 메모리 모델도 안전), 없으면(옛 DLL) seq_rm(-1, 0, -1).
+//   Qwen3.5(Gated DeltaNet 혼합)는 seq_rm 으로 비우면 다음 decode 에서 GGML_ASSERT 로 멈췄다(2026-11-13).
+//
+// -in: api = llama 함수 묶음 / mem = llama_get_memory 결과
+// -out: 없음 / error = 없음
+//------------------------------------------------------------------
+unsafe fn clear_memory(api: &Api, mem: *mut c_void) {
+    match api.memory_clear {
+        Some(f) => f(mem, true),
+        None => {
+            (api.memory_seq_rm)(mem, -1, 0, -1);
+        }
     }
 }
 
