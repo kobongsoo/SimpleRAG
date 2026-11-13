@@ -135,8 +135,7 @@ fn index_doc(app: &App, path: &str, retry: bool) -> Result<Map<String, Value>, S
     }
     // 같은 파일로 실패했던 문서는 건너뛴다 — 다시 시도(retry)면 그래도 해 본다.
     //   OCR 이 켜졌고 글자층이 없어 실패했던 문서(스캔 PDF · 그림)는 폴더 대조가 다시 넣은 것이므로 해 본다(OCR 대기열로 간다)
-    let ocr_retry = |f: &Value| crate::ocr::enabled()
-        && f.get("why").and_then(|v| v.as_str()).map_or(false, |w| indexer::ocr_retry_failed(&path, w));
+    let ocr_retry = |f: &Value| crate::ocr::enabled() && indexer::ocr_retry_failed(&path, f);
     if let Some(f) = st.get("failed").and_then(|v| v.get(&path)).filter(|f| !retry && !ocr_retry(f)) {
         if f.get("fingerprint").and_then(|v| v.as_str()) == Some(fp.as_str()) {
             return Ok(obj(json!({"ok": false, "path": path, "result": "failed_before", "why": f.get("why").cloned().unwrap_or(json!(""))})));

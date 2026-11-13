@@ -112,9 +112,10 @@ fn ensure(slot: &mut Option<Engine>) -> Result<&mut Engine, String> {
         models_present().map_err(|e| format!("OCRError: {}", e))?;
         let d = &cfg().ocr_dir;
         let th = cfg().ocr_threads.max(1) as usize;
-        let det = crate::embed::make_session(&pyutil::join(d, DET_FILE), th, true)
+        // 아레나를 끈 세션 — 쪽 크기가 매번 달라 메모리가 늘기만 하던 것을 막는다(embed::make_session_lean)
+        let det = crate::embed::make_session_lean(&pyutil::join(d, DET_FILE), th)
             .map_err(|e| format!("OCRError: 검출 모델 적재 실패: {}", e))?;
-        let rec = crate::embed::make_session(&pyutil::join(d, REC_FILE), th, true)
+        let rec = crate::embed::make_session_lean(&pyutil::join(d, REC_FILE), th)
             .map_err(|e| format!("OCRError: 인식 모델 적재 실패: {}", e))?;
         let dict = rec::load_dict(&pyutil::join(d, DICT_FILE))?;
         *slot = Some(Engine { det, rec, dict });
@@ -277,7 +278,10 @@ fn coverage(boxes: &[[f32; 4]], pw: f32, ph: f32) -> f32 {
 //      · n < 10                               → 건너뜀 (빈 쪽·간지)
 //      · real ≥ 70% 이고 n < 200              → OCR (스캔 쪽에 쪽 번호·도장 글자가 얹힌 쪽, 그림 속 글 디자인)
 //      · 그 밖                                → 글자층만
-//   3) 앞에서부터 ocr_max_pages 쪽까지만
+//   3) 문서 전체에 글자층 글이 거의 없는데(공백 뺀 20자 미만) 고른 쪽이 없으면 모든 쪽을 고른다 —
+//      글을 그림 개체가 아니라 선 · 도형(벡터)으로 그린 PDF 는 1) · 2) 로는 한 쪽도 안 잡혀 '글자 없는 PDF' 로
+//      실패하고, 예전 실패 다시 보기와 맞물려 순찰마다 실패 알림이 떴다(2026-11-13, 최저임금 전단지 등 2건)
+//   4) 앞에서부터 ocr_max_pages 쪽까지만
 //
 // -in: pages = pdfium 으로 읽은 쪽들(images · page_w · page_h 가 채워져 있어야 한다)
 //
@@ -315,6 +319,11 @@ pub fn pdf_ocr_pages(pages: &[crate::pdfium::PageText]) -> (Vec<usize>, usize) {
         if hit {
             out.push(i);
         }
+    }
+    // 3) 글자층이 사실상 없는 문서 — 그림 개체가 없어도(벡터로 그린 글) 모든 쪽을 OCR 한다
+    let total: usize = pages.iter().map(|p| p.text.chars().filter(|c| !c.is_whitespace()).count()).sum();
+    if out.is_empty() && total < 20 {
+        out = (0..np).collect();
     }
     let cap = cfg().ocr_max_pages.max(1) as usize;
     let dropped = out.len().saturating_sub(cap);

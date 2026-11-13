@@ -22,6 +22,9 @@ const CLI_RETRY_S: u64 = 60;
 const NOTIFY_AT_LEAST: usize = 3;
 // 벡터 채우기는 마지막 질문 뒤 이만큼 쉬었을 때만 보낸다(질문이 먼저 — 인덱싱 속도 개선 설계서 §3-5-5)
 const PENDING_IDLE_S: f64 = 2.0;
+// 스캔 문서 OCR 은 마지막 질문 · 입력 신호 뒤 이만큼 쉬었을 때만 — 한 쪽이 2~7초라 2초만 쉬고 시작하면
+//   답을 읽고 다음 질문을 치는 사이에 끼어들어 질문이 그 쪽 끝을 기다렸다(2026-11-13 '답이 느려졌다')
+const OCR_IDLE_S: f64 = 30.0;
 // 한 번에 채울 벡터 대기 청크 수 — 4스레드로 약 1초라 질문이 오면 1초 안에 비켜 준다
 const PENDING_STEP: usize = 64;
 // 이만큼 넘게 채울 때만 진행 · 완료를 알린다 — 문서 한 건 저장으로 상태 줄이 깜박이지 않게
@@ -450,7 +453,8 @@ impl IndexJobs {
             return;
         }
         // 스캔 문서 · 그림 파일 OCR — 벡터를 다 채운 뒤 질문이 없을 때 한 쪽씩(쪽당 1~3초, 질문이 오면 그 쪽 뒤에 비켜 준다)
-        if idle && self.s.ocr && !self.ocr_paused && self.ocr_left.map_or(true, |(d, _)| d > 0) {
+        let ocr_idle = idle && self.worker.as_ref().map(|w| w.seconds_since_ask() >= OCR_IDLE_S).unwrap_or(false);
+        if ocr_idle && self.s.ocr && !self.ocr_paused && self.ocr_left.map_or(true, |(d, _)| d > 0) {
             let line = format!("/ocr-step {}", crate::worker::ascii_json(&json!({"pages": 1})));
             self.send(line, Handler::Ocr, "OCR");
         }

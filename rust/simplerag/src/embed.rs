@@ -52,6 +52,39 @@ pub(crate) fn make_session(path: &str, threads: usize, inter_one: bool) -> Resul
 }
 
 //------------------------------------------------------------------
+// 세션 만들기 — 입력 크기가 그때그때 다른 모델(OCR)용
+//=> ONNX 런타임은 기본으로 CPU 메모리 아레나(한 번 늘린 메모리를 돌려주지 않고 다시 씀)와
+//   입력 모양별 메모리 계획을 쓴다. OCR 은 쪽 그림 크기가 매번 달라 가장 큰 쪽 기준으로 아레나가 커지고,
+//   워커가 쉬는 동안 수백 쪽을 읽으면 그만큼 계속 쥐고 있었다(2026-11-13 워커 3.8→6.4GB).
+//   아레나를 끄면 한 쪽이 끝날 때 쓴 메모리를 돌려준다. 모양별 계획은 켜 둔다(끄면 속도가 크게 흔들림).
+//   실측(2026-11-13, 스캔 PDF 4쪽): 기존 최대 1,303MB · 끝나고 쥔 1,250MB · 0.8~1.1초/쪽
+//     → 아레나만 끔 최대 522MB · 끝나고 65~70MB · 1.35초/쪽 / 둘 다 끔 393MB · 1.4~2.3초/쪽
+//    1) make_session 과 같은 최적화 · 스레드
+//    2) with_memory_pattern(true) — 모양별 계획은 그대로
+//    3) CPU 실행기 with_arena_allocator(false) — 아레나 끔
+//
+// -in: path = .onnx 경로 / threads = 계산 스레드
+//
+// -out: Ok(세션)
+// -out: error = DLL · 모델 적재 실패면 Err(사유)
+//------------------------------------------------------------------
+pub(crate) fn make_session_lean(path: &str, threads: usize) -> Result<Session, String> {
+    ensure_dylib();
+    let path = path.to_string();
+    std::panic::catch_unwind(move || -> Result<Session, String> {
+        use ort::execution_providers::CPUExecutionProvider;
+        Session::builder().map_err(|e| e.to_string())?
+            .with_optimization_level(GraphOptimizationLevel::Level3).map_err(|e| e.to_string())?
+            .with_intra_threads(threads).map_err(|e| e.to_string())?
+            .with_inter_threads(1).map_err(|e| e.to_string())?
+            .with_memory_pattern(true).map_err(|e| e.to_string())?
+            .with_execution_providers([CPUExecutionProvider::default().with_arena_allocator(false).build()]).map_err(|e| e.to_string())?
+            .commit_from_file(&path).map_err(|e| e.to_string())
+    })
+    .unwrap_or_else(|_| Err("onnxruntime.dll 을 적재할 수 없습니다".to_string()))
+}
+
+//------------------------------------------------------------------
 // 임베더
 // -필드: tok     = e5 토크나이저(잘라내기 끔) — 청킹·BM25 도 이것을 빌려 쓴다
 // -필드: session = ONNX 세션(잠금 — 추론은 한 번에 하나)

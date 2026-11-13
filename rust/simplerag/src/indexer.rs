@@ -1221,7 +1221,9 @@ pub fn sync_doc_with(path: &str, fp: &str, state: &mut State, embedder: &Embedde
             let why = why_of(&e);
             // at · kept_old 는 설정 > 로그 판이 보인다(로그 보기 설계서 §4-2) — 키를 더하기만 해 Python 판과 모양이 맞는다
             let at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name, "at": at, "kept_old": prev.is_some()}));
+            // ocr_tried — OCR 이 켜진 채로 실패했다(다시 보기 대상에서 뺀다 — ocr_retry_failed)
+            failed_mut(state).insert(key.clone(), json!({"fingerprint": fp, "why": why, "name": name, "at": at, "kept_old": prev.is_some(),
+                                                         "ocr_tried": crate::ocr::enabled()}));
             save_state(state)?;
             // 본문을 못 뽑은 문서(스캔 PDF 등)도 이름 · 날짜 · 사람으로는 찾을 수 있게 메타는 남긴다
             crate::meta::hook::synced(&key, Some(&chash));
@@ -1433,12 +1435,19 @@ pub struct Plan {
 //   폴더 대조(plan_changes)와 워커 /index-doc 이 같은 판단을 써야 한다 — 예전에는 대조만 다시 넣고
 //   /index-doc 이 '전에 실패함' 으로 돌려보내, "새 문서 117건 — 지금 인덱싱할까요?" 를 순찰마다 물었다.
 //
-// -in: key = 문서 경로 / why = 실패 목록의 사유 (OCR 이 켜져 있는지는 부르는 쪽이 본다)
+//   OCR 을 켠 채로 이미 한 번 다시 해 보고도 실패한 문서(실패 항목의 ocr_tried)는 다시 하지 않는다 —
+//   그렇지 않으면 워커가 뜰 때(모델 바꾸기 등)마다 같은 문서가 실패하며 "N건을 반영하지 못했습니다" 알림이 되풀이된다.
+//
+// -in: key = 문서 경로 / f = 실패 목록 항목 {why, ocr_tried, …} (OCR 이 켜져 있는지는 부르는 쪽이 본다)
 //
 // -out: true = 다시 해 볼 문서
 // -out: error = 없음
 //------------------------------------------------------------------
-pub fn ocr_retry_failed(key: &str, why: &str) -> bool {
+pub fn ocr_retry_failed(key: &str, f: &Value) -> bool {
+    if f.get("ocr_tried").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return false;
+    }
+    let why = f.get("why").and_then(|v| v.as_str()).unwrap_or("");
     why.contains("텍스트층 없음") || why.contains("pdf:empty") || (crate::ocr::image::is_image(key) && !why.starts_with("OCRError"))
 }
 
@@ -1459,7 +1468,7 @@ pub fn plan_changes(doc_dir: &str, state: &State, recursive: bool, allow_delete:
         }
         if let Some(f) = failed_before.get(&key) {
             // 0.1.3 이하에서 글자층이 없어 실패한 스캔 PDF · 그림 파일은 OCR 이 켜져 있으면 다시 계획한다(설계서 §6-1)
-            let scan_retry = ocr_on && f.get("why").and_then(|v| v.as_str()).map_or(false, |w| ocr_retry_failed(&key, w));
+            let scan_retry = ocr_on && ocr_retry_failed(&key, f);
             if !scan_retry && f.get("fingerprint").and_then(|v| v.as_str()) == Some(fp.as_str()) {
                 n_retry += 1;
                 continue;

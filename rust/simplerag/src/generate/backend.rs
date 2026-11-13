@@ -25,14 +25,28 @@ pub fn label(backend: &str) -> &'static str {
 }
 
 //------------------------------------------------------------------
-// 리랭킹을 켤지 — 1/on 강제 켬, 0/off 강제 끔, auto 는 iGPU 일 때만
+// 리랭킹을 켤지 — 1/on 강제 켬, 0/off 강제 끔, auto 는 이 PC 가 iGPU 로 답할 수 있으면
+//=> auto 의 뜻은 "CPU 만 있는 PC 에서는 리랭커(CPU)가 답 속도를 깎으니 끈다" 이다.
+//   예전에는 지금 답변 모델의 백엔드만 봐서, 같은 PC 에서도 모델에 따라(예: Kanana-2 는 iGPU 이득이 작아 CPU 로 판정)
+//   리랭커가 꺼지고 같은 질문의 근거 순서가 달라졌다(2026-11-13). 검색 결과는 답변 모델과 상관없이 같아야 하므로
+//   지금 모델이 CPU 여도 이 PC 의 다른 모델 측정이 iGPU 를 골랐으면(빠른 iGPU 가 있는 PC) 켠다.
+//
+// -in: backend = 지금 답변 모델의 백엔드("vulkan" | "cpu")
+// -out: 켤지 / error = 없음
 //------------------------------------------------------------------
 pub fn rerank_enabled(backend: &str) -> bool {
     match cfg().rerank.as_str() {
         "1" | "on" | "true" | "yes" => true,
         "0" | "off" | "false" | "no" => false,
-        _ => backend == "vulkan",
+        _ => backend == "vulkan" || pc_has_fast_igpu(),
     }
+}
+
+// 이 PC(같은 호스트)의 백엔드 측정 가운데 iGPU 를 고른 것이 있나 — 빠른 iGPU 가 있는 PC
+fn pc_has_fast_igpu() -> bool {
+    let host = host();
+    load_entries().iter().any(|e| e["backend"] == "vulkan"
+        && e["key"]["host"].as_str().map(|h| h.eq_ignore_ascii_case(&host)).unwrap_or(true))
 }
 
 // 동봉 DLL 의 llama-cpp-python 버전(VERSION.txt)
