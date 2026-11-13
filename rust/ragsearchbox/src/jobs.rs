@@ -316,7 +316,7 @@ impl IndexJobs {
         if let Some(r) = &self.disabled_reason {
             return format!("자동 인덱싱 멈춤 — {}", r);
         }
-        if self.inflight.is_some() || !self.docs.is_empty() {
+        if !self.background_only() && (self.inflight.is_some() || !self.docs.is_empty()) {
             if self.round.total > 0 {
                 return format!("문서 처리 중 {}/{}", self.round.done, self.round.total);
             }
@@ -331,6 +331,17 @@ impl IndexJobs {
         self.pending_text().unwrap_or_default()
     }
 
+    //------------------------------------------------------------------
+    // 지금 하는 일이 쉬는 동안의 뒷일(벡터 채우기 · 스캔 문서 OCR 한 걸음)뿐인가
+    //=> 이 걸음들은 1~7초씩 쉬지 않고 이어져, 예전에는 그동안 트레이가 늘 '인덱스 확인 중' 으로 덮였다
+    //   (2026-11-13 폴더 추가 뒤 벡터 25,701개를 채우는 30분 내내). 이때는 진행 글(검색 정확도 높이는 중 · 스캔 문서 읽는 중)을 보인다.
+    //
+    // -in: 없음 / -out: true = 뒷일만 하는 중 / error = 없음
+    //------------------------------------------------------------------
+    fn background_only(&self) -> bool {
+        self.docs.is_empty() && matches!(self.inflight.as_deref(), Some("OCR") | Some("벡터 채우기"))
+    }
+
     pub fn has_waiting(&self) -> bool {
         self.enabled && self.disabled_reason.is_none() && (!self.waiting_new.is_empty() || !self.waiting_delete.is_empty())
     }
@@ -343,9 +354,8 @@ impl IndexJobs {
         if self.disabled_reason.is_some() {
             return "자동 인덱싱 멈춤".into();
         }
-        // OCR 한 쪽을 읽는 중은 인덱싱이 아니다 — 설정 바꾸기를 막지 않고 OCR 진행을 보인다(아래)
-        let ocr_busy = self.inflight.as_deref() == Some("OCR") && self.docs.is_empty();
-        if !ocr_busy && (self.inflight.is_some() || !self.docs.is_empty()) {
+        // OCR 한 쪽 · 벡터 채우기 한 걸음은 인덱싱이 아니다 — 그 진행 글을 보인다(아래)
+        if !self.background_only() && (self.inflight.is_some() || !self.docs.is_empty()) {
             if self.round.total > 0 {
                 return format!("문서 처리 중 {}/{}", self.round.done, self.round.total);
             }
