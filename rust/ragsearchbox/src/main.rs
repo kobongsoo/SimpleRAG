@@ -2227,6 +2227,10 @@ impl App {
             win::set_topmost(self.panel.hwnd(), on);
             self.panel.call("setOnTop", json!(on));
         }
+        // 설정 창이 떠 있으면 같은 규칙으로 맞춘다 — 항상 위로 다시 놓으면 방금 📌 를 켠 창보다 위에 온다
+        if self.info.visible {
+            self.sync_info_top();
+        }
         if let Err(e) = settings::save_ini_value(&self.s.ini_path, "UI", key, if on { "1" } else { "0" }) {
             crate::warn!("app", "항상 위 설정을 저장하지 못했다: {}", e);
         }
@@ -2407,8 +2411,24 @@ impl App {
             self.info.window.set_outer_position(tao::dpi::PhysicalPosition::new((r - o.width as i32 - 16).max(l), (b - o.height as i32 - 16).max(t)));
         }
         self.info.window.set_visible(true);
+        // 탐색기 창 · 패널이 항상 위면 설정 창도 항상 위로 — 그렇지 않으면 그 창들 밑에 깔려 안 보인다
+        self.sync_info_top();
         self.info.window.set_focus();
         win::bring_to_front(self.info.window.hwnd());
+    }
+
+    //------------------------------------------------------------------
+    // 설정 창의 항상 위 맞추기
+    //=> 탐색기 창 · 패널(채팅 · 탐색기 옆) 중 하나라도 📌 항상 위면 설정 창도 항상 위에 둔다.
+    //   항상 위 창끼리는 나중에 앞으로 온 창이 위라, 설정 창을 띄우거나 📌 를 바꿀 때마다 맞추면 가려지지 않는다.
+    //   둘 다 풀려 있으면 설정 창도 풀어 다른 프로그램 위에 눌러앉지 않게 한다.
+    //
+    // -in: 없음
+    // -out: 없음 / error = 없음
+    //------------------------------------------------------------------
+    fn sync_info_top(&mut self) {
+        let on = self.s.browse_on_top || self.s.panel_on_top;
+        win::set_topmost(self.info.window.hwnd(), on);
     }
 
     //------------------------------------------------------------------
