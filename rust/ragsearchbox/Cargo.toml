@@ -21,6 +21,8 @@ encoding_rs = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 percent-encoding = "2"
 sha2 = "0.10"
+# 설정 > 인덱싱의 쪽 수 — 워커가 쓰는 meta.sqlite 를 읽기만 한다(simplerag 와 같은 판이라 다시 빌드하지 않는다)
+rusqlite = { version = "0.32", features = ["bundled"] }
 windows = { version = "0.58", features = [
   "Win32_Foundation", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole",
   "Win32_UI_Shell", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging",

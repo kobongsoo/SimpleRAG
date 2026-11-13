@@ -2989,6 +2989,7 @@ dependencies = [
  "encoding_rs",
  "percent-encoding",
  "rfd",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",

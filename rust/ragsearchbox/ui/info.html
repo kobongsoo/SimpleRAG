@@ -198,7 +198,7 @@
 </div>
 <div id="tab_index" class="hidden">
 <fieldset><legend>검색 폴더</legend>
-  <div class="row"><div class="grow"><select id="folders" size="5"></select></div>
+  <div class="row"><div class="grow"><select id="folders" size="7"></select></div>
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
   <label><input type="checkbox" id="folder_icon"> 검색 폴더 · 드라이브에 MoAI 아이콘 표시 (끄면 원래대로)</label>
   <div class="note" id="foldernote"></div>
@@ -213,9 +213,9 @@
 </fieldset>
 <fieldset><legend>스캔 문서</legend>
   <div><label><input type="checkbox" id="ocr_on"> 스캔한 PDF 의 글자를 읽어 검색에 넣기 (OCR)</label></div>
-  <div style="margin-left:1.6em"><label><input type="checkbox" id="ocr_img"> 그림 파일(.png · .jpg · .tif)도 읽기</label></div>
+  <div><label><input type="checkbox" id="ocr_img"> 그림 파일(.png · .jpg · .tif)도 읽기</label></div>
   <div class="row" style="align-items:center"><div class="grow" id="ocrstat" style="white-space:pre-line"></div><button id="b_ocr_pause" style="margin:0">잠시 멈춤</button></div>
-  <div class="note">글자층이 없는 쪽만 읽습니다. 쪽당 2~3초가 걸려 다른 문서 인덱싱과 벡터 채우기가 끝난 뒤 질문이 없을 때 차례로 읽습니다.</div>
+  <div class="note" style="margin-top:0.9em">글자층이 없는 쪽만 읽습니다. 쪽당 2~3초가 걸려 다른 문서 인덱싱과 벡터 채우기가 끝난 뒤 질문이 없을 때 차례로 읽습니다.</div>
   <div class="note">인식 결과라 글자가 틀리거나 띄어쓰기가 빠질 수 있습니다. 한 문서는 앞 100쪽까지 읽습니다.</div>
   <div class="note" id="ocrnote"></div>
 </fieldset>
@@ -339,7 +339,7 @@ window.rsb = {
       sel.value = keep;
     }
     let note = !fs.length ? "검색할 폴더가 없습니다 — [추가…] 로 고르세요"
-      : (info.docs == null ? "" : "인덱싱된 문서 " + Number(info.docs).toLocaleString() + "건");
+      : (info.docs == null ? "" : docsLine(info));
     if (info.folder_msg) note = (note ? note + "\n" : "") + info.folder_msg;
     $("foldernote").textContent = note;
     if (info.exts) syncExts(info);
@@ -471,15 +471,24 @@ function drawOcr(o, msg) {
   else if (!o.known) t = "대기열 확인 전 — 인덱싱이 끝나고 질문이 없을 때 확인합니다";
   else if (!(o.docs_left > 0)) t = "대기 없음" + (o.done ? " · 이번에 " + N(o.done) + "건 읽음" : "");
   else {
-    t = "대기 " + N(o.docs_left) + "건 · " + Number(o.pages_left).toLocaleString() + "쪽";
+    t = "⏳ 대기 " + N(o.docs_left) + "건 · " + Number(o.pages_left).toLocaleString() + "쪽";
     // 남은 시간 — 최근 20쪽 평균 속도(처음에는 계산 중)
     t += o.sec_per_page > 0 ? " · 약 " + fmtMin(o.pages_left * o.sec_per_page) + " 남음" : " · 남은 시간 계산 중";
     if (ocrPaused) t += " · 멈춤";
-    else if (o.name) t += "\n지금: " + esc(o.name) + " " + o.page + "/" + o.of + "쪽";
-    if (o.done || o.failed) t += "\n끝난 문서 " + N(o.done) + "건 · 실패 " + N(o.failed) + "건";
+    else if (o.name) t += "\n▶ 지금: " + esc(o.name) + " " + o.page + "/" + o.of + "쪽";
+    if (o.done || o.failed) t += "\n✔ 끝난 문서 " + N(o.done) + "건 · 실패 " + N(o.failed) + "건";
   }
   $("ocrstat").innerHTML = t;
   $("ocrnote").textContent = msg;
+}
+// 설정 > 인덱싱 '인덱싱된 문서' 줄 — 문서 · 청크 · 쪽(쪽이 있는 형식만), 아래 줄에 청킹 설정
+function docsLine(info) {
+  const n = (x) => Number(x || 0).toLocaleString();
+  let t = "인덱싱된 문서 " + n(info.docs) + "건";
+  if (info.docs_chunks != null) t += " · 청크 " + n(info.docs_chunks) + "개";
+  if (info.docs_pages) t += " · 쪽 " + n(info.docs_pages) + "쪽 (PDF · PPT 등 쪽이 있는 문서)";
+  if (info.chunk_tokens) t += "\n청킹: 청크 " + info.chunk_tokens + "토큰 · 겹침 " + info.chunk_overlap + "토큰";
+  return t;
 }
 // 초 → "1시간 30분" · "12분" · "1분 미만"
 function fmtMin(sec) {

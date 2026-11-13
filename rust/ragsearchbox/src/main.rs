@@ -229,6 +229,10 @@ struct App {
     up_running: usize,
     answer_hwnd: isize,
     state_cache: (Option<std::time::SystemTime>, Vec<String>),
+    // state_cache 의 키마다 청크 수(같은 순서) — 설정 > 인덱싱의 '청크 N개'
+    state_chunks: Vec<u64>,
+    // meta.sqlite 의 문서별 쪽 수(소문자 경로, 쪽) — 파일이 바뀔 때만 다시 읽는다
+    pages_cache: (Option<std::time::SystemTime>, Vec<(String, u64)>),
     last_tooltip: String,
     t_tooltip: Instant,
     // 탐색 창 폴더 숫자를 마지막으로 고친 때의 진행 번호 · 시각
@@ -1782,9 +1786,34 @@ impl App {
             return Some(self.state_cache.1.clone());
         }
         let v: Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
-        let keys: Vec<String> = v.get("docs")?.as_object()?.keys().map(|k| k.to_lowercase()).collect();
+        let docs = v.get("docs")?.as_object()?;
+        let keys: Vec<String> = docs.keys().map(|k| k.to_lowercase()).collect();
+        // 청크 수도 같이 둔다(설정 > 인덱싱 — 다시 읽지 않게)
+        self.state_chunks = docs.values().map(|d| d.get("chunks").and_then(|c| c.as_u64()).unwrap_or(0)).collect();
         self.state_cache = (Some(mtime), keys.clone());
         Some(keys)
+    }
+
+    //------------------------------------------------------------------
+    // 문서별 쪽 수 — 워커의 메타데이터(meta.sqlite doc_meta.pages, 쪽이 있는 형식만: PDF · PPT 등)
+    //=> 설정 창이 1초마다 묻기 때문에 파일이 바뀔 때만 다시 읽는다. 읽기 전용으로 열어 워커와 부딪히지 않는다.
+    //
+    // -in: 없음
+    // -out: Some([(소문자 경로, 쪽 수)]) / 파일이 없거나 못 읽으면 None
+    //------------------------------------------------------------------
+    fn doc_pages(&mut self) -> Option<Vec<(String, u64)>> {
+        let home = self.data_home()?;
+        let path = std::path::Path::new(&home).join("meta.sqlite");
+        let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+        if self.pages_cache.0 == Some(mtime) {
+            return Some(self.pages_cache.1.clone());
+        }
+        let db = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        let mut st = db.prepare("SELECT doc_path, pages FROM doc_meta WHERE pages > 0").ok()?;
+        let rows: Vec<(String, u64)> = st.query_map([], |r| Ok((r.get::<_, String>(0)?.to_lowercase(), r.get::<_, i64>(1)? as u64)))
+            .ok()?.flatten().collect();
+        self.pages_cache = (Some(mtime), rows.clone());
+        Some(rows)
     }
 
     // 범위 설명 — "범위: 이름 · 문서 N건"
@@ -2483,7 +2512,21 @@ impl App {
         if !folders.is_empty() {
             if let Some(keys) = self.state_keys() {
                 let bases: Vec<String> = folders.iter().map(|f| format!("{}\\", scope::norm(f).trim_end_matches('\\'))).collect();
-                info["docs"] = json!(keys.iter().filter(|k| bases.iter().any(|b| k.starts_with(b))).count());
+                let inside = |k: &str| bases.iter().any(|b| k.starts_with(b.as_str()));
+                info["docs"] = json!(keys.iter().filter(|k| inside(k)).count());
+                // 청크 수 · 쪽 수(쪽이 있는 형식만) — 설정 > 인덱싱 '인덱싱된 문서' 줄
+                let chunks: u64 = keys.iter().zip(&self.state_chunks).filter(|(k, _)| inside(k)).map(|(_, c)| *c).sum();
+                info["docs_chunks"] = json!(chunks);
+                if let Some(pages) = self.doc_pages() {
+                    info["docs_pages"] = json!(pages.iter().filter(|(k, _)| inside(k)).map(|(_, n)| *n).sum::<u64>());
+                }
+                // 청킹 설정 — config.yaml 의 chunk.tokens · overlap(없으면 워커 기본 128 · tokens/8)
+                let y: Option<serde_yaml::Value> = self.config_path().and_then(|p| std::fs::read_to_string(p).ok())
+                    .and_then(|t| serde_yaml::from_str(t.trim_start_matches('\u{feff}')).ok());
+                let num = |k: &str| y.as_ref().and_then(|v| v.get("chunk")).and_then(|c| c.get(k)).and_then(|x| x.as_i64());
+                let tokens = num("tokens").unwrap_or(128);
+                info["chunk_tokens"] = json!(tokens);
+                info["chunk_overlap"] = json!(num("overlap").unwrap_or((tokens / 8).max(8)));
             }
         }
         info["folders"] = json!(folders);
@@ -3300,6 +3343,8 @@ fn main() {
         monitor,
         answer_hwnd: 0,
         state_cache: (None, vec![]),
+        state_chunks: vec![],
+        pages_cache: (None, vec![]),
         last_tooltip: String::new(),
         t_tooltip: Instant::now(),
         roots_ver: 0,
