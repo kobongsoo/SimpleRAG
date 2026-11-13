@@ -75,7 +75,7 @@ pub fn explain(why: &str, path: &str) -> Reason {
     }
     if has("사용 가능한 추출기 없음") {
         return Reason { kind: "unsupported", title: "지원하지 않는 형식",
-            hint: "글자를 뽑을 수 없는 형식입니다. 설정 > 기본 > 인덱싱 확장자에서 빼도 됩니다.", retry: false };
+            hint: "글자를 뽑을 수 없는 형식입니다. 설정 > 인덱싱 > 인덱싱 확장자에서 빼도 됩니다.", retry: false };
     }
     if has("추출 텍스트 없음") || has(":empty") {
         return Reason { kind: "empty", title: "본문이 비어 있음",

@@ -59,9 +59,9 @@ const BROWSE_HTML: &str = include_str!("../ui/browse.html");
 // 사용 설명서 파일 이름(설치 폴더 doc 안) · 사용 안내 판 — 안내 단계가 크게 바뀌면 올려 다시 보여 준다
 const MANUAL_NAME: &str = "MoAISearch-사용자-설명서.html";
 const TOUR_VERSION: u32 = 1;
-// 설정 창 크기(논리 픽셀) — 작은 화면에서는 작업 영역에 맞춰 줄인다(show_info)
-const INFO_W: f64 = 720.0;
-const INFO_H: f64 = 720.0;
+// 설정 창 크기(논리 픽셀) — 작은 화면에서는 작업 영역에 맞춰 줄인다(show_info). 2026-11-13 720×720 에서 조금 키움
+const INFO_W: f64 = 800.0;
+const INFO_H: f64 = 780.0;
 const INFO_HTML: &str = include_str!("../ui/info.html");
 const MOAI_PNG: &[u8] = include_bytes!("../moai.png");
 

@@ -457,7 +457,7 @@ impl IndexJobs {
     }
 
     //------------------------------------------------------------------
-    // OCR 진행 상황 — 설정 > 기본 > 스캔 문서 묶음이 보인다(OCR 설계서 §8-2)
+    // OCR 진행 상황 — 설정 > 인덱싱 > 스캔 문서 묶음이 보인다(OCR 설계서 §8-2)
     //=> {on, images, paused, known, docs_left, pages_left, name, page, of, sec_per_page, done, failed}
     //------------------------------------------------------------------
     pub fn ocr_status(&self) -> Value {

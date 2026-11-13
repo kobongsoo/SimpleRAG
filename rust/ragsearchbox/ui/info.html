@@ -20,7 +20,7 @@
   body { display: flex; flex-direction: column; padding: 12px 12px 0; }
   .main { flex: 1; display: flex; min-height: 0; }
   /* 왼쪽 메뉴 — 고른 것은 흰 바탕·굵게(오른쪽 판과 이어져 보이게) */
-  .nav { width: 9.5em; flex: none; }
+  .nav { width: 10em; flex: none; }
   .nav div { padding: 11px 14px; color: var(--sub); cursor: pointer; font-size: calc(var(--fs) + 1px); user-select: none; }
   .nav div:hover { background: var(--hover); }
   .nav div.on { background: #fff; color: var(--ink); font-weight: bold; box-shadow: inset 3px 0 0 #e5163f; }
@@ -31,8 +31,10 @@
   .nav .logo img { width: 30px; height: 30px; object-fit: contain; background: #fff; border-radius: 8px; padding: 2px;
     box-shadow: 0 0 0 1px var(--line); }
   .nav .logo span { color: #e5163f; }
-  /* 지금 버전 — 로고 옆 작게 */
-  .nav .logo .ver { align-self: flex-end; margin-bottom: 3px; color: var(--sub); font-size: calc(var(--fs) - 2px); font-weight: normal; }
+  /* 이름 · 지금 버전 — 이름 아래 작게(옆에 두면 좁은 메뉴에서 이름이 두 줄로 꺾인다) */
+  .nav .logo .nm { display: flex; flex-direction: column; padding: 0; line-height: 1.15; white-space: nowrap; }
+  .nav .logo .nm:hover { background: transparent; }
+  .nav .logo .ver { color: var(--sub); font-size: calc(var(--fs) - 2px); font-weight: normal; }
   input[type=checkbox] { accent-color: #e5163f; }
   .nav .ic { display: inline-block; width: 1.6em; }
   /* 오른쪽 판 — 얇은 테두리의 흰 판. 넘치면 판 안에서만 스크롤 */
@@ -154,7 +156,7 @@
 </head>
 <body>
 <div class="main">
-<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><b>MoAI<span>-S</span></b><small class="ver" title="지금 설치된 MoAI-S 버전">v__VER__</small></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_model"><span class="ic">&#x25a3;</span>모델</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div><div id="t_log"><span class="ic">&#x2630;</span><span id="t_log_text">로그</span></div></div>
+<div class="nav"><div class="logo"><img src="data:image/png;base64,__MOAI__" alt=""><div class="nm"><b>MoAI<span>-S</span></b><small class="ver" title="지금 설치된 MoAI-S 버전">v__VER__</small></div></div><div id="t_basic" class="on"><span class="ic">&#x2699;</span>기본</div><div id="t_index"><span class="ic">&#x25a4;</span>인덱싱</div><div id="t_model"><span class="ic">&#x25a3;</span>모델</div><div id="t_syn"><span class="ic">&#x21c4;</span><span id="t_syn_text">동의어</span></div><div id="t_ppl"><span class="ic">&#x263a;</span><span id="t_ppl_text">이름별칭</span></div><div id="t_log"><span class="ic">&#x2630;</span><span id="t_log_text">로그</span></div></div>
 <div class="panel">
 <div id="tab_basic">
 <fieldset><legend>모델</legend>
@@ -177,6 +179,22 @@
   <div><label><input type="checkbox" id="dock"> 나란히 보기 — 탐색기 오른쪽에 나란히 띄웁니다. 끄면 채팅 모드도 탐색기 모드처럼 따로 창으로 뜹니다</label></div>
   <div class="note" id="modenote"></div>
 </fieldset>
+<fieldset><legend>시작</legend>
+  <label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label>
+</fieldset>
+<fieldset><legend>알림</legend>
+  <label><input type="checkbox" id="candnotify"> 사전 후보 알림 (쉬는 동안 동의어 · 이름 별칭 후보를 만들고, 새 후보가 있으면 하루 한 번 알림 · 기본 켬)</label>
+</fieldset>
+<fieldset><legend>대화</legend>
+  <label><input type="checkbox" id="multiturn"> 이어서 묻기 (멀티턴 — 같은 대화의 앞 질문 이어 받기 · 기본 켬)</label>
+  <div class="note ind" id="mtnote"></div>
+</fieldset>
+<fieldset><legend>답변 모델</legend>
+  <div class="row" style="align-items:center"><span id="am_icon"></span><b id="am_name" class="grow"></b><button id="b_am" style="margin:0">모델 바꾸기…</button></div>
+  <div class="note" id="am_note">기본 · 정밀 모델을 받거나 바꾸려면 [모델 바꾸기…] 를 누르세요. 정밀 모드는 설정 &gt; 모델로 옮겨졌습니다.</div>
+</fieldset>
+</div>
+<div id="tab_index" class="hidden">
 <fieldset><legend>검색 폴더</legend>
   <div class="row"><div class="grow"><select id="folders" size="3"></select></div>
     <div class="col"><button id="b_add">추가…</button><button id="b_remove">빼기</button><button id="b_rescan">다시 확인</button></div></div>
@@ -198,20 +216,6 @@
   <div class="note">글자층이 없는 쪽만 읽습니다. 쪽당 2~3초가 걸려 다른 문서 인덱싱과 벡터 채우기가 끝난 뒤 질문이 없을 때 차례로 읽습니다.</div>
   <div class="note">인식 결과라 글자가 틀리거나 띄어쓰기가 빠질 수 있습니다. 한 문서는 앞 100쪽까지 읽습니다.</div>
   <div class="note" id="ocrnote"></div>
-</fieldset>
-<fieldset><legend>시작</legend>
-  <label><input type="checkbox" id="autorun"> 로그인할 때 자동으로 시작</label>
-</fieldset>
-<fieldset><legend>알림</legend>
-  <label><input type="checkbox" id="candnotify"> 사전 후보 알림 (쉬는 동안 동의어 · 이름 별칭 후보를 만들고, 새 후보가 있으면 하루 한 번 알림 · 기본 켬)</label>
-</fieldset>
-<fieldset><legend>대화</legend>
-  <label><input type="checkbox" id="multiturn"> 이어서 묻기 (멀티턴 — 같은 대화의 앞 질문 이어 받기 · 기본 켬)</label>
-  <div class="note ind" id="mtnote"></div>
-</fieldset>
-<fieldset><legend>답변 모델</legend>
-  <div class="row" style="align-items:center"><span id="am_icon"></span><b id="am_name" class="grow"></b><button id="b_am" style="margin:0">모델 바꾸기…</button></div>
-  <div class="note" id="am_note">기본 · 정밀 모델을 받거나 바꾸려면 [모델 바꾸기…] 를 누르세요. 정밀 모드는 설정 &gt; 모델로 옮겨졌습니다.</div>
 </fieldset>
 </div>
 <div id="tab_model" class="hidden">
@@ -485,10 +489,10 @@ $("ocr_img").onchange = () => {
 };
 $("b_ocr_pause").onclick = () => send({ type: "ocr_pause", value: !ocrPaused });
 
-// 왼쪽 메뉴로 판 바꾸기 — 기본 · 모델 · 동의어 · 사람 · 로그
+// 왼쪽 메뉴로 판 바꾸기 — 기본 · 모델 · 인덱싱(검색 폴더 · 확장자 · 스캔 문서) · 동의어 · 사람 · 로그
 let curTab = "basic";
 function showTab(name) {
-  for (const t of ["basic", "model", "syn", "ppl", "log"]) {
+  for (const t of ["basic", "model", "index", "syn", "ppl", "log"]) {
     $("tab_" + t).classList.toggle("hidden", t !== name);
     $("t_" + t).classList.toggle("on", t === name);
   }
@@ -501,6 +505,7 @@ function showTab(name) {
 }
 $("t_basic").onclick = () => showTab("basic");
 $("t_model").onclick = () => showTab("model");
+$("t_index").onclick = () => showTab("index");
 $("b_am").onclick = () => showTab("model");
 $("b_release").onclick = () => send({ type: "open_release" });
 $("t_syn").onclick = () => showTab("syn");
