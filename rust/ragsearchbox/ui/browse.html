@@ -2152,7 +2152,7 @@ const api = {
     $("stmodel").classList.remove("hidden");
     $("pstmodel").classList.remove("hidden");
   },
-  // 벡터 채우기 진행 — 빈 글이면 감춘다(좁은 패널에는 자리가 없어 탐색기 창에만)
+  // 벡터 채우기 · 스캔 문서 읽기 진행 — 빈 글이면 감춘다(좁은 패널에는 자리가 없어 탐색기 창에만)
   setVecStatus(t) {
     if (LAYOUT !== "window") return;
     $("stvec").textContent = t || "";

@@ -110,6 +110,8 @@ pub struct IndexJobs {
     ocr_last: Value,
     ocr_done: usize,
     ocr_failed: usize,
+    // 이번 실행에서 OCR 로 읽은 쪽 수 — 탐색기 창 맨 아래 줄 '스캔 문서 읽는 중 N / M쪽'
+    ocr_pages_done: usize,
     // 폴더별 인덱싱 진행 — 폴더 → (끝낸 수, 전체). 탐색 창에 "Desktop (10/311)" 로 보이고, 끝나면 뺀다
     prog: HashMap<String, (usize, usize)>,
     // 진행 · 대기가 바뀔 때마다 늘어난다 — 메인이 보고 탐색 창 숫자를 고친다
@@ -147,7 +149,7 @@ impl IndexJobs {
             last_avail: None, outside_needed: true, approve_outside: false, waiting_new: HashMap::new(), waiting_delete: HashMap::new(),
             round: Round { done: 0, total: 0, changed: vec![], failed: vec![] },
             vec_pending: None, vec_total: 0, retitle_pending: 0, prog: HashMap::new(), prog_ver: 0, running_approved: HashSet::new(),
-            ocr_left: None, ocr_paused: false, ocr_last: json!({}), ocr_done: 0, ocr_failed: 0,
+            ocr_left: None, ocr_paused: false, ocr_last: json!({}), ocr_done: 0, ocr_failed: 0, ocr_pages_done: 0,
         }
     }
 
@@ -159,9 +161,20 @@ impl IndexJobs {
     }
 
     // 벡터 채우기 진행 글 — 보일 것이 없으면 None
+    //=> 벡터를 채우는 중이면 그 진행, 아니면 스캔 문서 OCR 진행(읽은 쪽 / 전체 쪽 — 전체 = 이번에 읽은 쪽 + 남은 쪽)
     pub fn pending_text(&self) -> Option<String> {
-        let (done, total) = self.vec_progress()?;
-        Some(format!("검색 정확도 높이는 중 {} / {} — 지금도 검색할 수 있습니다", comma(done), comma(total)))
+        if let Some((done, total)) = self.vec_progress() {
+            return Some(format!("검색 정확도 높이는 중 {} / {} — 지금도 검색할 수 있습니다", comma(done), comma(total)));
+        }
+        match self.ocr_left {
+            Some((d, p)) if d > 0 && self.s.ocr => Some(if self.ocr_paused {
+                format!("스캔 문서 읽기 멈춤 — 남은 {}쪽 ({}건)", comma(p), comma(d))
+            } else {
+                let done = self.ocr_pages_done;
+                format!("스캔 문서 읽는 중 {} / {}쪽 — 지금도 검색할 수 있습니다", comma(done), comma(done + p))
+            }),
+            _ => None,
+        }
     }
 
     //------------------------------------------------------------------
@@ -522,6 +535,7 @@ impl IndexJobs {
             (self.notify)("doc", &format!("방금 반영(스캔 문서 읽기): {}", res["name"].as_str().unwrap_or("")));
         }
         self.ocr_failed += res["failed"].as_u64().unwrap_or(0) as usize;
+        self.ocr_pages_done += res["pages"].as_u64().unwrap_or(0) as usize;
         if res["pages"].as_u64().unwrap_or(0) > 0 {
             self.ocr_last = res.clone();
         }
