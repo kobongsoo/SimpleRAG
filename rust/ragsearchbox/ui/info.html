@@ -278,13 +278,7 @@
 </fieldset>
 </div>
 <div id="tab_log" class="hidden">
-<fieldset><legend id="lg_fail_title">인덱싱 실패 문서</legend>
-  <div class="pills" id="lg_kinds"></div>
-  <div class="note" id="lg_fail_note"></div>
-  <div class="note" id="lg_kind_hint"></div>
-  <table class="lg" id="lg_fail"></table>
-  <div class="btns hidden" id="lg_fail_more"><button id="b_lg_more">더 보기</button></div>
-</fieldset>
+<!-- 순서: 로그 경고·오류 → 로그 폴더 → 인덱싱 실패 문서(목록이 길어 맨 아래) -->
 <fieldset><legend id="lg_iss_title">로그 경고·오류</legend>
   <div class="pills" id="lg_levels"></div>
   <div class="note" id="lg_iss_note"></div>
@@ -293,6 +287,13 @@
 <fieldset><legend>로그 폴더</legend>
   <div class="row" style="align-items:center"><div class="grow" id="logdir"></div><button id="b_logs" style="margin:0">열기</button></div>
   <div class="note" id="lg_files"></div>
+</fieldset>
+<fieldset><legend id="lg_fail_title">인덱싱 실패 문서</legend>
+  <div class="pills" id="lg_kinds"></div>
+  <div class="note" id="lg_fail_note"></div>
+  <div class="note" id="lg_kind_hint"></div>
+  <table class="lg" id="lg_fail"></table>
+  <div class="btns hidden" id="lg_fail_more"><button id="b_lg_more">더 보기</button></div>
 </fieldset>
 </div>
 </div>
