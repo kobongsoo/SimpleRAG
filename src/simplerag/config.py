@@ -436,6 +436,10 @@ GEN_MODELS = {
     "lfm2.5-1.2b-q4": "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
     # 카카오 Kanana Nano 2.1B (mradermacher GGUF Q4_K_M, CC-BY-NC-4.0 — MoAI-S 는 비상업 용도라 쓸 수 있다)
     "kanana-nano-2.1b-q4": "kanana-nano-2.1b-instruct-Q4_K_M.gguf",
+    # 카카오 Kanana-2 1.3B (winwinplatform kanana2tiny GGUF, Kanana Open License — 제품 임베드 배포는 별도 상업 라이선스)
+    #   구조 kanana2tiny(3:1 SWA + 전체 층 YaRN) — 패치한 llama.cpp DLL(SIMPLERAG_VULKAN_LIB)이 있어야 적재된다. 측정용
+    "kanana-2-1.3b-q5": "kanana2tiny-Q5_K_M-im.gguf",
+    "kanana-2-1.3b-q4": "kanana2tiny-Q4_K_M-im.gguf",
 }
 # 모델별 채팅 형식(generate/chatformat.py). 적지 않은 별칭은 qwen3 로 본다 —
 #   형식이 틀리면 학습 때 본 적 없는 입력이 들어가 품질 비교가 무의미해진다.
@@ -451,6 +455,9 @@ GEN_MODEL_FORMATS = {
     "exaone-4.0-1.2b-q4": "exaone4",
     "lfm2.5-1.2b-q4": "lfm2",
     "kanana-nano-2.1b-q4": "llama3",
+    # Kanana-2 공식 템플릿은 ChatML + 빈 <think>(no_think 기본) — qwen3 형식과 글자까지 같다
+    "kanana-2-1.3b-q5": "qwen3",
+    "kanana-2-1.3b-q4": "qwen3",
 }
 # 정밀 모드(계획서 D8 ③ / REPORT §44): 1.7B 는 506문항 정답 377 → 399(p=0.007),
 #   골든셋 v2 must 57 → 80 이라 기본으로 쓴다. 대신 TTFT 3초 이내가 97% → 72% 로 떨어진다(§42).
