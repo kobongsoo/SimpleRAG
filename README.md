@@ -231,11 +231,64 @@ SimpleRAG/
 `MoAISearch.exe`(WebView2 패널). 워커 프로토콜 · config.yaml · index_state.json 이 Python 판과 같고,
 추출 결과 · 청크 · 검색 · 답변을 Python 판과 대조해 같음을 확인했다. Python 판 인덱스는 `import` 로 가져온다.
 
+### 빌드 절차 (0.1.5 부터 — 문서 파서 DLL 포함)
+
+0.1.5 부터 문서 파싱 · OCR 은 SimpleRAG 안에 없고, 별도 저장소
+[Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) 가 만드는 **`struct_docparse.dll`** 이 맡는다.
+`simplerag-rs.exe` 는 실행할 때 exe 옆의 이 DLL 을 불러 쓴다(`rust/simplerag/src/docparse.rs`).
+DLL · 런타임 · 모델 같은 바이너리는 이 저장소에 넣지 않으므로, 빌드할 때 아래 순서로 모은다.
+
+**1. 두 저장소를 같은 상위 폴더에 받는다**
+
 ```
+git clone https://github.com/kobongsoo/SimpleRAG.git
+git clone https://github.com/kobongsoo/Struct-DocParse-OCR-rust.git
+```
+
+```
+D:\Project\
+├─ SimpleRAG\
+└─ Struct-DocParse-OCR-rust\     ← 다른 곳에 두면 환경변수 SDP_ROOT 에 그 경로
+```
+
+**2. 문서 파서 DLL 을 먼저 빌드한다** (Rust stable + Visual Studio C++ 빌드 도구)
+
+```
+cd Struct-DocParse-OCR-rust
+cargo build --release -p sdp-ffi        → target\release\struct_docparse.dll
+```
+
+**3. 런타임 · 모델을 준비한다** — 저장소에 없는 것들. `build_dist.ps1` 이 처음 한 번 Python 배포본(`dist\simplerag`, [설치](#설치) 후 `build_exe.py`)에서 복사 · 하드 링크한다.
+
+| 파일 | 가져오는 곳 |
+|---|---|
+| `onnxruntime.dll` · `onnxruntime_providers_shared.dll`(1.22 이상, 지금 1.29) · `pdfium.dll` · VC++ 런타임 | `dist\simplerag\_internal\` |
+| llama.cpp CPU · Vulkan DLL | `dist\simplerag\_internal\llama_cpp\lib\` · `dist\simplerag\runtime\llama_vulkan\` |
+| 임베딩 e5 · 리랭커 bge · 답변 모델 GGUF | `dist\simplerag\models\` (`bench\download_models.py` 로 받음) |
+| OCR 모델 3개 | `dist\simplerag\models\ocr\`, 없으면 DLL 저장소 `models\ocr\`(Apache-2.0) |
+
+**4. SimpleRAG 를 빌드해 `dist-rust\` 에 모은다**
+
+```
+cd SimpleRAG
 powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
 ```
 
-자세한 내용은 [rust/README.md](rust/README.md).
+`cargo build --release` → `dist-rust\` 에 `simplerag-rs.exe` · `MoAISearch.exe` · `struct_docparse.dll`(DLL 저장소에서 복사) · 런타임 · 모델 · 라이선스 문서.
+DLL 을 못 찾으면 "문서 파서 DLL 이 없습니다 … cargo build -p sdp-ffi --release 를 먼저 하세요" 로 멈춘다.
+
+**5. (선택) 설치 파일을 만든다** — [Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요
+
+```
+powershell -ExecutionPolicy Bypass -File rust\build_installer.ps1
+```
+
+→ `dist-rust\MoAISearch_Setup_<버전>.exe` (버전은 `rust\ragsearchbox\Cargo.toml`). DLL 도 함께 설치된다.
+
+**DLL 만 고쳤을 때** — DLL 저장소에서 다시 빌드한 뒤 4번(`build_dist.ps1`)을 다시 하면 새 DLL 이 들어간다.
+DLL 의 `blocks_version` 이 바뀌지 않았으면 이미 만든 색인은 그대로 쓴다.
+
+자세한 내용은 [rust/README.md](rust/README.md), DLL 쪽은 DLL 저장소의 `README.md` · `doc\` 설명서.
 
 ---
 

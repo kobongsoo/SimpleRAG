@@ -228,7 +228,8 @@ def build_models(dist):
 
 
 # 문서 파서 DLL(struct_docparse.dll) 소스 저장소 — 그 DLL 에 들어간 Rust 라이브러리도 고지한다(설계서 2026-11-16 §12)
-DOCPARSE_ROOT = Path(os.environ.get("SDP_ROOT", r"D:\Project\Struct-DocParse-OCR-rust"))
+#   기본 위치 = SimpleRAG 폴더와 같은 상위 폴더의 Struct-DocParse-OCR-rust (build_dist.ps1 과 같음)
+DOCPARSE_ROOT = Path(os.environ.get("SDP_ROOT", str(ROOT.parent / "Struct-DocParse-OCR-rust")))
 
 
 #------------------------------------------------------------------

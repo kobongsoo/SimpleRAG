@@ -51,7 +51,8 @@ function Link-IfMissing($src, $dst) {
 
 # 2-1) 문서 파서 + OCR DLL — 별도 저장소(Struct-DocParse-OCR-rust)에서 빌드한 것을 매번 새로 넣는다(설계서 2026-11-16 §12)
 #      DLL 저장소에서 먼저: cargo build -p sdp-ffi --release  (SDP_ROOT 로 저장소 위치를 바꿀 수 있다)
-$sdpRoot = if ($env:SDP_ROOT) { $env:SDP_ROOT } else { "D:\Project\Struct-DocParse-OCR-rust" }
+# 기본 위치 = SimpleRAG 폴더와 같은 상위 폴더의 Struct-DocParse-OCR-rust
+$sdpRoot = if ($env:SDP_ROOT) { $env:SDP_ROOT } else { Join-Path (Split-Path $root -Parent) "Struct-DocParse-OCR-rust" }
 $sdpDll = Join-Path $sdpRoot "target\release\struct_docparse.dll"
 if (-not (Test-Path $sdpDll)) { throw "문서 파서 DLL 이 없습니다: $sdpDll — DLL 저장소에서 cargo build -p sdp-ffi --release 를 먼저 하세요" }
 foreach ($d in (Join-Path $rust "target\release"), $dist) {
@@ -78,6 +79,8 @@ foreach ($g in "Qwen3-1.7B-Q4_K_M.gguf", "Qwen3-4B-Q4_K_M.gguf") { Link-IfMissin
 foreach ($m in "e5-small-ko", "bge-reranker-base-int8", "ocr") {
     Get-ChildItem "$py\models\$m\*" -ErrorAction SilentlyContinue | ForEach-Object { Link-IfMissing $_.FullName "$dist\models\$m\$($_.Name)" }
 }
+# OCR 모델 — Python 배포본에 없으면 문서 파서 저장소(Struct-DocParse-OCR-rust)의 models\ocr 에서(Apache-2.0, 라이선스 문서 포함)
+Get-ChildItem "$sdpRoot\models\ocr\*" -ErrorAction SilentlyContinue | ForEach-Object { Copy-IfMissing $_.FullName "$dist\models\ocr\$($_.Name)" }
 
 # 기본 동의어 사전 — 배포 때마다 새것으로(사용자 사전 synonyms.yaml 은 건드리지 않는다)
 Copy-Item (Join-Path $root "synonyms.default.yaml") $dist -Force

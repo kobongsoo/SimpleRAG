@@ -10,13 +10,19 @@ Python 판(`src/simplerag`, `RAGSearchBox`)과 **같은 기능·같은 입출력
 
 ## 1. 빌드·배포
 
+문서 파싱 · OCR 은 별도 저장소 [Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) 의
+`struct_docparse.dll` 이 맡습니다(0.1.5 부터). 그 DLL 을 **먼저** 빌드해 둡니다 — 자세한 순서는 저장소 루트 `README.md` 의 "빌드".
+
 ```powershell
+cd ..\Struct-DocParse-OCR-rust; cargo build --release -p sdp-ffi; cd ..\SimpleRAG
 powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
 ```
 
-- `cargo build --release` 뒤 저장소 루트 `dist-rust\` 에 exe 두 개를 넣습니다.
+- `cargo build --release` 뒤 저장소 루트 `dist-rust\` 에 exe 두 개와 `struct_docparse.dll` 을 넣습니다.
+  DLL 저장소는 SimpleRAG 와 같은 상위 폴더에 있다고 보고, 다르면 환경변수 `SDP_ROOT` 로 알려 줍니다. DLL 이 없으면 멈춥니다.
 - 처음이면 Python 배포본(`dist\simplerag`)에서 런타임 DLL(onnxruntime 1.29 · pdfium · llama.cpp CPU/Vulkan)을 복사하고,
-  모델(GGUF·e5·bge 리랭커)은 **하드 링크**로 겁니다(같은 드라이브라 수 GB 가 두 벌 생기지 않습니다).
+  모델(GGUF·e5·bge 리랭커·OCR)은 **하드 링크**로 겁니다(같은 드라이브라 수 GB 가 두 벌 생기지 않습니다).
+  OCR 모델이 Python 배포본에 없으면 DLL 저장소의 `models\ocr\` 에서 가져옵니다.
 - 이미 있는 설정·인덱스는 덮어쓰지 않습니다.
 
 인덱스가 없으면 Python 판 인덱스를 그대로 가져옵니다(다시 임베딩하지 않음, 4,616청크 0.2초):
