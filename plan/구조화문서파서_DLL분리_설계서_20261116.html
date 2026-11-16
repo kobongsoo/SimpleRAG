@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>구조화 문서 파서 DLL 분리</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0; --brand: #e5163f;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; color: var(--ink-2); }
+pre code { background: none; padding: 0; font-size: 1em; }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; }
+section { margin: 40px 0; }
+h2 { font-size: 21px; margin-bottom: 12px; padding-top: 6px; }
+h3 { font-size: 16.5px; margin: 22px 0 8px; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 20px; }
+.toc ol { margin: 0; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card .s { color: var(--muted); font-size: 14px; }
+.tw { overflow-x: auto; margin: 12px 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.tag.w { background: var(--warn-soft); color: var(--warn); }
+.tag.e { background: var(--bad-soft); color: var(--bad); }
+.tag.g { background: var(--good-soft); color: var(--good); }
+.dec { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.dec b.q { display: block; }
+.diagram { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px; margin: 14px 0; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 640px; height: auto; }
+.diagram .box { fill: var(--surface); stroke: var(--rule); stroke-width: 1.5; }
+.diagram .host { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram .dll { fill: var(--good-soft); stroke: var(--good); stroke-width: 1.5; }
+.diagram .ext { fill: var(--sunken); stroke: var(--rule); stroke-width: 1.5; }
+.diagram text { fill: var(--ink); font-family: var(--sans); font-size: 13px; }
+.diagram text.t { font-weight: 600; font-size: 14px; }
+.diagram text.m { fill: var(--muted); font-size: 12px; }
+.diagram line, .diagram path { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 50px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · 설계서 · 2026-11-16 · 구현 전 검토용</div>
+  <h1>구조화 문서 파서 DLL 분리 설계서</h1>
+  <p class="lede">SimpleRAG Rust 판 안에 있는 구조화 추출기(<code>docmodel</code>)와 스캔 문서 OCR(<code>ocr</code>)을
+  별도 저장소 <code>D:\Project\Struct-DocParse-OCR-rust</code> 의 DLL 하나로 떼어 낸다. DLL 은 파일을 받아
+  <b>블록 단위 글 + 라벨</b>(heading · paragraph · header · footer · table 등)을 돌려주고, OCR 은 켜고 끌 수 있다(기본 켬).
+  SimpleRAG 는 이 DLL 을 실행 시점에 적재해 쓴다.</p>
+</header>
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s1">요약</a></li>
+    <li><a href="#s2">지금 구조</a></li>
+    <li><a href="#s3">목표와 범위</a></li>
+    <li><a href="#s4">전체 구조</a></li>
+    <li><a href="#s5">새 저장소 구성</a></li>
+    <li><a href="#s6">출력: 블록과 라벨</a></li>
+    <li><a href="#s7">DLL 함수(C ABI)</a></li>
+    <li><a href="#s8">OCR 켜기·끄기</a></li>
+    <li><a href="#s9">스레드·메모리·오류</a></li>
+    <li><a href="#s10">SimpleRAG 수정 사항</a></li>
+    <li><a href="#s11">같음 검증·성능</a></li>
+    <li><a href="#s12">빌드·배포</a></li>
+    <li><a href="#s13">단계별 진행</a></li>
+    <li><a href="#s14">위험</a></li>
+    <li><a href="#s15">정할 것</a></li>
+    <li><a href="#s16">추후 검토</a></li>
+    <li><a href="#s17">구현 기록</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+<h2>1. 요약</h2>
+<div class="cards">
+  <div class="card"><b>무엇을 옮기나</b><span class="s">docmodel 파서 12개 파일 · ocr 6개 · pdfium · 폴백 추출기(legacy · extract) · 보조(xmldom · htmlparse · xlsdate · structure 복사). 약 7,300줄.</span></div>
+  <div class="card"><b>어떻게 부르나</b><span class="s">C ABI DLL <code>struct_docparse.dll</code>. 입력은 UTF-8 경로 + 옵션 JSON, 출력은 문서 JSON(블록 목록). 언어 무관하게 쓸 수 있다.</span></div>
+  <div class="card"><b>OCR 스위치</b><span class="s">열 때 옵션 · 실행 중 바꾸기 · 호출마다 덮어쓰기 3단. 기본 켬. 모델이 없으면 꺼진 것처럼 동작하고 이유를 알려 준다.</span></div>
+  <div class="card"><b>SimpleRAG 쪽</b><span class="s">새 <code>docparse.rs</code> 가 DLL 을 적재해 지금의 <code>Document</code>·<code>Block</code> 으로 바꿔 준다. 절 조립·청킹·OCR 대기열은 그대로 SimpleRAG 에 남는다.</span></div>
+</div>
+<div class="callout good">핵심 원칙: <b>분리 전후 블록 JSON 이 글자 하나까지 같아야 한다.</b> 그러면 다시 인덱싱할 필요가 없고,
+OCR 캐시(내용 해시 · 엔진 이름)도 그대로 쓴다. 기능 추가·개선은 분리가 끝난 뒤 DLL 쪽에서 따로 한다.</div>
+</section>
+
+<section id="s2">
+<h2>2. 지금 구조 (2026-11-16 master 1bf068a 기준)</h2>
+<p>SimpleRAG 에는 같은 추출기가 두 벌 있다 — Python 판 <code>src/simplerag/docmodel</code> 과 이를 옮긴 Rust 판
+<code>rust/simplerag/src/docmodel</code>. 배포(MoAI-S)는 Rust 판이므로 <b>분리 대상은 Rust 판</b>이다.</p>
+<div class="tw"><table>
+<tr><th>모듈</th><th>하는 일</th><th>줄 수</th><th>DLL 로?</th></tr>
+<tr><td><code>docmodel/mod.rs</code></td><td>확장자·파일 머리로 파서 고르기, 실패 시 폴백, 그림 파일 OCR 결과 읽기</td><td>177</td><td><span class="tag g">옮김</span></td></tr>
+<tr><td><code>docmodel/docx · pptx · hwpx · xlsx · ooxml</code></td><td>OOXML·HWPX 의 XML 을 읽어 블록으로</td><td>1,254</td><td><span class="tag g">옮김</span></td></tr>
+<tr><td><code>docmodel/doc_bin</code></td><td>옛 .doc(OLE) 구조 추출</td><td>532</td><td><span class="tag g">옮김</span></td></tr>
+<tr><td><code>docmodel/pdf · pdftable</code></td><td>pdfium 글자층 → 블록, 테두리 표 검출, 스캔 쪽 OCR 줄 붙이기</td><td>701</td><td><span class="tag g">옮김</span></td></tr>
+<tr><td><code>docmodel/html_md · tables · postprocess</code></td><td>HTML·MD·ipynb, 표 렌더링, 머리말·꼬리말·쪽번호·목차 판정, 번호 제목 추론</td><td>717</td><td><span class="tag g">옮김</span></td></tr>
+<tr><td><code>docmodel/blocks.rs</code></td><td>Block · Document 모델</td><td>171</td><td><span class="tag">양쪽</span> DLL 은 출력 모델, SimpleRAG 는 받는 모델</td></tr>
+<tr><td><code>docmodel/assemble.rs</code></td><td>제목 경로로 절 조립(청킹 준비)</td><td>196</td><td><span class="tag w">남김</span> 검색용 가공이라 SimpleRAG 몫</td></tr>
+<tr><td><code>ocr/*</code></td><td>PP-OCRv6 검출 + 한국어 v5 인식(ONNX), 줄 묶기, 결과 캐시</td><td>1,486</td><td><span class="tag g">옮김</span></td></tr>
+<tr><td><code>pdfium.rs</code></td><td>pdfium.dll 적재 · 쪽 글자 · 그림 객체 · 쪽 그리기 · 메타</td><td>690</td><td><span class="tag g">옮김</span> (§9 — pdfium 주인은 하나)</td></tr>
+<tr><td><code>legacy.rs · extract.rs</code></td><td>폴백 평문 추출(.hwp .ppt .xls .txt .csv 등)</td><td>1,129</td><td><span class="tag g">옮김</span> (§15-2)</td></tr>
+<tr><td><code>xmldom · htmlparse · xlsdate</code></td><td>XML 트리 · HTML 토큰 · 엑셀 날짜</td><td>606</td><td><span class="tag">복사</span> meta/extract.rs 가 xmldom 을 써서 SimpleRAG 에도 남는다</td></tr>
+<tr><td><code>structure.rs</code></td><td>번호 문법 감지 · 제목 길이 기준</td><td>181</td><td><span class="tag">복사</span> postprocess(DLL)와 assemble·chunk(SimpleRAG) 둘 다 씀</td></tr>
+</table></div>
+
+<h3>떼어 낼 때 끊어야 하는 연결</h3>
+<div class="tw"><table>
+<tr><th>지금 부르는 것</th><th>어디서</th><th>바꿀 방법</th></tr>
+<tr><td><code>crate::config::cfg()</code> — ocr · ocr_images · ocr_dir · ocr_threads · ocr_max_pages · pdf_tables · pdf_infer_headings · root</td><td>ocr · pdf · pdfium</td><td>DLL 의 <code>Options</code> 구조체로. SimpleRAG 가 열 때 넘긴다</td></tr>
+<tr><td><code>crate::cli::log</code></td><td>ocr(모델 없음 경고)</td><td>로그 콜백(없으면 버림)</td></tr>
+<tr><td><code>crate::indexer::content_hash</code> (SHA-1, 1MB 단위)</td><td>그림 OCR · PDF OCR 캐시 열쇠</td><td>DLL 로 그대로 복사 — <b>같은 해시여야 옛 캐시를 쓴다</b></td></tr>
+<tr><td><code>crate::embed::make_session_lean</code></td><td>OCR 세션 만들기</td><td>DLL 안에 같은 함수(아레나 끈 ONNX 세션)</td></tr>
+<tr><td><code>crate::ocr::note / take_note</code> — 전역 표로 OCR 상태 전달</td><td>추출 → 색인</td><td>전역 표를 없애고 <b>결과 JSON 의 <code>ocr</code> 필드</b>로 돌려준다</td></tr>
+<tr><td><code>indexer::BLOCKS_VERSION = 5</code></td><td>다시 인덱싱 판정</td><td>DLL 이 <code>blocks_version</code> 을 알려 주고 SimpleRAG 가 그 값을 쓴다</td></tr>
+</table></div>
+</section>
+
+<section id="s3">
+<h2>3. 목표와 범위</h2>
+<h3>목표</h3>
+<ul>
+  <li>문서 파서를 SimpleRAG 와 따로 버전 관리·빌드·시험할 수 있다(다른 프로그램에서도 쓸 수 있다).</li>
+  <li>입력 파일 하나 → 블록 목록(글 + 라벨 + 제목 수준 + 쪽 + 표 칸 + 출처)을 돌려준다.</li>
+  <li>OCR 을 켜고 끌 수 있다. 기본은 켬.</li>
+  <li>SimpleRAG 는 DLL 을 적재해 지금과 똑같은 결과를 얻는다.</li>
+</ul>
+<h3>범위 밖 (이번에 하지 않음)</h3>
+<ul>
+  <li>파서 품질 개선·새 형식 추가 — 분리 뒤 DLL 저장소에서 따로.</li>
+  <li>절 조립·청킹·임베딩 — SimpleRAG 에 남는다.</li>
+  <li>OCR 대기열·진행 표시·실패 목록 같은 <b>운영 정책</b> — SimpleRAG 에 남는다. DLL 은 "이 쪽을 OCR 해라" 만 한다.</li>
+  <li>Python 판 docmodel 교체 — 측정용으로 그대로 둔다(§15-4).</li>
+</ul>
+</section>
+
+<section id="s4">
+<h2>4. 전체 구조</h2>
+<div class="diagram" role="img" aria-label="SimpleRAG 와 struct_docparse.dll 의 관계 그림">
+<svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+  <rect class="host" x="20" y="20" width="300" height="320" rx="8"/>
+  <text class="t" x="36" y="46">simplerag.exe / MoAISearch.exe</text>
+  <rect class="box" x="40" y="64" width="260" height="44" rx="6"/>
+  <text x="52" y="91">indexer · OCR 대기열 · 실패 목록</text>
+  <rect class="box" x="40" y="120" width="260" height="44" rx="6"/>
+  <text x="52" y="147">assemble(절) · chunk · embed</text>
+  <rect class="box" x="40" y="176" width="260" height="60" rx="6"/>
+  <text class="t" x="52" y="200">docparse.rs (새로)</text>
+  <text class="m" x="52" y="220">libloading · JSON → Document/Block</text>
+  <rect class="box" x="40" y="248" width="260" height="44" rx="6"/>
+  <text x="52" y="275">config(extract.ocr 등) · 설정 창</text>
+  <text class="m" x="36" y="324">find.rs · meta/extract.rs 의 PDF 호출도 DLL 로</text>
+
+  <rect class="dll" x="380" y="20" width="300" height="320" rx="8"/>
+  <text class="t" x="396" y="46">struct_docparse.dll</text>
+  <rect class="box" x="400" y="64" width="260" height="44" rx="6"/>
+  <text x="412" y="91">C ABI (sdp_*) · panic 막기</text>
+  <rect class="box" x="400" y="120" width="260" height="60" rx="6"/>
+  <text x="412" y="144">형식 파서: docx pptx xlsx hwpx</text>
+  <text x="412" y="164">doc pdf html md ipynb · 폴백</text>
+  <rect class="box" x="400" y="192" width="260" height="44" rx="6"/>
+  <text x="412" y="219">후처리: 라벨 판정 · 표 렌더링</text>
+  <rect class="box" x="400" y="248" width="260" height="60" rx="6"/>
+  <text class="t" x="412" y="272">OCR (켜기/끄기)</text>
+  <text class="m" x="412" y="292">검출·인식 · 줄 묶기 · 캐시</text>
+
+  <rect class="ext" x="730" y="64" width="150" height="44" rx="6"/>
+  <text x="744" y="91">pdfium.dll</text>
+  <rect class="ext" x="730" y="140" width="150" height="44" rx="6"/>
+  <text x="744" y="167">onnxruntime.dll</text>
+  <rect class="ext" x="730" y="216" width="150" height="60" rx="6"/>
+  <text x="744" y="240">models/ocr/*.onnx</text>
+  <text class="m" x="744" y="260">ocr_cache/</text>
+
+  <path d="M300 206 L350 206 L350 86 L400 86"/>
+  <text class="m" x="304" y="198">JSON</text>
+  <path d="M680 150 L730 86"/>
+  <path d="M680 270 L705 270 L705 162 L730 162"/>
+  <path d="M680 286 L730 246"/>
+  <text class="m" x="730" y="300">onnxruntime 은 SimpleRAG 의</text>
+  <text class="m" x="730" y="318">임베딩·리랭커도 함께 씀</text>
+</svg>
+</div>
+<p>DLL 은 <b>pdfium.dll 의 유일한 주인</b>이 되고, onnxruntime.dll 은 SimpleRAG(임베딩·리랭커)와 DLL(OCR)이 함께 쓴다.
+두 DLL 모두 지금처럼 프로그램 폴더에 하나씩만 둔다.</p>
+</section>
+
+<section id="s5">
+<h2>5. 새 저장소 구성 — <code>D:\Project\Struct-DocParse-OCR-rust</code></h2>
+<pre><code>Struct-DocParse-OCR-rust/
+├─ Cargo.toml                 # 워크스페이스 (release: lto=thin, panic=unwind — SimpleRAG 와 같게)
+├─ crates/
+│  ├─ sdp-core/               # rlib — 파서·OCR 본체 (FFI 없음, Rust 에서 바로 시험)
+│  │  └─ src/ docmodel/ ocr/ pdfium.rs legacy.rs extract.rs xmldom.rs htmlparse.rs
+│  │          xlsdate.rs structure.rs pyutil.rs options.rs hash.rs
+│  ├─ sdp-ffi/                # cdylib → struct_docparse.dll (+ .dll.lib, .pdb)
+│  │  └─ src/lib.rs           # extern "C" sdp_* — catch_unwind · JSON 직렬화 · 문자열 해제
+│  └─ sdp-cli/                # sdp.exe — 파일 → JSON 덤프, OCR 시험, 같음 비교
+├─ include/struct_docparse.h  # cbindgen 으로 생성, 저장소에 넣어 둔다
+├─ bindings/python/struct_docparse.py   # ctypes 래퍼(선택, §15-4)
+├─ tests/
+│  ├─ fixtures/               # 형식별 작은 시험 문서
+│  └─ golden/                 # 분리 전 SimpleRAG 가 만든 *.blocks.json (같음 기준)
+├─ dist/                      # 빌드 결과: struct_docparse.dll · .h · VERSION · LICENSES
+└─ docs/                      # 이 설계서 이후의 API 문서·변경 기록</code></pre>
+<p><code>sdp-core</code> 와 <code>sdp-ffi</code> 를 나누는 이유: 파서 시험은 FFI 없이 Rust 단위 시험으로 빠르게 돌리고,
+DLL 껍데기는 얇게 유지해 ABI 를 바꿀 일을 줄인다. 모든 함수에는 D:\Project 공통 규칙의 한글 헤더 주석을 단다(Rust 도 같은 형식 — 지금 코드와 같음).</p>
+</section>
+
+<section id="s6">
+<h2>6. 출력: 블록과 라벨</h2>
+<p>요청에 적힌 "head" 는 두 가지로 나뉜다 — <b>heading</b>(본문의 제목·절 이름)과 <b>header</b>(쪽마다 반복되는 머리글).
+지금 코드도 이 둘을 구분하고, 검색에서는 header 를 빼고 heading 은 절 경로로 쓴다. 이름은 지금 값을 그대로 쓴다.</p>
+<div class="tw"><table>
+<tr><th>라벨 <code>type</code></th><th>뜻</th><th>추가 필드</th><th>나오는 형식</th></tr>
+<tr><td><code>heading</code></td><td>제목·절 이름</td><td><code>level</code> 1~9</td><td>docx · doc · pptx(슬라이드 제목) · hwpx · xlsx(시트 이름) · pdf(추론) · html · md</td></tr>
+<tr><td><code>paragraph</code></td><td>본문 문단</td><td></td><td>전부. OCR 글도 이 라벨 + <code>source:"ocr"</code></td></tr>
+<tr><td><code>list_item</code></td><td>목록 항목</td><td><code>level</code> = 깊이</td><td>docx · doc · pptx · hwpx · html · md</td></tr>
+<tr><td><code>table</code></td><td>표</td><td><code>rows</code>(행×칸) · <code>header_rows</code> · <code>text</code>(렌더링 글)</td><td>docx · doc · pptx · xlsx(시트) · hwpx · pdf(테두리 표) · html · md</td></tr>
+<tr><td><code>caption</code></td><td>그림·표 설명</td><td></td><td>docx · doc</td></tr>
+<tr><td><code>code</code></td><td>코드 조각</td><td></td><td>md · ipynb · html</td></tr>
+<tr><td><code>header</code></td><td>쪽 머리글</td><td></td><td>docx · doc · pptx · hwpx · pdf(반복 줄 판정) · html</td></tr>
+<tr><td><code>footer</code></td><td>쪽 꼬리글</td><td></td><td>docx · pptx · hwpx · pdf · html</td></tr>
+<tr><td><code>page_number</code></td><td>쪽 번호</td><td></td><td>pdf · pptx</td></tr>
+<tr><td><code>toc</code></td><td>목차</td><td></td><td>docx · doc · 후처리(목차 모양 판정)</td></tr>
+<tr><td><code>note</code></td><td>각주·미주·슬라이드 노트·메모</td><td></td><td>docx · doc · pptx · hwpx · xlsx</td></tr>
+</table></div>
+<p>모든 블록에 공통: <code>text</code>, <code>page</code>(쪽·슬라이드·시트, 1부터), <code>source</code>(<code>parser</code> · <code>inferred</code> · <code>regex</code> · <code>ocr</code>), <code>synthetic</code>(문서에 없는 글, 예: "슬라이드 3").
+<code>path</code>(제목 경로)는 DLL 이 채우지 않는다 — 절 조립은 SimpleRAG 몫이다.</p>
+
+<h3>결과 JSON (지금 <code>*.blocks.json</code> 에 버전·OCR 정보를 더한 모양)</h3>
+<pre><code>{
+  "schema": 1,                       // 이 JSON 모양의 버전
+  "blocks_version": 5,               // 추출 결과가 바뀌는 코드 변경마다 올림 → 호스트가 재인덱싱 판정
+  "parser": "struct_docparse 0.1.0",
+  "format": "pdf",                   // docx | pptx | xlsx | hwpx | doc | pdf | html | md | ipynb | image | legacy
+  "title": "2026 사업계획",
+  "pages": 12,
+  "warnings": ["OCR 부분 100/140쪽 (상한)"],
+  "raw_text": null,                  // 폴백(legacy) 이면 평문, 블록 경로면 null
+  "ocr": {                           // OCR 상태 — 지금의 DocOcr (note/take_note 를 대신)
+    "enabled": true, "reason": null, // 꺼졌으면 reason: "off" | "models_missing" | ...
+    "pending": [7, 8],               // 아직 OCR 하지 않은 쪽(deferred 모드)
+    "done": [3, 4, 5],               // OCR 글이 들어간 쪽
+    "whole": false                   // 그림 파일처럼 전부 OCR 글인가
+  },
+  "blocks": [
+    {"type": "header", "text": "대외비", "page": 1},
+    {"type": "heading", "text": "1. 개요", "level": 1, "page": 1},
+    {"type": "paragraph", "text": "본 계획은 …", "page": 1},
+    {"type": "table", "text": "| 항목 | 금액 |\n…", "rows": [["항목","금액"],["인건비","3억"]], "header_rows": 1, "page": 2},
+    {"type": "paragraph", "text": "스캔된 쪽의 글", "page": 3, "source": "ocr"},
+    {"type": "footer", "text": "㈜회사", "page": 1}
+  ]
+}</code></pre>
+<p>기본값 필드는 지금처럼 뺀다(<code>level:0</code>, <code>source:"parser"</code> 등). 글 위치 좌표는 이번에 내보내지 않는다 — 지금 SimpleRAG 는 쓰지 않는다. 마스킹·원본 강조 같은 쓰임새를 위한
+좌표 출력은 <a href="#s16-2">§16-2 추후 검토</a>에 정리했다.</p>
+<div class="callout">왜 C 구조체가 아니라 JSON 인가: 블록 수·필드가 문서마다 다르고 앞으로 늘어난다. JSON 이면 필드를 더해도 ABI 가 그대로이고,
+Rust·Python(ctypes)·C# 어디서든 바로 읽힌다. 지금 진단 덤프와 같은 모양이라 같음 검증도 쉽다. 비용(직렬화·해석)은 §11 에서 잰다.</div>
+</section>
+
+<section id="s7">
+<h2>7. DLL 함수 (C ABI)</h2>
+<p>문자열은 모두 <b>UTF-8, NUL 끝</b>. DLL 이 돌려준 문자열은 반드시 <code>sdp_free</code> 로 돌려준다(할당자가 다르기 때문).
+반환값은 상태 코드, 결과는 <code>out</code> 포인터로.</p>
+<pre><code>typedef struct SdpHandle SdpHandle;
+typedef void (*sdp_log_fn)(int level, const char* msg, void* user);
+typedef int  (*sdp_progress_fn)(int page_index, int page_count, double ms, void* user); // 0 이 아니면 멈춤
+
+uint32_t    sdp_abi_version(void);                         // 호환 검사용 정수 (처음 1)
+const char* sdp_version(void);                             // "0.1.0 blocks=5 ocr=ppocrv6-tiny-det+ko-ppocrv5-mobile-rec/1"
+
+int  sdp_open(const char* options_json, sdp_log_fn log, void* user, SdpHandle** out);
+void sdp_close(SdpHandle* h);
+int  sdp_set_option(SdpHandle* h, const char* key, const char* value_json);   // 예: "ocr.enabled", "false"
+int  sdp_get_status(SdpHandle* h, char** out_json);        // OCR 켜짐·모델 유무·이유, pdfium 적재 여부
+
+int  sdp_supports(SdpHandle* h, const char* path);         // 1 블록 경로 / 2 폴백 평문 / 0 미지원
+int  sdp_parse(SdpHandle* h, const char* path, const char* call_opts_json, char** out_json);
+int  sdp_extract_text(SdpHandle* h, const char* path, int fix_tables, char** out_json); // {"text","table_rows"} — 평문 경로(구현 때 더함)
+     // call_opts: {"title":..., "keep_pages":[0,5,9], "ocr": {"enabled":false}} — 모두 생략 가능
+
+int  sdp_ocr_pages(SdpHandle* h, const char* path, const char* pages_json,
+                   sdp_progress_fn cb, void* user, char** out_json);  // 쪽 OCR → 캐시 저장. pages 생략 = pending 전부
+int  sdp_ocr_file(SdpHandle* h, const char* path, const char* pages_json, char** out_json); // PDF·그림·그림 폴더 — 줄·점수·상자 (시험용, 캐시 안 씀)
+void sdp_ocr_unload(SdpHandle* h);                         // 엔진 내려 메모리 돌려주기
+int  sdp_ocr_cache_remove(SdpHandle* h, const char* content_hash);
+
+int  sdp_pdf_info(SdpHandle* h, const char* path, char** out_json);       // 쪽 수 · 메타 (meta/extract.rs 용)
+int  sdp_pdf_page_texts(SdpHandle* h, const char* path, char** out_json); // 쪽별 평문 (find.rs 용)
+
+const char* sdp_last_error(void);                          // 이 스레드의 마지막 오류문 (해제 불필요)
+void sdp_free(char* p);</code></pre>
+
+<div class="tw"><table>
+<tr><th>상태 코드</th><th>뜻</th></tr>
+<tr><td><code>0</code> SDP_OK</td><td>성공(폴백 평문으로 성공한 것도 0 — <code>format:"legacy"</code> 와 <code>warnings</code> 로 구분)</td></tr>
+<tr><td><code>-1</code> SDP_EINVAL</td><td>널 포인터·잘못된 JSON·모르는 옵션 키</td></tr>
+<tr><td><code>-2</code> SDP_EIO</td><td>파일을 열 수 없음</td></tr>
+<tr><td><code>-3</code> SDP_EPARSE</td><td>구조 파서와 폴백 추출이 모두 실패</td></tr>
+<tr><td><code>-4</code> SDP_EUNSUPPORTED</td><td>지원하지 않는 형식(OCR 꺼진 상태의 그림 파일 포함)</td></tr>
+<tr><td><code>-5</code> SDP_EOCR</td><td>OCR 을 쓸 수 없거나(모델 없음 등) OCR 중 실패</td></tr>
+<tr><td><code>-6</code> SDP_ECANCELLED</td><td>진행 콜백이 멈추라고 함</td></tr>
+<tr><td><code>-7</code> SDP_ERUNTIME</td><td>pdfium.dll · onnxruntime.dll 적재 실패</td></tr>
+<tr><td><code>-99</code> SDP_EPANIC</td><td>DLL 안의 panic 을 잡았다(프로세스는 살아 있음)</td></tr>
+</table></div>
+
+<h3>열 때 옵션 (<code>sdp_open</code>)</h3>
+<pre><code>{
+  "ocr": {
+    "enabled": true,          // 기본 true
+    "images": true,           // 그림 파일(.png .jpg .tif .bmp)도 OCR (enabled 가 false 면 함께 꺼짐)
+    "mode": "inline",         // inline = sdp_parse 안에서 바로 OCR / deferred = 캐시만 보고 pending 을 알려 줌
+    "model_dir": "C:/…/models/ocr",
+    "cache_dir": "C:/…/ocr_cache",   // 생략하면 캐시 안 씀(inline 일 때만 허용)
+    "threads": 4, "max_pages": 100, "dpi": 200
+  },
+  "pdf":     {"tables": true, "infer_headings": true},
+  "runtime": {"pdfium": "C:/…/pdfium.dll", "onnxruntime": "C:/…/onnxruntime.dll"},  // 생략 = DLL 옆
+  "log":     {"level": "warn"}
+}</code></pre>
+<p>기본값은 <b>지금 SimpleRAG 의 config.yaml 기본값과 같게</b> 둔다(ocr 켬 · ocr_images 켬 · threads 4 · max_pages 100 · pdf 표 검출 켬).</p>
+</section>
+
+<section id="s8">
+<h2>8. OCR 켜기·끄기</h2>
+<h3>세 단계 스위치 (뒤가 앞을 덮는다)</h3>
+<ol>
+  <li><b>열 때</b> — <code>sdp_open</code> 의 <code>ocr.enabled</code> (기본 <code>true</code>).</li>
+  <li><b>실행 중</b> — <code>sdp_set_option(h, "ocr.enabled", "false")</code>. 설정 창에서 OCR 을 끄면 SimpleRAG 가 이걸 부른다. 끄는 순간 엔진도 내린다.</li>
+  <li><b>호출마다</b> — <code>sdp_parse</code> 의 <code>call_opts.ocr.enabled</code>. 예: 비슷한 문서 찾기처럼 OCR 이 필요 없는 빠른 추출.</li>
+</ol>
+<p>켜져 있어도 <b>모델 파일이 없으면 꺼진 것처럼</b> 동작하고 <code>ocr.reason = "models_missing"</code> 과 로그 경고(한 번)를 남긴다 — 지금 <code>ocr::enabled()</code> 와 같다.</p>
+
+<h3>켬·끔에 따른 동작</h3>
+<div class="tw"><table>
+<tr><th>입력</th><th>OCR 켬 · inline</th><th>OCR 켬 · deferred (SimpleRAG)</th><th>OCR 끔</th></tr>
+<tr><td>글자층 있는 PDF</td><td>글자층 블록</td><td>같음</td><td>같음</td></tr>
+<tr><td>스캔 쪽이 섞인 PDF</td><td>그 쪽을 그려 OCR, 줄을 쪽 끝에 <code>source:"ocr"</code> 문단으로</td><td>캐시에 있으면 붙이고, 없으면 <code>ocr.pending</code> 에 쪽 번호</td><td>글자층만. 스캔 쪽은 비어 있음. 그림 객체도 읽지 않음</td></tr>
+<tr><td>전부 스캔인 PDF</td><td>전 쪽 OCR(상한 max_pages)</td><td>빈 문서 + pending (실패 아님)</td><td><code>SDP_EPARSE</code> "텍스트층 없음" — 지금 SimpleRAG 와 같은 실패(구현 때 바꿈)</td></tr>
+<tr><td>그림 파일</td><td>OCR 해 <code>format:"image"</code></td><td>캐시 또는 pending [1]</td><td><code>SDP_EUNSUPPORTED</code></td></tr>
+<tr><td>docx · pptx · hwpx 등</td><td colspan="3">OCR 과 무관(문서 안 그림 OCR 은 범위 밖 — §15-6)</td></tr>
+</table></div>
+
+<h3>왜 두 모드인가</h3>
+<p>SimpleRAG 는 OCR 을 <b>나중에 천천히</b> 한다 — 먼저 글자층만으로 색인하고, 쉬는 동안 OCR 대기열을 돌린 뒤 다시 반영한다
+(<code>indexer::run_ocr_queue</code>). 이 정책은 SimpleRAG 에 남기고, DLL 은 <code>deferred</code> 로 "어느 쪽이 남았는지" 만 알려 주고
+<code>sdp_ocr_pages</code> 로 "이 쪽을 OCR 해 캐시에 넣어라" 를 받는다. 반면 처음 쓰는 다른 프로그램은 한 번 부르면 다 되는
+<code>inline</code> 이 편하므로 DLL 기본값은 <code>inline</code> 으로 둔다(§15-3).</p>
+<div class="callout">OCR 캐시는 지금과 같은 자리·이름을 쓴다: <code>&lt;root&gt;/ocr_cache/&lt;해시 앞 2자&gt;/&lt;SHA-1&gt;.json</code>, 엔진 문자열
+<code>ppocrv6-tiny-det+ko-ppocrv5-mobile-rec/1</code>. 그래서 분리 뒤에도 다시 OCR 하지 않는다.</div>
+</section>
+
+<section id="s9">
+<h2>9. 스레드·메모리·오류</h2>
+<div class="tw"><table>
+<tr><th>주제</th><th>설계</th></tr>
+<tr><td>스레드</td><td>핸들 하나를 여러 스레드가 같이 쓴다(SimpleRAG 는 준비 스레드 여러 개가 동시에 추출). 파서는 상태가 없고, pdfium 은 DLL 안 전역 Mutex 하나, OCR 엔진도 Mutex 하나 — 지금과 같다.</td></tr>
+<tr><td>pdfium 주인은 하나</td><td>pdfium 은 스레드 안전하지 않고 <code>FPDF_InitLibrary</code> 를 프로세스에서 한 번만 해야 한다. SimpleRAG 와 DLL 이 각자 적재해 각자 Mutex 를 걸면 <b>같은 pdfium.dll 에 동시 호출</b>이 생긴다. 그래서 SimpleRAG 의 <code>pdfium.rs</code> 를 없애고 find.rs · meta/extract.rs · cli.rs 의 PDF 호출을 DLL 함수(<code>sdp_pdf_*</code>)로 바꾼다.</td></tr>
+<tr><td>onnxruntime 공유</td><td>둘 다 <code>ort</code> load-dynamic 으로 같은 onnxruntime.dll 을 적재한다. 같은 모듈을 가리키므로 버전은 자동으로 같다. 두 쪽이 각자 OrtEnv 를 만들 때 문제가 없는지 <b>시험으로 확인</b>한다(§14). <code>ort</code> 버전은 두 저장소에서 같은 값(<code>=2.0.0-rc.10</code>)으로 묶는다.</td></tr>
+<tr><td>panic</td><td>모든 <code>extern "C"</code> 함수 몸통을 <code>catch_unwind</code> 로 감싸 <code>SDP_EPANIC</code> 로 바꾼다(FFI 경계를 넘는 unwind 는 정의되지 않은 동작). 형식 파서 안의 panic 은 지금처럼 폴백으로 넘긴다.</td></tr>
+<tr><td>메모리</td><td>결과 문자열은 DLL 이 만들고 <code>sdp_free</code> 로 돌려받는다. 메모리 주인은 DLL 하나로 명확하다. OCR 엔진은 지금처럼 쓰고 나면 <code>sdp_ocr_unload</code>.</td></tr>
+<tr><td>오류문</td><td>스레드별 마지막 오류문(<code>sdp_last_error</code>). 오류문 앞머리는 지금과 같게(<code>OCRError:</code> 등) — SimpleRAG 의 <code>why_of</code> 와 설정 &gt; 로그 탭이 그 앞머리로 분류한다.</td></tr>
+<tr><td>경로</td><td>UTF-8 로 받아 Rust <code>Path</code> 로 연다(Windows 와이드 API). 한글·긴 경로 시험 포함.</td></tr>
+</table></div>
+</section>
+
+<section id="s10">
+<h2>10. SimpleRAG 수정 사항</h2>
+<div class="tw"><table>
+<tr><th>파일</th><th>바꿀 것</th></tr>
+<tr><td><code>src/docparse.rs</code> <span class="tag g">새로</span></td><td><code>libloading</code> 으로 <code>struct_docparse.dll</code> 적재(지금 pdfium.rs 와 같은 방식), <code>sdp_abi_version</code> 검사, 함수 포인터 보관, 결과 JSON → <code>Document</code>/<code>Block</code> 변환(라벨 문자열 → 지금 상수, 모르는 라벨은 paragraph + 경고).</td></tr>
+<tr><td><code>docmodel/mod.rs</code></td><td><code>extract_document</code> · <code>extract_document_keep</code> · <code>supports</code> 의 몸통을 docparse 호출로. 함수 모양은 그대로 둬 호출처(indexer · cli · chunk)는 손대지 않는다.</td></tr>
+<tr><td><code>docmodel/blocks.rs</code></td><td>남김. <code>Document</code> 에 <code>ocr: DocOcr</code> 필드 추가.</td></tr>
+<tr><td><code>docmodel/assemble.rs</code> · <code>chunk.rs</code> · <code>structure.rs</code></td><td>그대로.</td></tr>
+<tr><td><code>docmodel/</code> 나머지 11개 · <code>ocr/</code> · <code>pdfium.rs</code> · <code>legacy.rs</code> · <code>htmlparse.rs</code> · <code>xlsdate.rs</code></td><td>삭제(한 버전 동안은 기능 플래그로 남김 — §13).</td></tr>
+<tr><td><code>extract.rs</code></td><td><code>extract_text</code> 는 DLL 의 폴백 결과(<code>raw_text</code>)를 쓰도록. 업로드·대화 첨부의 평문 경로도 같이.</td></tr>
+<tr><td><code>indexer.rs</code></td><td><code>run_ocr_queue</code>: 쪽 그리기 + <code>ocr_image</code> + 캐시 저장을 <code>sdp_ocr_pages(path, [no])</code> 한 번으로(쪽마다 불러 멈춤·진행 표시는 그대로). <code>take_note</code> 대신 <code>doc.ocr</code>. <code>remove_cache</code> → <code>sdp_ocr_cache_remove</code>. <code>BLOCKS_VERSION</code> → DLL 값. <code>is_image</code>·<code>IMAGE_EXTS</code> 는 <code>sdp_supports</code> 또는 작은 상수 복사.</td></tr>
+<tr><td><code>commands.rs</code></td><td>OCR 켜짐 판정은 <code>sdp_get_status</code>, 설정 바꿈 → <code>sdp_set_option("ocr.enabled")</code>, 대기열 비면 <code>sdp_ocr_unload</code>.</td></tr>
+<tr><td><code>config.rs</code></td><td>설정 키는 그대로(<code>extract.ocr</code> 등). 앱 시작 때 <code>sdp_open</code> 옵션 JSON 을 만든다. <code>mode</code> 는 항상 <code>deferred</code>.</td></tr>
+<tr><td><code>find.rs</code> · <code>meta/extract.rs</code> · <code>cli.rs</code></td><td>pdfium 직접 호출 → <code>sdp_pdf_page_texts</code> · <code>sdp_pdf_info</code> · <code>sdp_ocr_file</code>.</td></tr>
+<tr><td><code>Cargo.toml</code></td><td><code>image</code> · <code>tiff</code> · <code>quick-xml</code> · <code>calamine</code> · <code>cfb</code> 등 파서 전용 의존성 제거(빌드 시간·exe 크기 감소). <code>zip</code> 은 meta 가 쓰면 남김.</td></tr>
+<tr><td>RAGSearchBox</td><td>파서·OCR 을 직접 부르지 않아 코드 변경 없음. 설정 &gt; 정보에 DLL 버전 한 줄 표시(선택).</td></tr>
+</table></div>
+<div class="callout warn">DLL 을 못 찾거나 ABI 가 맞지 않으면: 인덱싱·추출을 시작하지 않고 트레이·로그에 "문서 파서(struct_docparse.dll)를 불러오지 못했습니다 — 다시 설치해 주세요" 를 띄운다. 검색·대화(이미 만든 색인)는 계속 쓸 수 있다.</div>
+</section>
+
+<section id="s11">
+<h2>11. 같음 검증·성능</h2>
+<ol>
+  <li><b>기준 만들기</b> — 분리 전 <code>simplerag-rs extract --blocks --dump</code> 로 시험 묶음 전부의 <code>*.blocks.json</code> 을 남긴다: <code>sample/</code>, <code>sample_pdf/</code>, 골든셋 v2 원문, 운영 폴더(3,532건, 50분 걸린 그 목록 — 본문은 저장소에 넣지 않고 해시만).</li>
+  <li><b>DLL 판 비교</b> — <code>sdp.exe compare &lt;폴더&gt; tests/golden</code>: 블록 JSON 을 필드 단위로 비교해 다른 문서·블록을 보여 준다. 목표 <b>차이 0건</b>.</li>
+  <li><b>OCR</b> — 캐시를 지운 상태로 스캔 PDF · 그림 묶음(bench/bench_ocr.py 의 것)을 inline 으로 돌려 지금 캐시 JSON 과 줄·점수 비교. 그리고 캐시를 둔 상태로 다시 OCR 하지 않는지 확인.</li>
+  <li><b>끝단</b> — SimpleRAG 로 골든셋 색인 → 청크 수·청크 ID 가 같고 검색 @1 · 근거 수가 그대로인지(규칙 지표만. RAGAS 판정 서버는 요청 때만).</li>
+  <li><b>성능</b> — 문서당 추출 시간과 메모리를 전후 비교. JSON 직렬화·해석 비용이 추출 시간의 2% 를 넘으면 큰 표 문서부터 원인을 본다. (인덱싱 시간의 92.6% 는 임베딩이라 추출 쪽 변화는 작을 것으로 본다 — 2026-10-30 실측.)</li>
+  <li><b>동시성</b> — 준비 스레드 4개 동시 추출 + OCR 대기열 + 임베딩을 한 프로세스에서 30분 돌려 충돌·메모리 증가가 없는지.</li>
+</ol>
+</section>
+
+<section id="s12">
+<h2>12. 빌드·배포</h2>
+<ul>
+  <li>DLL 저장소: <code>cargo build -p sdp-ffi --release</code> → <code>dist/struct_docparse.dll</code> · <code>.pdb</code> · <code>struct_docparse.h</code> · <code>VERSION</code>. DLL 에 Windows 버전 리소스(파일 버전 = DLL 버전)를 넣는다.</li>
+  <li>SimpleRAG <code>rust/build_dist.ps1</code>: <code>D:\Project\Struct-DocParse-OCR-rust\dist\struct_docparse.dll</code> 을 <code>dist-rust/</code> 로 복사(pdfium·onnxruntime 와 같은 자리). 버전이 기대값과 다르면 빌드를 멈춘다.</li>
+  <li><code>installer.iss</code> 에 파일 한 줄 추가. <code>gen_licenses.py</code> 는 DLL 저장소의 <code>cargo about</code>/라이선스 목록도 합친다.</li>
+  <li>버전: DLL 은 따로 semver(처음 0.1.0). SimpleRAG 는 "필요한 최소 DLL 버전 + ABI 정수"를 코드에 적는다. MoAI-S 릴리스의 변경 기록(docs/changelog.html)에 DLL 버전을 함께 적는다.</li>
+  <li>모델(<code>models/ocr/*.onnx</code>)은 지금 자리 그대로 — 경로는 SimpleRAG 가 옵션으로 넘긴다.</li>
+</ul>
+</section>
+
+<section id="s13">
+<h2>13. 단계별 진행</h2>
+<div class="tw"><table>
+<tr><th>단계</th><th>할 일</th><th>끝난 기준</th></tr>
+<tr><td>0. 기준</td><td>지금 exe 로 시험 묶음 블록 JSON · OCR 캐시 · 골든셋 지표를 남긴다</td><td><code>tests/golden</code> 채워짐</td></tr>
+<tr><td>1. 옮기기</td><td>새 저장소 만들고 <code>sdp-core</code> 로 코드 복사. <code>cfg()</code>·<code>log</code>·<code>content_hash</code>·<code>make_session_lean</code>·<code>note</code> 연결을 끊는다. 로직은 바꾸지 않는다</td><td><code>sdp-core</code> 단독 빌드, 단위 시험 통과</td></tr>
+<tr><td>2. DLL 껍데기</td><td><code>sdp-ffi</code> · 헤더 · <code>sdp-cli</code></td><td>§11-2 차이 0건, §11-3 OCR 같음</td></tr>
+<tr><td>3. SimpleRAG 연결</td><td><code>docparse.rs</code>, 호출처 교체. 기능 플래그 <code>builtin-parser</code>(옛 코드)와 <code>dll-parser</code>(새) 를 둘 다 빌드 가능하게</td><td>§11-4 · 11-5 · 11-6 통과</td></tr>
+<tr><td>4. 배포</td><td>build_dist · 설치 파일 · 라이선스 · 설명서. 0.1.5 같은 버전으로 내보낸다</td><td>깨끗한 PC 에 설치해 색인·OCR·검색 확인</td></tr>
+<tr><td>5. 정리</td><td>한 버전 뒤 <code>builtin-parser</code> 와 옛 파서 코드 삭제</td><td>SimpleRAG 에 파서 코드 없음</td></tr>
+</table></div>
+<p>단계 1~2 는 SimpleRAG 를 건드리지 않으므로 지금 진행 중인 0.1.4 작업(OCR worktree 커밋 등)과 부딪히지 않는다. 다만 <b>단계 1 시작 전에 OCR 변경을 master 에 합쳐 두어야</b> 옮긴 코드가 최신이다.</p>
+</section>
+
+<section id="s14">
+<h2>14. 위험</h2>
+<div class="tw"><table>
+<tr><th>위험</th><th>영향</th><th>대응</th></tr>
+<tr><td>pdfium 이중 적재</td><td>동시 호출로 드문 충돌·잘못된 글자</td><td>pdfium 은 DLL 만 적재(§9). SimpleRAG 에서 <code>pdfium</code> 문자열 검색으로 남은 호출 0 확인</td></tr>
+<tr><td>onnxruntime 를 두 <code>ort</code> 가 공유</td><td>OrtEnv 중복·로그 설정 충돌 가능</td><td>§11-6 동시성 시험. 문제 나면 대안: SimpleRAG 가 만든 OrtApi 포인터를 옵션으로 넘기거나, OCR 세션을 DLL 이 지연 생성</td></tr>
+<tr><td>코드가 두 벌로 갈라짐(structure.rs · xmldom 복사)</td><td>규칙이 조금씩 달라짐</td><td>복사본 맨 위에 "원본: Struct-DocParse-OCR-rust/…" 주석, 바꿀 땐 함께 바꾸기. 장기적으로 작은 공용 crate 로</td></tr>
+<tr><td>진행 중인 변경과 충돌</td><td>옮긴 뒤 SimpleRAG 쪽에서 파서를 또 고치면 두 곳 수정</td><td>단계 1 시작부터 파서 수정은 DLL 저장소에서만 — 동결 공지</td></tr>
+<tr><td>JSON 비용</td><td>큰 xlsx(행 수만 개) 추출이 느려질 수 있음</td><td>§11-5 측정. 필요하면 <code>rows</code> 만 빼고 <code>text</code> 로 보내는 옵션</td></tr>
+<tr><td>DLL 빠짐·버전 어긋남</td><td>색인 불가</td><td>시작 때 ABI 검사 + 분명한 안내(§10). 설치 파일이 exe 와 DLL 을 함께 교체</td></tr>
+</table></div>
+</section>
+
+<section id="s15">
+<h2>15. 정할 것 (권장안 포함)</h2>
+<div class="dec"><b class="q">15-1. 출력 형식 — JSON 문자열 / C 구조체 배열</b>권장: <b>JSON</b>. 필드가 늘어도 ABI 가 그대로이고 지금 진단 덤프와 같다. 성능은 §11-5 에서 확인.</div>
+<div class="dec"><b class="q">15-2. 폴백 평문 추출(.hwp .ppt .xls .txt .csv, 파서 실패 시)도 DLL 로 옮길까</b>권장: <b>옮긴다</b>. 그래야 SimpleRAG 의 "문서 → 글" 입구가 하나가 되고, 폴백 PDF 도 pdfium 을 쓰므로 pdfium 주인을 하나로 만들 수 있다. 결과는 <code>format:"legacy"</code> + <code>raw_text</code>(라벨 없음).</div>
+<div class="dec"><b class="q">15-3. DLL 의 OCR 기본 모드 — inline / deferred</b>권장: DLL 기본은 <b>inline</b>(다른 프로그램이 한 번 불러 끝나게), SimpleRAG 는 항상 <b>deferred</b> 를 넘긴다. OCR 켬/끔 기본값은 요청대로 <b>켬</b>.</div>
+<div class="dec"><b class="q">15-4. Python 판도 DLL 을 쓰게 할까</b>권장: 이번엔 <b>ctypes 래퍼만 만들고 Python 판 docmodel 은 그대로</b>. Python 판은 측정·비교용 기준이라 바꾸면 기존 측정과 이어지지 않는다. 래퍼는 bench 스크립트에서 DLL 결과를 재는 데 쓴다.</div>
+<div class="dec"><b class="q">15-5. 이름</b>권장: DLL <code>struct_docparse.dll</code>, 함수 접두 <code>sdp_</code>, crate <code>sdp-core</code>/<code>sdp-ffi</code>/<code>sdp-cli</code>. 저장소 이름(Struct-DocParse-OCR-rust)과 맞춘다.</div>
+<div class="dec"><b class="q">15-6. docx·pptx·hwpx 안에 든 그림도 OCR 할까</b>현재 코드도 OCR 하지 않는다 — OCR 은 PDF 스캔 쪽과 그림 파일(.png .jpg .tif .bmp)만 한다(docx·pptx·hwpx·xlsx·doc 파서는 XML 글자만 읽음).<br>권장: <b>이번엔 안 한다</b>(동작이 바뀌어 같음 검증이 깨진다). 분리 뒤 DLL 0.2 에서 옵션 <code>ocr.embedded_images</code>(기본 끔)로 따로 실측해 결정 — <a href="#s16">§16-1 추후 검토</a>.</div>
+</section>
+
+<section id="s16">
+<h2>16. 추후 검토 (분리 이후)</h2>
+<p>이번 분리 범위에는 넣지 않고, DLL 이 자리 잡은 뒤 DLL 저장소에서 따로 검토한다.</p>
+
+<h3>16-1. 문서 속 그림 OCR (docx · pptx · hwpx · xlsx)</h3>
+<p>지금은 PDF 스캔 쪽과 그림 파일만 OCR 한다. 문서 안에 붙여 넣은 화면 캡처·스캔 이미지·표 그림의 글은 검색되지 않는다.</p>
+<div class="tw"><table>
+<tr><th>항목</th><th>검토 내용</th></tr>
+<tr><td>그림 위치</td><td>docx <code>word/media/*</code>(본문 <code>a:blip r:embed</code>), pptx <code>ppt/media/*</code>(슬라이드별 관계), hwpx <code>BinData/*</code>(<code>hp:pic</code> 참조), xlsx <code>xl/media/*</code>(그리기 개체). 본문 어디에 있었는지 알아야 블록 순서에 끼울 수 있다.</td></tr>
+<tr><td>결과 블록</td><td>그림 자리에 <code>paragraph</code> + <code>source:"ocr"</code> 로 넣는다. 바로 앞뒤 <code>caption</code> 과 묶을지, 그림 대체 글(alt text)과 겹치면 뺄지 정한다.</td></tr>
+<tr><td>거르기</td><td>로고·아이콘·서명 같은 작은 그림, 문서마다 반복되는 같은 그림(머리글 로고)은 건너뛴다. 기준은 PDF 스캔 쪽 판정의 "짧은 변 · 반복 그림" 규칙을 재사용.</td></tr>
+<tr><td>캐시·대기열</td><td>캐시 열쇠를 <b>그림 바이트의 해시</b>로 하면 같은 그림이 든 여러 문서가 한 번만 OCR 된다. SimpleRAG 는 지금 대기열(<code>deferred</code>)에 "문서 + 그림 번호" 를 넣는 방식으로 확장.</td></tr>
+<tr><td>스위치</td><td><code>ocr.embedded_images</code> (기본 끔), <code>ocr.enabled</code> 가 꺼지면 함께 꺼짐. 켜면 <code>blocks_version</code> 을 올려 재인덱싱 판정에 반영.</td></tr>
+<tr><td>실측할 것</td><td>운영 폴더에서 그림이 든 문서 비율·문서당 그림 수, 그림 OCR 이 늘리는 시간(쪽당 시간 × 그림 수), 골든셋 검색 @1 · 근거 수 변화, 잡음 청크(무의미한 OCR 글) 비율.</td></tr>
+</table></div>
+<div class="callout">판단 기준: 검색 지표가 오르거나 같고, 인덱싱 뒤 OCR 대기열 시간이 감당할 수준일 때만 기본값을 켬으로 바꾼다. 그 전까지는 옵션으로만 둔다.</div>
+
+<h3 id="s16-2">16-2. 글 위치 좌표 출력 (마스킹 · 원본 강조)</h3>
+<p>이번 분리에서는 좌표를 내보내지 않는다(결과가 커지고 SimpleRAG 검색·답변은 글만 쓴다). 아래 쓰임새가 실제 계획에 오르면 검토한다.</p>
+<div class="tw"><table>
+<tr><th>쓰임새</th><th>좌표가 필요한 이유</th></tr>
+<tr><td>마스킹(가리기)</td><td>주민번호·전화번호를 글에서 찾아도 그림 어디인지 알아야 덮을 수 있다. 스캔 문서를 외부에 낼 때.</td></tr>
+<tr><td>원본 위 강조</td><td>검색어·답변 근거가 쪽 어디에 있는지 원본 위에 칠해 보여 준다.</td></tr>
+<tr><td>근거 미리보기</td><td>답변 출처를 해당 영역만 잘라 보여 준다("3쪽 오른쪽 위 표").</td></tr>
+<tr><td>배치 분석</td><td>두 단 읽기 순서, 줄 맞춤으로 표 칸 되살리기, 양식의 "항목: 값" 짝 찾기.</td></tr>
+</table></div>
+
+<h3>지금 코드에 이미 있는 것</h3>
+<ul>
+  <li>OCR 줄 상자는 이미 계산·저장한다 — <code>group_rows</code>(줄 묶기), <code>drop_overlapping</code>(글자층과 겹치는 OCR 줄 제거), OCR 캐시의 줄마다 <code>b</code>.</li>
+  <li>PDF 글자층의 글자 위치도 표 검출(<code>pdftable::CharPos</code>)에서 이미 읽는다.</li>
+</ul>
+<p>그래서 새로 계산할 것은 거의 없고, <b>결과에 실어 보내는 모양</b>을 정하는 일이 대부분이다.</p>
+
+<h3>정해야 할 것</h3>
+<div class="tw"><table>
+<tr><th>항목</th><th>검토 내용</th></tr>
+<tr><td>스위치</td><td>호출 옵션 <code>geometry</code>: <code>none</code>(기본) · <code>lines</code>(줄 상자) · <code>words</code>(단어 상자). 기본 결과 크기는 그대로 유지.</td></tr>
+<tr><td>좌표 단위</td><td>지금 OCR 상자는 200dpi 로 그린 그림의 픽셀 기준이다. 원본 PDF 에 덮으려면 <b>pt 단위 + 쪽 회전 반영</b>으로 바꿔 내보낸다. 그림 파일은 픽셀 그대로. 결과에 <code>unit</code>(<code>pt</code> | <code>px</code>)과 쪽 크기를 함께 적는다.</td></tr>
+<tr><td>블록과 줄의 대응</td><td>블록 하나는 여러 OCR 줄을 합친 것이라 블록 상자 하나로는 마스킹이 안 된다. 블록에 <code>lines: [{text, quad, score}]</code> 를 달고, 블록 글의 몇 번째 글자가 어느 줄인지(글자 오프셋) 함께 준다 — 정규식으로 찾은 위치를 상자로 되돌리기 위해.</td></tr>
+<tr><td>단어 상자</td><td>인식 모델은 줄 단위로 읽는다. 단어·글자 상자는 CTC 출력의 글자 위치로 나눠 근사해야 하므로 정확도를 실측해야 한다(마스킹은 조금 넓게 덮는 쪽이 안전).</td></tr>
+<tr><td>글자층 PDF</td><td>OCR 이 아닌 쪽의 글도 마스킹하려면 글자층 글자 위치를 같은 모양으로 내보낸다(<code>source:"parser"</code> 블록에도 <code>lines</code>).</td></tr>
+<tr><td>docx · hwpx 등</td><td>쪽 배치가 파일에 없어 좌표를 낼 수 없다. 이런 형식의 마스킹은 좌표가 아니라 글자 치환(원본 XML 수정)으로 따로 다룬다 — 범위 밖.</td></tr>
+<tr><td>캐시</td><td>지금 캐시가 줄 상자를 이미 갖고 있으므로 <code>lines</code> 는 다시 OCR 없이 낼 수 있다. 단어 상자를 넣으면 캐시 모양이 바뀌어 엔진 문자열을 올려야 한다(전체 다시 OCR) — 신중히.</td></tr>
+<tr><td>실측할 것</td><td>스캔 문서 결과 JSON 크기 증가(lines · words 각각), 단어 상자 정확도(마스킹 누락률), 회전·기울어진 스캔에서 좌표 오차.</td></tr>
+</table></div>
+<div class="callout warn">마스킹은 하나라도 빠지면 개인정보가 새는 기능이다. 쓰려면 "찾기(정규식·사람 이름) → 좌표 → 덮기 → 덮은 결과 재OCR 로 남은 글 확인"까지 한 흐름으로 설계하고, 누락률 0 을 목표로 실측해야 한다.</div>
+</section>
+
+<section id="s17">
+<h2>17. 구현 기록 (2026-11-16)</h2>
+<p>설계서 단계 0~3 과 단계 4 의 배포 스크립트 부분까지 구현했다. 커밋 · 버전 올림 · 릴리스는 아직 하지 않았다.</p>
+
+<h3>만든 것</h3>
+<div class="tw"><table>
+<tr><th>위치</th><th>내용</th></tr>
+<tr><td><code>Struct-DocParse-OCR-rust/crates/sdp-core</code></td><td>옮긴 파서 · OCR(로직 그대로) + <code>config.rs</code>(옵션 · 호출별 OCR 덮어쓰기) · <code>log.rs</code> · <code>hash.rs</code> · <code>session.rs</code> · <code>ocr/run.rs</code>(쪽 OCR → 캐시) · <code>api.rs</code>(바깥 입구)</td></tr>
+<tr><td><code>crates/sdp-ffi</code></td><td><code>struct_docparse.dll</code>(4.9MB) — §7 함수 전부, 모든 함수 catch_unwind</td></tr>
+<tr><td><code>crates/sdp-cli</code></td><td><code>sdp.exe</code> — parse · dump · compare · ocr · ocrfile (C ABI 함수를 그대로 거쳐 부름)</td></tr>
+<tr><td><code>include/struct_docparse.h</code> · <code>bindings/python</code> · <code>tools</code></td><td>C 헤더 · ctypes 래퍼 · 기준 만들기(baseline.py) · 색인 비교(compare_index.py)</td></tr>
+<tr><td>SimpleRAG <code>docparse.rs</code> · <code>ocr.rs</code></td><td>DLL 적재 · JSON → Document 변환 / OCR 켜짐 판정 · 추출→색인 OCR 상태 표만 남김</td></tr>
+<tr><td>SimpleRAG 삭제</td><td>docmodel 파서 11개 · ocr/ 6개 · pdfium · legacy · htmlparse · xlsdate, 의존성 image · tiff · calamine · flate2 · html-escape</td></tr>
+<tr><td>배포</td><td><code>build_dist.ps1</code>(DLL 복사, 없으면 멈춤) · <code>installer.iss</code>(파일 한 줄) · <code>gen_licenses.py</code>(DLL 저장소 crate 도 고지)</td></tr>
+</table></div>
+
+<h3>설계와 달라진 점</h3>
+<ul>
+  <li><code>sdp_ocr_image_file</code> → <b><code>sdp_ocr_file</code></b>(PDF · 그림 · 그림 폴더, 쪽 고르기). SimpleRAG <code>ocr &lt;파일&gt;</code> 명령이 PDF 도 그려 OCR 하므로 넓혔다.</li>
+  <li><b><code>sdp_extract_text</code> 추가</b> — 업로드 · <code>extract_engine: legacy</code> · <code>extract</code> 명령이 블록 없이 평문을 쓴다.</li>
+  <li><b>기능 플래그(builtin-parser)는 두지 않았다.</b> 옛 코드와의 비교는 분리 전 커밋(1bf068a)으로 빌드한 기준 exe 로 대신했고, 아래처럼 결과가 같아 두 벌을 유지할 이유가 없었다. 되돌리려면 그 커밋을 쓴다.</li>
+  <li>전부 스캔인 PDF + OCR 끔 → 빈 문서가 아니라 <b><code>SDP_EPARSE</code></b>(지금 SimpleRAG 와 같은 "텍스트층 없음" 실패). §8 표를 고쳤다.</li>
+  <li>기본 런타임 · 모델 위치를 <b>DLL 옆 우선</b>으로. 처음엔 exe 옆을 봐서 python.exe 에서 부르면 시스템 폴더의 onnxruntime 1.17 을 집어 OCR 이 실패했다(파이썬 래퍼 시험에서 발견, 오류로 처리되어 죽지는 않음).</li>
+  <li>OCR 상태 전역 표: DLL 바깥으로는 결과 JSON <code>ocr</code> 로만 준다. SimpleRAG 는 그 값을 자기 표(<code>ocr::note</code>)에 남겨 색인 흐름(준비 스레드 → sync_doc)을 그대로 뒀다.</li>
+  <li>고른 쪽만 읽기(비슷한 문서 찾기): 쪽 수를 <code>sdp_pdf_info</code> 로 먼저 알아 keep 함수를 쪽 번호 목록으로 바꿔 넘긴다.</li>
+  <li>옵션은 프로세스에 한 벌(핸들 여러 개는 마지막 옵션을 함께 씀).</li>
+</ul>
+
+<h3>검증 결과</h3>
+<div class="tw"><table>
+<tr><th>검사</th><th>결과</th></tr>
+<tr><td>§11-2 블록 JSON — 84건(sample 42 · sample_pdf 36 · 스캔 fixtures 6), 분리 전 exe vs sdp.exe</td><td><span class="tag g">캐시 없음 84/84 · 캐시 있음 84/84 · inline 84/84 같음</span></td></tr>
+<tr><td>OCR 캐시 호환 — DLL 이 채운 캐시를 분리 전 exe 가 읽음</td><td><span class="tag g">같음</span> (OCR 글이 들어간 12건 포함)</td></tr>
+<tr><td>§11-3 OCR 줄 — 스캔 PDF 5쪽 193줄 · 그림 10줄(글 · 점수 · 상자)</td><td><span class="tag g">같음</span></td></tr>
+<tr><td>새 SimpleRAG(DLL 경유) <code>extract --blocks</code> 84건</td><td><span class="tag g">캐시 없음 · 있음 모두 84/84</span></td></tr>
+<tr><td>§11-4 끝단 — 47건 색인(OCR 켬, 스캔 PDF · 그림 포함): 문서별 청크 글 · 절 번호 · 청크 해시 · <b>벡터</b> · 실패 목록 · OCR 대기열</td><td><span class="tag g">4,109 청크 차이 0</span> · OCR 7건 12쪽 실패 0 (OCR 끔 4,072 청크도 차이 0)</td></tr>
+<tr><td>§11-5 시간 — 같은 47건 OCR 끔, 분리 전 · 후 번갈아 2번씩</td><td>추출 단계 8.2~8.7초 vs 8.2~10.4초, 전체 70~91초 vs 78~85초 — 흔들림 안. 뚜렷한 차이 없음</td></tr>
+<tr><td>단위 시험</td><td>sdp-core 15 · SimpleRAG 56 통과, 작업 공간(RAGSearchBox 포함) 경고 0 빌드</td></tr>
+</table></div>
+
+<h3>남은 일</h3>
+<ul>
+  <li>§11-6 동시성 30분 시험(준비 스레드 + OCR 대기열 + 임베딩 한 프로세스) — 하지 않음. onnxruntime 공유(§14)는 위 색인(임베딩 + OCR 같은 프로세스)에서 문제없었지만 장시간은 미확인.</li>
+  <li>운영 폴더(3,532건) 규모 비교 · 골든셋 검색 지표 — 하지 않음(위 47건 끝단에서 벡터까지 같아 지표 변화는 없을 것으로 봄).</li>
+  <li>단계 4: 버전 0.1.5 · changelog · 깨끗한 PC 설치 확인 · 릴리스. 단계 5(옛 코드 삭제)는 플래그 없이 이번에 함께 했다.</li>
+  <li>두 저장소 커밋(DLL 저장소는 git init 만 한 상태).</li>
+</ul>
+</section>
+
+<footer>
+  근거 코드: <code>rust/simplerag/src/docmodel/*</code>, <code>ocr/*</code>, <code>pdfium.rs</code>, <code>indexer.rs</code>(run_ocr_queue · content_hash · BLOCKS_VERSION), <code>config.rs</code>(extract.ocr*), <code>commands.rs</code>(ocr_step).
+  관련 설계서: OCR_설계서_20261113 · 구조화추출_청킹_재설계서 · 인덱싱속도_개선_설계서_20261030. 이 문서는 구현 전 검토용이며 코드는 바꾸지 않았다.
+</footer>
+
+</div>
+</body>
+</html>

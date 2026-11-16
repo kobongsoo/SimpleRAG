@@ -868,8 +868,9 @@ fn pdf_pages(path: &str) -> Option<Arc<Vec<String>>> {
             return Some(v);
         }
     }
-    let (raw, _) = crate::pdfium::read_pages(path, false, false, |_, _| true).ok()?;
-    let v = Arc::new(raw.into_iter().map(|pt| squash(&pt.text)).collect::<Vec<_>>());
+    // 쪽 글자층은 문서 파서 DLL 이 읽는다(pdfium 주인은 DLL 하나 — 설계서 2026-11-16 §9)
+    let raw = crate::docparse::pdf_page_texts(path).ok()?;
+    let v = Arc::new(raw.iter().map(|t| squash(t)).collect::<Vec<_>>());
     let mut c = PAGES.lock().unwrap();
     c.push((path.to_string(), v.clone()));
     if c.len() > PDF_CACHE {

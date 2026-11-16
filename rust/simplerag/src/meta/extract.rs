@@ -703,7 +703,8 @@ fn hwpx_meta(path: &str) -> Result<Doc, String> {
 // -out: error = 암호 · 손상 PDF 면 Err("PdfiumError: …")
 //------------------------------------------------------------------
 fn pdf_meta(path: &str) -> Result<Doc, String> {
-    let p = crate::pdfium::meta_info(path)?;
+    // PDF 속성은 문서 파서 DLL 이 읽는다(pdfium 주인은 DLL 하나)
+    let p = crate::docparse::pdf_meta(path)?;
     let mut m: Doc = vec![];
     for (src, dst) in [("Title", "title"), ("Author", "author"), ("Creator", "creator"), ("Producer", "producer"),
                        ("CreationDate", "created"), ("ModDate", "modified")] {

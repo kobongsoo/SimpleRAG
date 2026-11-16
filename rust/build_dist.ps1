@@ -49,6 +49,16 @@ function Link-IfMissing($src, $dst) {
     }
 }
 
+# 2-1) 문서 파서 + OCR DLL — 별도 저장소(Struct-DocParse-OCR-rust)에서 빌드한 것을 매번 새로 넣는다(설계서 2026-11-16 §12)
+#      DLL 저장소에서 먼저: cargo build -p sdp-ffi --release  (SDP_ROOT 로 저장소 위치를 바꿀 수 있다)
+$sdpRoot = if ($env:SDP_ROOT) { $env:SDP_ROOT } else { "D:\Project\Struct-DocParse-OCR-rust" }
+$sdpDll = Join-Path $sdpRoot "target\release\struct_docparse.dll"
+if (-not (Test-Path $sdpDll)) { throw "문서 파서 DLL 이 없습니다: $sdpDll — DLL 저장소에서 cargo build -p sdp-ffi --release 를 먼저 하세요" }
+foreach ($d in (Join-Path $rust "target\release"), $dist) {
+    try { Copy-Item $sdpDll $d -Force; "배치: struct_docparse.dll → $d" }
+    catch [System.IO.IOException] { $skipped += "struct_docparse.dll"; "건너뜀(실행 중이라 잠김): struct_docparse.dll" }
+}
+
 # 3) 런타임 — onnxruntime·pdfium·llama.cpp(CPU / Vulkan)
 Copy-IfMissing "$py\_internal\onnxruntime\capi\onnxruntime.dll" "$dist\onnxruntime.dll"
 Copy-IfMissing "$py\_internal\onnxruntime\capi\onnxruntime_providers_shared.dll" "$dist\onnxruntime_providers_shared.dll"

@@ -35,6 +35,8 @@ pub const UPLOAD_EXTS: &[&str] = &[".pdf", ".doc", ".docx", ".ppt", ".pptx", ".x
     ".hwp", ".hwpx", ".txt", ".md", ".csv", ".html", ".htm", ".py", ".ipynb"];
 
 // 블록 추출·청킹 결과가 달라지는 코드 변경마다 올린다(Python 판과 같은 값)
+//   추출이 struct_docparse.dll 로 옮겨 간 뒤로는 DLL 이 알려 주는 값(docparse::blocks_version)을 쓰고,
+//   이 값은 DLL 을 못 쓸 때의 기본값으로만 남는다
 pub const BLOCKS_VERSION: i64 = 5;
 
 pub type State = Map<String, Value>;
@@ -391,7 +393,7 @@ pub fn chunk_params() -> Value {
         p.insert("overflow_ratio".into(), pyutil::jf(c.chunk_overflow_ratio));
         p.insert("sentence_split".into(), json!(c.chunk_sentence_split));
         p.insert("hard_max".into(), json!(c.chunk_hard_max));
-        p.insert("blocks_version".into(), json!(BLOCKS_VERSION));
+        p.insert("blocks_version".into(), json!(crate::docparse::blocks_version()));
         if c.pdf_infer_headings {
             p.insert("pdf_headings".into(), json!(true));
         }
@@ -769,65 +771,31 @@ pub fn run_ocr_queue(state: &mut State, embedder: &Embedder, store: &VectorStore
         }
         let name = pyutil::basename(&key).to_string();
         let res: Result<bool, String> = (|| {
-            let hash = content_hash(&key).map_err(|e| format!("OCRError: 읽기 실패: {}", e))?;
-            let mut cache = crate::ocr::load_cache(&hash).unwrap_or_else(|| crate::ocr::Cache {
-                engine: crate::ocr::ENGINE.into(), ..Default::default() });
             let is_img = v.get("kind").and_then(|x| x.as_str()) == Some("image");
-            // 3) 쪽마다 OCR — 캐시에 이미 있는 쪽은 건너뛴다
-            let mut tick = |no: usize, of: usize, left_pages: usize, ms: f64, recent: &mut std::collections::VecDeque<f64>| {
+            // 3) 쪽마다 OCR — 쪽 그리기 · OCR · 캐시 저장은 DLL(sdp_ocr_pages)이 하고, 캐시에 이미 있는 쪽은 건너뛴다.
+            //    쪽 하나가 끝날 때마다 아래 콜백이 진행을 알리고, 멈출지 돌려준다
+            let mut tick = |k: usize, of: usize, ms: f64| -> bool {
                 if ms > 0.0 {
                     recent.push_back(ms / 1000.0);
                     if recent.len() > 20 {
                         recent.pop_front();
                     }
                 }
+                run.pages += 1;
                 let (dl, pl) = ocr_queue_size(state);
-                on_progress(&OcrProgress { docs_left: dl, pages_left: pl.saturating_sub(left_pages), name: name.clone(), page: no, of,
+                // 진행 표시는 "읽을 쪽 중 몇 번째"(k/of) — 실제 쪽 번호를 넣으면 "202/2쪽"이 된다
+                on_progress(&OcrProgress { docs_left: dl, pages_left: pl.saturating_sub(k), name: name.clone(), page: k, of,
                     sec_per_page: if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / recent.len() as f64 } });
+                // 다음 쪽이 남았을 때만 멈춤을 본다 — 마지막 쪽까지 했으면 그 문서는 다시 반영한다
+                k < of && stop()
             };
-            if is_img {
-                cache.dpi = 0.0;
-                let frames = crate::ocr::image::load(&key).map_err(|e| format!("OCRError: {}", e))?;
-                let of = frames.len();
-                for (i, img) in frames.iter().enumerate() {
-                    if cache.pages.contains_key(&(i + 1)) {
-                        continue;
-                    }
-                    if stop() {
-                        return Ok(false);
-                    }
-                    let t0 = Instant::now();
-                    // 아이콘처럼 작은 그림은 읽지 않는다 — 빈 쪽으로 남겨 "글자 없는 그림"이 된다
-                    let lines = if img.w.min(img.h) < crate::ocr::image::MIN_SHORT_SIDE { vec![] } else { crate::ocr::ocr_image(img)? };
-                    cache.pages.insert(i + 1, crate::ocr::to_cached(&lines));
-                    crate::ocr::save_cache(&hash, &cache)?;
-                    run.pages += 1;
-                    tick(i + 1, of, i + 1, t0.elapsed().as_secs_f64() * 1000.0, &mut recent);
-                }
-            } else {
-                cache.dpi = crate::ocr::DPI;
-                let data = std::fs::read(&key).map_err(|e| format!("OCRError: 읽기 실패: {}", e))?;
-                let want: Vec<usize> = v.get("pages").and_then(|p| p.as_array())
-                    .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()).unwrap_or_default();
-                let of = want.len();
-                for (k, &no) in want.iter().enumerate() {
-                    if cache.pages.contains_key(&no) {
-                        continue;
-                    }
-                    if stop() {
-                        return Ok(false);
-                    }
-                    let t0 = Instant::now();
-                    let r = crate::pdfium::render_page(&data, no - 1, crate::ocr::DPI).map_err(|e| format!("OCRError: {}", e))?;
-                    let lines = crate::ocr::drop_overlapping(crate::ocr::ocr_image(&r.img)?, &r.chars);
-                    cache.pages.insert(no, crate::ocr::to_cached(&lines));
-                    crate::ocr::save_cache(&hash, &cache)?;
-                    run.pages += 1;
-                    // 진행 표시는 "읽을 쪽 중 몇 번째"(k+1/of) — 실제 쪽 번호(no)를 넣으면 "202/2쪽"이 된다
-                    tick(k + 1, of, k + 1, t0.elapsed().as_secs_f64() * 1000.0, &mut recent);
-                }
-            }
-            Ok(true)
+            // 그림 파일은 모든 쪽(TIFF 는 여러 쪽), PDF 는 대기열에 적힌 쪽만
+            let want: Option<Vec<usize>> = if is_img { None } else {
+                Some(v.get("pages").and_then(|p| p.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()).unwrap_or_default())
+            };
+            let stopped = crate::docparse::ocr_pages(&key, want.as_deref(), &mut tick)?;
+            Ok(!stopped)
         })();
         match res {
             Ok(false) => {

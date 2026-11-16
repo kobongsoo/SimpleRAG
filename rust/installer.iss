@@ -42,6 +42,8 @@ Source: "{#Dist}\simplerag-rs.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\onnxruntime_providers_shared.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
+; 문서 파서 + OCR (Struct-DocParse-OCR-rust 에서 빌드 — 설계서 2026-11-16)
+Source: "{#Dist}\struct_docparse.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; Visual C++ 런타임 — 설치되지 않은 PC 에서도 뜨도록 exe 옆에 둔다
 Source: "{#Dist}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\vcruntime140_1.dll"; DestDir: "{app}"; Flags: ignoreversion

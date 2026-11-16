@@ -1,7 +1,7 @@
 //------------------------------------------------------------------
 // SimpleRAG Rust 판 라이브러리
 //=> Python simplerag 패키지와 같은 구성으로 모듈을 나눴다.
-//   설정(config) → 추출(legacy·docmodel·extract) → 청킹(chunk) → 임베딩(embed) →
+//   설정(config) → 추출(docparse = struct_docparse.dll · docmodel·extract) → 청킹(chunk) → 임베딩(embed) →
 //   저장(store·bm25) → 검색(hybrid·rerank·parent) → 생성(llama·generate) → 명령(cli)
 //------------------------------------------------------------------
 
@@ -13,17 +13,15 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod docmodel;
+pub mod docparse;
 pub mod embed;
 pub mod extract;
 pub mod find;
 pub mod generate;
-pub mod htmlparse;
 pub mod indexer;
-pub mod legacy;
 pub mod meta;
 pub mod overview;
 pub mod ocr;
-pub mod pdfium;
 pub mod pickle;
 pub mod pyutil;
 pub mod retrieve;
@@ -35,5 +33,4 @@ pub mod synonyms;
 pub mod tok;
 pub mod uploads;
 pub mod vecf16;
-pub mod xlsdate;
 pub mod xmldom;

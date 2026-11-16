@@ -127,6 +127,7 @@ impl Block {
 // -필드: raw_text = 폴백 경로의 평문(블록 경로면 None)
 // -필드: pages    = 쪽·슬라이드·시트 수
 // -필드: warnings = 경고 문장
+// -필드: ocr      = OCR 상태(남은 쪽 · OCR 글이 든 쪽) — struct_docparse.dll 결과의 ocr 필드
 //------------------------------------------------------------------
 #[derive(Debug, Clone, Default)]
 pub struct Document {
@@ -136,6 +137,7 @@ pub struct Document {
     pub raw_text: Option<String>,
     pub pages: Option<i64>,
     pub warnings: Vec<String>,
+    pub ocr: crate::ocr::DocOcr,
 }
 
 impl Document {

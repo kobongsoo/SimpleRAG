@@ -11,6 +11,7 @@
 # ------------------------------------------------------------------
 import hashlib
 import importlib.metadata as metadata
+import os
 import json
 import re
 import subprocess
@@ -226,35 +227,46 @@ def build_models(dist):
     return warnings
 
 
+# 문서 파서 DLL(struct_docparse.dll) 소스 저장소 — 그 DLL 에 들어간 Rust 라이브러리도 고지한다(설계서 2026-11-16 §12)
+DOCPARSE_ROOT = Path(os.environ.get("SDP_ROOT", r"D:\Project\Struct-DocParse-OCR-rust"))
+
+
 #------------------------------------------------------------------
 # 빌드에 들어가는 Rust 라이브러리 목록
 #=> cargo metadata 로 Windows 빌드의 실제 의존성만 고른다.
 #    1) 작업 공간 패키지에서 출발해 일반 의존성만 따라간다(개발 · 빌드 전용 의존성은 배포물에 안 들어간다)
-#    2) 우리 패키지(simplerag · ragsearchbox)는 뺀다
+#    2) 우리 패키지(simplerag · ragsearchbox · sdp-*)는 뺀다
+#    3) SimpleRAG 작업 공간과 문서 파서 DLL 작업 공간을 합친다(같은 이름 · 버전은 하나로)
 #
 # -in: 없음
 #
 # -out: crates = cargo metadata 의 패키지 목록(이름 · 버전 순)
-# -out: error = cargo 실패 시 CalledProcessError 전파
+# -out: error = cargo 실패 시 CalledProcessError 전파 (문서 파서 저장소가 없으면 그쪽만 건너뛴다)
 #------------------------------------------------------------------
 def rust_crates():
-    out = subprocess.run(["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", "x86_64-pc-windows-msvc"],
-                         cwd=ROOT / "rust", capture_output=True, check=True).stdout
-    meta = json.loads(out.decode("utf-8"))
-    pkgs = {p["id"]: p for p in meta["packages"]}
-    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
-    workspace = set(meta["workspace_members"])
-    seen, stack = set(), list(workspace)
-    while stack:
-        cur = stack.pop()
-        if cur in seen:
-            continue
-        seen.add(cur)
-        for dep in nodes[cur]["deps"]:
-            # dep_kinds 의 kind 가 None 이면 일반 의존성이다
-            if any(k["kind"] is None for k in dep["dep_kinds"]):
-                stack.append(dep["pkg"])
-    return sorted((pkgs[i] for i in seen - workspace), key=lambda p: (p["name"], p["version"]))
+    found = {}
+    roots = [ROOT / "rust"] + ([DOCPARSE_ROOT] if (DOCPARSE_ROOT / "Cargo.toml").is_file() else [])
+    for cwd in roots:
+        out = subprocess.run(["cargo", "metadata", "--format-version", "1", "--locked", "--filter-platform", "x86_64-pc-windows-msvc"],
+                             cwd=cwd, capture_output=True, check=True).stdout
+        meta = json.loads(out.decode("utf-8"))
+        pkgs = {p["id"]: p for p in meta["packages"]}
+        nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+        workspace = set(meta["workspace_members"])
+        seen, stack = set(), list(workspace)
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            for dep in nodes[cur]["deps"]:
+                # dep_kinds 의 kind 가 None 이면 일반 의존성이다
+                if any(k["kind"] is None for k in dep["dep_kinds"]):
+                    stack.append(dep["pkg"])
+        # 두 작업 공간에 같은 crate 가 있으면 (이름, 버전)으로 하나만 남긴다
+        for i in seen - workspace:
+            found[(pkgs[i]["name"], pkgs[i]["version"])] = pkgs[i]
+    return sorted(found.values(), key=lambda p: (p["name"], p["version"]))
 
 
 #------------------------------------------------------------------
@@ -290,6 +302,8 @@ def build_third_party(dist):
     crates = rust_crates()
     doc = ["MoAI-S / SimpleRAG 제3자 소프트웨어 라이선스 안내\n", "이 배포본의 exe · DLL 에 들어 있는 문서 파서, 런타임, Rust 라이브러리의 라이선스입니다.\n"]
     doc.append(heading("1. 문서 파서"))
+    # 형식별 파서 · OCR 은 struct_docparse.dll 하나에 들어 있다(소스: Struct-DocParse-OCR-rust)
+    doc.append("아래 파서와 스캔 문서 OCR 은 struct_docparse.dll 에 들어 있습니다.\n\n")
     for fmt, lib, lic in PARSERS:
         doc.append(f"{fmt:<26} {lib}\n{'':<26} 라이선스: {lic}\n")
     doc.append("\n사이냅 문서 필터(snf_exe.exe)는 상용 제품으로 이 배포본에 들어 있지 않습니다.\n"

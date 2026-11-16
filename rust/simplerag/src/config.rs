@@ -390,7 +390,7 @@ fn build() -> Result<Config, ConfigError> {
         Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
         None => pick_bool(&y, "extract.pdf_headings", false),
     };
-    // PDF 테두리 표 검출(docmodel::pdftable) — 기본 켬. 2026-11-11 답변 실측에서 표 질문 정답 0.39→0.44,
+    // PDF 테두리 표 검출(struct_docparse.dll 의 pdftable) — 기본 켬. 2026-11-11 답변 실측에서 표 질문 정답 0.39→0.44,
     //   다른 질문 손해 없음(report/PDF파서_비교_OpenDataLoader §7-6). 바꾸면 재인덱싱이 필요하다
     let pdf_tables = match env("SIMPLERAG_PDF_TABLES") {
         Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
