@@ -2,6 +2,7 @@
 name = "simplerag"
 version = "0.1.5"
 edition = "2021"
+license = "MIT"
 description = "SimpleRAG(로컬 문서 RAG) 의 Rust 판 — Python simplerag CLI 와 같은 입출력"
 
 [lib]

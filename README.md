@@ -365,3 +365,18 @@ DLL 의 `blocks_version` 이 바뀌지 않았으면 이미 만든 색인은 그�
 
 CSOClassify 본체 버그 2건(OLE 오판, 512토큰 절단)은 별도 과제로 분리했다.
 SimpleRAG는 로컬에서 우회하고 있어 동작에는 지장이 없다.
+
+---
+
+## 라이선스
+
+이 저장소의 코드(Python `src/` · `RAGSearchBox/` · Rust `rust/` · 스크립트 · 설명서)는 [MIT 라이선스](LICENSE)를 따른다.
+
+저장소에 들어 있지 않은 것들은 각자의 라이선스를 따른다.
+
+| 것 | 라이선스 · 위치 |
+|---|---|
+| 문서 파서 `struct_docparse.dll` | MIT — [Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) (pdfium · ONNX Runtime · PP-OCR 모델 포함, 그 저장소의 `third_party/README.md`) |
+| 임베딩 · 리랭커 · 답변 모델(GGUF) · OCR 모델 | 모델마다 다르다 — 배포본의 `LICENSES_MODELS.txt`. 답변 모델 중 일부(EXAONE · Kanana Nano 등)는 **비상업** 조건이라 그 모델을 쓸 때는 그 조건을 따른다 |
+| 런타임(onnxruntime · pdfium · llama.cpp) · Rust · Python 라이브러리 | 배포본의 `LICENSES_THIRD_PARTY.txt` (`rust/gen_licenses.py` 가 빌드 때 만든다) |
+| `rust/patches/` | llama.cpp(MIT) 에 대는 패치 |
