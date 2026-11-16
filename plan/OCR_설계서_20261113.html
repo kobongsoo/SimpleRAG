@@ -119,6 +119,7 @@ footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule)
   <li><a href="#s12">고칠 파일</a></li>
   <li><a href="#s13">확인 방법</a></li>
   <li><a href="#s14">정해 주실 것</a></li>
+  <li><a href="#s15">OCR 동작 원리 (보충)</a></li>
 </ol></nav>
 
 <!-- ================================================================== -->
@@ -518,6 +519,68 @@ Python 판은 Rust 엔진의 <b>정답 역할</b>도 한다. 같은 쪽을 두 �
 <span class="tag g">제안: 200자 미만</span> 기준을 올리면 글자층을 입힌 스캔본까지 OCR 하게 되어 시간만 든다(③ 2,433쪽). 낮추면 쪽 번호·도장보다 글자가 많은 스캔 쪽을 놓친다. 구현 후 ② 표본 20쪽을 눈으로 보고 정한다.</div>
 <div class="dec"><b class="q">⑥ 인식 모델을 줄일까(INT8)?</b>
 <span class="tag g">제안: 이번엔 원본</span> 크기 13.4→약 3.4MB, 속도도 빨라질 수 있다. 하지만 한국어 정확도를 재 보지 않았다. 13-2 측정에 INT8 판을 한 줄 더해 보고 나중에 정한다.</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="s15">
+<h2>15. OCR 동작 원리 — 쉽게 풀어 보기 <span class="tag">2026-11-16 보충</span></h2>
+<p>"글자 테두리 사각형 검출 → 사각형 안 글자를 번호로 인식 → 번호를 글자로 바꿔 출력"은 이 파서만의 방식이 아니라
+<b>요즘 딥러닝 OCR 의 표준 과정</b>이다. PaddleOCR · EasyOCR · RapidOCR 가 모두 이 3단계로 돈다.
+이 파서는 PaddleOCR 모델을 RapidOCR 방식 그대로 Rust 로 옮긴 것이다(5장).</p>
+<pre>쪽 그림 ──① 검출──▶ 글자 줄 상자들 ──② 잘라 세우기──▶ 줄 그림 ──③ 인식──▶ 칸마다 번호 ──④ 사전 매핑──▶ 글자</pre>
+<div class="callout">2026-11-16 부터 OCR 코드는 SimpleRAG 밖의 문서 파서 저장소로 옮겼다 —
+<code>Struct-DocParse-OCR-rust/crates/sdp-core/src/ocr/</code> (<code>det.rs</code> · <code>imgops.rs</code> · <code>rec.rs</code> · <code>mod.rs</code>).
+아래 파일 이름은 그 폴더 기준이다. 동작은 5장 그대로다.</div>
+
+<h3>15-1. OCR 공통 과정 (어느 OCR 이나 비슷함)</h3>
+<div class="tw"><table>
+<tr><th>단계</th><th>하는 일</th><th>이 파서에서</th></tr>
+<tr><td>① 검출<br><small>어디에 글자가 있나</small></td>
+<td>검출 모델이 그림의 점마다 "여기가 글자일 확률"을 칠한 지도를 만든다. 확률 0.3 이상인 점을 이어 덩어리를 만들고, 덩어리마다 감싸는 사각형을 그린다 — 이것이 "글자 테두리 사각형".
+사각형은 <b>글자 하나가 아니라 줄(단어 묶음) 단위</b>이고, 기울어진 사각형도 된다.</td>
+<td><code>PP-OCRv6_tiny_det.onnx</code> · <code>det.rs</code></td></tr>
+<tr><td>② 잘라 세우기</td>
+<td>사각형마다 그 부분만 잘라 똑바로 세우고, 높이를 48픽셀로 맞춘다(인식 모델이 받는 크기).</td>
+<td><code>imgops.rs</code> 의 <code>rotate_crop</code></td></tr>
+<tr><td>③ 인식<br><small>무슨 글자인가</small></td>
+<td>인식 모델이 줄 그림을 <b>왼쪽에서 오른쪽으로 좁은 칸들로 훑으며</b>, 칸마다 "사전의 몇 번 글자일 확률이 얼마"를 낸다.
+모델은 글자를 직접 내지 않고 <b>번호(확률)만</b> 낸다 — 이것이 "숫자 번호".</td>
+<td><code>korean_PP-OCRv5_mobile_rec.onnx</code> · <code>rec.rs</code></td></tr>
+<tr><td>④ 번호 → 글자</td>
+<td>글자 사전(한 줄에 한 글자)에서 그 번호의 글자를 꺼낸다. 0번은 빈칸(blank), 맨 끝 번호는 띄어쓰기.
+고른 글자들의 확률 평균이 그 줄의 <b>점수</b>이고, 0.5 미만인 줄은 버린다.</td>
+<td><code>korean_PP-OCRv5_mobile_rec.dict.txt</code> · <code>rec.rs</code> 의 <code>load_dict</code></td></tr>
+</table></div>
+
+<p><b>③에서 번호를 정리하는 법(CTC 디코딩, 표준 방식)</b> — 칸마다 확률이 가장 큰 번호를 고른 뒤,
+한 글자가 여러 칸에 걸치므로 <b>연달아 같은 번호는 하나로 합치고</b>, <b>0번 빈칸은 지운다</b>.</p>
+<pre>칸마다 고른 번호   [0, 0, 512, 512, 0, 87, 87, 0]
+같은 번호 합치기   [0, 512, 0, 87, 0]
+0번(빈칸) 지우기   [512, 87]
+사전 매핑          512 → "개",  87 → "요"   ⇒  "개요"   (번호는 설명용 예)</pre>
+<div class="callout warn"><b>사전은 모델과 짝이다.</b> 사전만 바꾸거나 앞뒤 처리(0번 blank, 끝 띄어쓰기)가 어긋나면 모든 글자가 한 칸씩 밀려 엉뚱한 글이 나온다(5-3의 주의).
+PP-OCRv6 인식 모델을 못 쓴 이유도 그 모델 사전에 <b>한글이 0자</b>였기 때문이다(3장).</div>
+
+<h3>15-2. 이 파서만 더하는 것 (OCR 앞뒤)</h3>
+<p>여기까지(①~④)는 OCR 모델을 쓰면 누구나 거치는 과정이다. 이 파서는 그 앞뒤에 문서 검색용 손질을 더한다.</p>
+<div class="tw"><table>
+<tr><th>때</th><th>하는 일</th><th>왜</th><th>설계서 · 코드</th></tr>
+<tr><td>앞</td><td><b>OCR 할 쪽 고르기</b> — 글자층이 거의 없고 큰 그림이 쪽을 덮으면 스캔 쪽으로 보고, 그 쪽만 200dpi 그림으로 그려 OCR. 매 쪽 같은 자리에 반복되는 그림(로고)은 판정에서 뺀다</td><td>글자층 있는 쪽까지 OCR 하면 시간만 들고 글이 두 번 들어간다</td><td>4장 · <code>mod.rs</code> 의 <code>pdf_ocr_pages</code></td></tr>
+<tr><td>뒤</td><td><b>글자층과 겹친 줄 빼기</b> — 쪽 번호처럼 글자층에 이미 있는 글을 OCR 이 또 읽으면 그 줄을 버린다</td><td>같은 글이 두 번 들어가지 않게(글자층 글이 더 정확)</td><td><code>mod.rs</code> 의 <code>drop_overlapping</code></td></tr>
+<tr><td>뒤</td><td><b>줄 묶기</b> — 상자를 위→아래, 왼쪽→오른쪽 순으로 놓고, 세로로 절반 이상 겹치면 같은 줄로 합친다. 상자 사이 틈이 넓으면 띄어쓰기를 넣는다</td><td>상자는 단어 조각이라 그대로면 읽는 순서 · 띄어쓰기가 깨진다. 한국어 인식이 띄어쓰기를 자주 빠뜨리는 것도 보완</td><td>5-4 · <code>mod.rs</code> 의 <code>group_rows</code></td></tr>
+<tr><td>뒤</td><td><b>블록으로 넣기</b> — 한 줄이 <code>paragraph</code> 블록 하나, <code>source: "ocr"</code> 표시</td><td>글자층 문서와 같은 모양이라 절 나누기 · 청킹 · 검색이 그대로 돈다</td><td>5-4 · <code>docmodel/pdf.rs</code></td></tr>
+<tr><td>뒤</td><td><b>결과 캐시</b> — 파일 내용 해시로 쪽마다 저장</td><td>재구축 · 이동 · 이름 바꿈에도 다시 OCR 하지 않는다</td><td>7장 · <code>ocr_cache/</code></td></tr>
+</table></div>
+
+<h3>15-3. 다른 방식의 OCR 과 비교</h3>
+<div class="tw"><table>
+<tr><th>방식</th><th>과정</th><th>이 파서와 다른 점</th></tr>
+<tr><td>딥러닝 2단계 OCR (PaddleOCR · EasyOCR · RapidOCR · <b>이 파서</b>)</td><td>검출 → 인식(번호) → 사전</td><td>—</td></tr>
+<tr><td>Tesseract (옛 OCR 엔진)</td><td>줄 찾기 → 줄 인식(LSTM) → 사전</td><td>큰 흐름은 같다. 검출을 딥러닝 대신 그림 처리 규칙으로 한다</td></tr>
+<tr><td>문서용 거대 모델 (GOT-OCR · VLM 계열)</td><td>쪽 그림 전체를 보고 글을 바로 써 내려감</td><td>검출 단계가 없다. 모델이 내는 것이 번호이고 사전(토크나이저)으로 글자로 바꾸는 점은 같다. 대신 훨씬 크고 느리다</td></tr>
+</table></div>
+<p><b>정리</b> — "사각형 검출 → 칸마다 번호 → 사전으로 글자"는 OCR 의 기본 과정이고, 이 파서가 더한 것은
+<b>어느 쪽을 OCR 할지 고르기 · 글자층과 겹친 줄 빼기 · 줄 묶기 · 블록과 캐시로 넣기</b>다.</p>
 </section>
 
 <footer>MoAI-S 스캔 문서 OCR 설계서 · 2026-11-13 · 조사 대상: <code>rust/simplerag/src/{docmodel/mod,docmodel/pdf,pdfium,indexer,embed,config,bm25}.rs</code>, <code>rust/ragsearchbox/ui/info.html</code>, <code>rust/installer.iss</code>, <code>rust/build_dist.ps1</code>, <code>dist-rust/meta.sqlite</code> · 실측: PP-OCRv6(PaddleOCR 3.7.0) · RapidOCR 3.9.2 · onnxruntime 1.26.0 · i5-1340P</footer>
