@@ -316,6 +316,7 @@ OCR이 꺼져 있거나 모델이 없을 때만 지금처럼 <code>"PDF 텍스�
   <li>두 세션을 처음 OCR 할 때 한 번 연다. 메모리는 두 모델 합쳐 100MB 안팎으로 본다(구현 후 측정).</li>
   <li><code>intra_op_num_threads = ocr_threads</code>(기본 <b>4</b>), <code>inter_op = 1</code>. OCR 스레드는 Windows 우선순위 <code>BELOW_NORMAL</code> 로 내려 검색·답변을 방해하지 않게 한다.</li>
   <li>한 쪽이 끝날 때마다 멈춤 신호를 확인한다. 앱을 끄거나 사용자가 멈추면 쪽 단위로 바로 선다.</li>
+  <li><b>2026-11-17 바뀜(문서 파서 DLL 0.1.1)</b> — 세션 메모리 아레나를 켜고 실행마다 줄이며(인식이 빨라짐, 쥔 메모리는 쌓이지 않음), A4 보다 5% 넘게 큰 PDF 쪽은 A4 크기로 그려 OCR 한다(그림 파일은 기본 끔 — 4K 화면 캡처 작은 글자가 나빠짐). 설정 <code>extract.ocr_arena</code> · <code>extract.ocr_page_cap</code>(a4 | none) · <code>extract.ocr_image_cap</code> 으로 끌 수 있다. 근거와 측정: <code>Struct-DocParse-OCR-rust/plan/OCR속도개선_설계서_20261117.html</code>.</li>
 </ul>
 </section>
 

@@ -114,6 +114,8 @@ fn open_options() -> Value {
             "enabled": c.ocr, "images": c.ocr_images, "mode": "deferred",
             "model_dir": c.ocr_dir, "cache_dir": pyutil::join(&c.root, "ocr_cache"),
             "threads": c.ocr_threads, "max_pages": c.ocr_max_pages,
+            // OCR 속도개선 옵션(DLL 0.1.1 부터 — 옛 DLL 은 모르는 옵션이라 열기에 실패하므로 같이 배포)
+            "arena": c.ocr_arena, "page_cap": c.ocr_page_cap, "image_cap": c.ocr_image_cap,
         },
         "pdf": {"tables": c.pdf_tables, "infer_headings": c.pdf_infer_headings},
         "runtime": runtime,

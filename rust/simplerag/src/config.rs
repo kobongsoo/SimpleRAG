@@ -201,6 +201,10 @@ pub struct Config {
     pub ocr_threads: i64,
     pub ocr_max_pages: i64,
     pub ocr_images: bool,
+    // OCR 속도개선(DLL 0.1.1) — 아레나 켬+실행마다 줄이기, 큰 쪽 · 그림 A4 상한("a4"|"none"), 그림 파일 상한. 문제 대응용 숨은 설정
+    pub ocr_arena: bool,
+    pub ocr_page_cap: String,
+    pub ocr_image_cap: bool,
     pub ocr_dir: String,
     pub chunk_table_whole: i64,
     pub extract_dump: bool,
@@ -411,6 +415,16 @@ fn build() -> Result<Config, ConfigError> {
         Some(s) => !["0", "false", "no", ""].contains(&s.trim()),
         None => pick_bool(&y, "extract.ocr_images", true),
     };
+    // OCR 속도개선(OCR속도개선_설계서_20261117) — 기본 켬. 문제가 생기면 config.yaml 에서 끈다
+    //   ocr_arena     : OCR 세션 메모리 아레나 켬 + 실행마다 줄이기(인식이 빨라짐, OCR 중 순간 메모리 1.3~1.5GB)
+    //   ocr_page_cap  : "a4" = A4 보다 큰 PDF 쪽 · 그림을 A4 크기로 줄여 OCR / "none" = 예전처럼 원래 크기
+    //   ocr_image_cap : 그림 파일에도 위 상한을 쓰나 — 기본 끔(4K 화면 캡처 작은 글자 정확도 0.958→0.913, 2026-11-17 실측)
+    let ocr_arena = pick_bool(&y, "extract.ocr_arena", true);
+    let ocr_page_cap = match pick_str(&y, "extract.ocr_page_cap", "a4", None).as_str() {
+        "none" => "none".to_string(),
+        _ => "a4".to_string(),
+    };
+    let ocr_image_cap = pick_bool(&y, "extract.ocr_image_cap", false);
     // OCR 모델 폴더 — 환경변수 > <models_dir>/ocr > 프로그램 폴더 models/ocr (데이터 폴더를 따로 둔 앱 워커)
     let ocr_dir = match env("SIMPLERAG_OCR_DIR") {
         Some(d) => pyutil::abspath(&d),
@@ -599,6 +613,9 @@ fn build() -> Result<Config, ConfigError> {
         ocr_threads,
         ocr_max_pages,
         ocr_images,
+        ocr_arena,
+        ocr_page_cap,
+        ocr_image_cap,
         ocr_dir,
         chunk_table_whole,
         extract_dump,
@@ -787,6 +804,9 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("ocr_threads", Check::Int(1, 64)),
             ("ocr_max_pages", Check::Int(1, 100_000)),
             ("ocr_images", Check::Bool),
+            ("ocr_arena", Check::Bool),
+            ("ocr_page_cap", Check::Choice(&["a4", "none"])),
+            ("ocr_image_cap", Check::Bool),
         ]),
         ("retrieval", vec![
             ("dense_top_k", Check::Int(1, 1000)),
