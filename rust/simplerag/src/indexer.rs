@@ -460,6 +460,15 @@ pub fn check_chunk_params(state: &mut State, rebuild: bool, log: &mut dyn FnMut(
         }
         Some(r) => r,
     };
+    // 문서 파서 DLL 의 블록 버전만 올라간 경우 — 재구축 없이 기록만 새 값으로(0.1.6, DLL 0.1.1)
+    //   5 → 6 은 스캔(OCR) 문서의 블록만 바뀌고 일반 문서는 글자 하나까지 같다. 전체 재구축(수 시간)을 요구하지 않고,
+    //   이미 색인된 스캔 문서는 그 문서가 다시 색인될 때 새 구조로 바뀐다
+    if !params_eq(&rec, &params) && only_blocks_newer(&rec, &params) {
+        log(&format!("  ℹ️ 문서 파서 블록 버전 {} → {} — 스캔 문서 구조만 바뀌어 재구축 없이 이어서 씁니다",
+            pyshow(rec.get("blocks_version")), pyshow(params.get("blocks_version"))));
+        state.insert("chunk_params".into(), params.clone());
+        return Ok(params);
+    }
     if !params_eq(&rec, &params) {
         let diff: Vec<String> = params.as_object().unwrap().iter()
             .filter(|(k, v)| !val_eq(rec.get(k.as_str()), Some(v)))
@@ -467,6 +476,54 @@ pub fn check_chunk_params(state: &mut State, rebuild: bool, log: &mut dyn FnMut(
         return Err(format!("청킹 설정이 인덱스와 다릅니다({}). 이대로 증분 인덱싱하면 옛 청크와 섞입니다 — index --dir <폴더> --rebuild 로 전체 재구축하세요.", diff.join(", ")));
     }
     Ok(params)
+}
+
+//------------------------------------------------------------------
+// 기록과 지금 청킹 설정이 "블록 버전만 5 이상에서 더 커진 것" 인가
+//=> 문서 파서 DLL 이 올린 blocks_version 은 스캔(OCR) 문서의 블록만 바꾼다(5 → 6 = OCR 구조 분석).
+//   그 밖의 키(토큰 · 겹침 · 청킹 방식 등)가 하나라도 다르면 false — 그때는 지금처럼 재구축을 요구한다.
+//    1) 두 쪽 모두 blocks_version 이 있고, 기록 값이 5 이상이며 지금 값이 더 커야 한다
+//    2) blocks_version 을 뺀 나머지 키가 모두 같아야 한다
+//
+// -in: rec    = 인덱스에 기록된 청킹 설정
+// -in: params = 지금 청킹 설정(chunk_params)
+//
+// -out: true = 블록 버전만 올라감(재구축 없이 이어서 써도 됨)
+// -out: error = 없음
+//------------------------------------------------------------------
+fn only_blocks_newer(rec: &Value, params: &Value) -> bool {
+    let (Some(r), Some(p)) = (rec.as_object(), params.as_object()) else { return false };
+    let (Some(rv), Some(pv)) = (r.get("blocks_version").and_then(|v| v.as_i64()), p.get("blocks_version").and_then(|v| v.as_i64())) else { return false };
+    // 5 미만은 DLL 분리 전 SimpleRAG 자체 판 — 그 변화는 일반 문서도 바꿨으므로 그대로 재구축
+    if rv < 5 || pv <= rv {
+        return false;
+    }
+    // 블록 버전을 뺀 나머지가 모두 같아야 한다
+    let strip = |m: &Map<String, Value>| -> Value {
+        Value::Object(m.iter().filter(|(k, _)| k.as_str() != "blocks_version").map(|(k, v)| (k.clone(), v.clone())).collect())
+    };
+    params_eq(&strip(r), &strip(p))
+}
+
+#[cfg(test)]
+mod blocks_version_tests {
+    use super::*;
+
+    // 블록 버전만 5 → 6 이면 이어서 쓰고, 다른 키가 다르거나 버전이 내려가면 재구축
+    #[test]
+    fn only_blocks_version_bump_is_allowed() {
+        let rec = json!({"tokens": 128, "overlap": 16, "mode": "structured", "blocks_version": 5});
+        assert!(only_blocks_newer(&rec, &json!({"tokens": 128, "overlap": 16, "mode": "structured", "blocks_version": 6})));
+        // 다른 키도 바뀜
+        assert!(!only_blocks_newer(&rec, &json!({"tokens": 256, "overlap": 16, "mode": "structured", "blocks_version": 6})));
+        // 같은 버전 · 내려감
+        assert!(!only_blocks_newer(&rec, &json!({"tokens": 128, "overlap": 16, "mode": "structured", "blocks_version": 5})));
+        assert!(!only_blocks_newer(&json!({"tokens": 128, "blocks_version": 6}), &json!({"tokens": 128, "blocks_version": 5})));
+        // DLL 분리 전 판(4 이하)에서 올라온 것은 재구축
+        assert!(!only_blocks_newer(&json!({"tokens": 128, "blocks_version": 4}), &json!({"tokens": 128, "blocks_version": 6})));
+        // 기록에 블록 버전이 없음
+        assert!(!only_blocks_newer(&json!({"tokens": 128}), &json!({"tokens": 128, "blocks_version": 6})));
+    }
 }
 
 // 진행률(최근 20개 표본 속도로 ETA)
