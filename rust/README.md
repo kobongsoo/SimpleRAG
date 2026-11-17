@@ -20,6 +20,8 @@ powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
 
 - `cargo build --release` 뒤 저장소 루트 `dist-rust\` 에 exe 두 개와 `struct_docparse.dll` 을 넣습니다.
   DLL 저장소는 SimpleRAG 와 같은 상위 폴더에 있다고 보고, 다르면 환경변수 `SDP_ROOT` 로 알려 줍니다. DLL 이 없으면 멈춥니다.
+- 빌드하지 않고 [Releases](https://github.com/kobongsoo/Struct-DocParse-OCR-rust/releases) 의 `…-windows-x64.zip` 을 쓰려면
+  풀어 둔 폴더를 `$env:SDP_DIST` 로 알려 줍니다 — 그 안 `lib\` 의 DLL · OCR 모델(· 없으면 pdfium · onnxruntime)을 가져옵니다.
 - 처음이면 Python 배포본(`dist\simplerag`)에서 런타임 DLL(onnxruntime 1.29 · pdfium · llama.cpp CPU/Vulkan)을 복사하고,
   모델(GGUF·e5·bge 리랭커·OCR)은 **하드 링크**로 겁니다(같은 드라이브라 수 GB 가 두 벌 생기지 않습니다).
   OCR 모델이 Python 배포본에 없으면 DLL 저장소의 `models\ocr\` 에서 가져옵니다.

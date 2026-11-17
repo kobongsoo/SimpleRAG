@@ -1,313 +1,231 @@
-# SimpleRAG
+# SimpleRAG · MoAISearch
 
-로컬 PC(Windows)에서 동작하는 문서 검색·질의응답 시스템.
-인터넷·전용 GPU·별도 서버 프로세스 없이 돌아간다. 내장 GPU(iGPU)가 있으면 첫 실행 때
-속도를 재서 빠를 때만 답변 생성에 쓴다(없어도 CPU 로 동작).
-
-> **상태**: 파이프라인 구현 완료, 실문서 371건으로 검증 완료 (2026-08-21)
-> **갱신**: iGPU 자동 선택 + 리랭킹 운영 반영 (2026-09-14, [REPORT §32](results/REPORT.md))
-> **갱신**: 자동 인덱싱 · 폴더 한정 검색 · 관련 근거 판정 · 탐색기 패널 앱 [RAGSearchBox](RAGSearchBox/README.md) (2026-10)
-> **갱신**: 구조화 추출(blocks 엔진) 운영 전환 · 생성 모델 선택(기본 1.7B) · 시스템 지시문을 config.yaml 에서 (2026-10-22)
-> **갱신**: Rust 판 `simplerag-rs.exe` · `MoAISearch.exe` 추가 — [rust/README.md](rust/README.md) (2026-10-23)
-> **원칙**: 모든 설계 결정은 이 PC에서의 실측에 근거한다. 추측으로 정한 값은 없다.
->
-> `results/REPORT.md`(측정 기록)는 로컬 전용이라 저장소에는 올라가 있지 않다.
-
----
-
-## 무엇을 하는가
+로컬 Windows PC 에서 동작하는 **문서 검색 · 질의응답** 시스템.
+인터넷 · 전용 GPU · 별도 서버 없이 돌아가고, 내장 GPU(iGPU)가 있으면 첫 실행 때 속도를 재서 빠를 때만 답변 생성에 쓴다.
 
 ```
-문서 폴더  →  [추출 → 청킹 → 임베딩 → 인덱싱]  →  질문  →  근거 3건 + AI 요약
-                      (1회, 25분)                        (0.44초)   (1.24초)
+문서 폴더 → [추출 · OCR → 청킹 → 임베딩 → 색인] → 질문 → 근거 3건(약 0.4초) → AI 요약(스트리밍)
 ```
 
-**2단계 응답**이 핵심이다. 검색된 근거를 0.44초에 먼저 보여주고, AI 요약은
-1.24초부터(iGPU 기준, CPU 전용 PC 는 약 2.4초) 스트리밍으로 뒤따른다. 속도 때문이기도 하지만 **안전장치**이기도 하다 —
-생성 모델의 정답률이 약 72%(506문항)라 사용자가 근거로 직접 검증할 수 있어야 한다.
+검색된 **근거를 먼저 보여 주고** AI 요약이 뒤따르는 2단계 응답이 핵심이다. 생성 모델 정답률이 약 79% 라
+사용자가 근거로 직접 확인할 수 있어야 하기 때문이다.
+
+| 실행 파일 | 하는 일 |
+|---|---|
+| **`MoAISearch.exe`** | 트레이 상주 앱 — 탐색기 옆 대화 패널, 지정 폴더 자동 색인, 설정 · 모델 받기 |
+| **`simplerag-rs.exe`** | CLI · 워커 — `index` · `search` · `ask` · `chat` · `status` · `extract` 등 |
+| `struct_docparse.dll` | 문서 파싱 · 스캔 OCR — 별도 저장소 [Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) |
+
+> 지금 운영판은 **Rust 판**(`rust/`, 0.1.5)이다. 처음 만든 Python 판(`src/simplerag`, `RAGSearchBox/`)은 측정 · 비교용으로 남아 있다.
+> 모든 설계 값은 이 PC 에서의 실측에 근거한다. 측정 기록 `results/REPORT.md` 는 로컬 전용이라 저장소에 없다.
 
 ---
 
-## 실측 성능 — 현재 운영값 (2026-09-14)
+## 실측 성능 — 현재 운영값 (2026-11-17 정리)
 
-> 이 표는 **0.6B 모델 기준** 측정이다. 2026-10-22 부터 기본 생성 모델은 1.7B 로, TTFT 중앙값이 약 2.7초다
-> (빠른 0.6B 는 약 1.5초 — `config.yaml` `generation.model` 주석, REPORT §42·§44).
+측정 PC: i5-1340P 노트북(Iris Xe iGPU, 16GB) · iGPU 생성 + 리랭킹(이 PC 의 자동 선택 결과).
+Rust 판은 같은 질의에 Python 판과 근거 · 답변이 글자까지 같아(2026-10-23 확인) 아래 값을 그대로 쓴다.
 
-i5-1340P 노트북(Iris Xe) / **평가 코퍼스** 368문서·59,747청크 / 평가 506문항.
-(운영 인덱스는 2026-09-14 부터 `sample` 폴더 20건 — 이 표는 평가 코퍼스 기준이다. 머리글 상한 적용 후에도
-정답률 363/506 으로 같고, 리랭커 풀을 10 으로 바꾼 지금 기본값은 379/506·TTFT 중앙값 1.76초 — REPORT §35.9)
-이 PC 는 첫 실행 측정에서 iGPU 가 2.8배 빨라 **iGPU + 리랭킹**으로 동작한다.
-iGPU 가 없거나 느린 PC 는 자동으로 오른쪽 열(CPU 전용, 리랭킹 끔)이 된다.
+### 답변 모델별 — 기본은 Qwen3-1.7B
 
-| 지표 | iGPU + 리랭킹 (이 PC 기본) | CPU 전용 |
+| 답변 모델 (`generation.model`) | 용도 | 첫 글자(TTFT) 중앙값 | 골든셋 v2 핵심어 적중 |
+|---|---|---:|---:|
+| **qwen3-1.7b-q4** | **기본 내장** | **약 2.7초** | **80 / 150** |
+| midm-2.0-mini-q4 | 한국어 특화(KT Mi:dm 2.0 Mini) | 약 4.5초 | 86 / 150 |
+| qwen3.5-4b-q4 · qwen3-4b-q4 | 정밀 — 설정 > 모델에서 받는다 | 1.7B 의 약 3배 | 골든 100문항 정답 59 |
+| qwen3-0.6b-q4 | 빠름(측정용, 배포 안 함) | 약 1.5초 | 57 / 150 |
+
+### 평가 코퍼스 506문항 (368문서 · 59,747청크)
+
+| 지표 | **qwen3-1.7b (기본)** | qwen3-0.6b |
 |---|---:|---:|
-| 첫 글자 (TTFT) 중앙값 | **1.24초** | 2.42초 |
-| TTFT p90 / p99 | **1.67초 / 2.34초** | 4.23초 / 8.17초 |
-| 3초 이내 | **99%** | 74% |
-| 답변 완료 중앙값 | **2.86초** | 4.70초 |
-| 근거 표시(검색+리랭킹) 중앙값 | 0.44초 | 0.18초 |
-| 정답률 (506문항) | **71.7%** | 69.6% |
-| 앱 기동 (병렬 예열) | 약 6초 — `chat` 기준, 리랭커는 준비 뒤 백그라운드(`ask` 는 +0.6초) | 약 6~7초 |
+| 정답률 | **399 / 506 (78.9%)** | 377 / 506 (74.5%) |
+| 첫 글자 중앙값 / p90 | 2.67초 / 3.51초 | 1.91초 / 2.55초 |
+| 3초 안에 첫 글자 | 71.5% | 97.2% |
+| 답변 완료 중앙값 | 6.36초 | 3.62초 |
+| 근거 표시(검색 + 리랭킹) 중앙값 | 약 0.44초 | 약 0.44초 |
 
-정답률 차이(+11문항)는 McNemar p=0.242 로 유의하지 않다 — "같거나 조금 낫다" 까지만
-말할 수 있다. 근거는 [REPORT §29~§32](results/REPORT.md).
+1.7B 의 정답 증가(+22문항)는 McNemar p=0.007 로 유의하다 — 이 프로젝트에서 처음 확정된 품질 상승이다(REPORT §42, 2026-09-15).
 
-## 초기 측정 (2026-08-21 — D:\분류함 371문서 / 43,058청크, CPU 전용)
+### 색인 · OCR · 메모리
 
-| 지표 | 값 |
-|---|---:|
-| 근거 표시 | **0.12초** |
-| 첫 글자 (체감 TTFT) | **2.53초** |
-| 답변 완료 (100토큰) | 약 5.5초 |
-| 검색 정확도 (Recall@3) | **96%** |
-| 최종 정답률 (45문항) | **76%** |
-| 환각 | **0%** |
-| 초기 인덱싱 | 약 25분 (1회성) |
-| 앱 기동 (병렬 예열) | 약 4.7초 |
-
-### 검색 단계 분해
-
-| 단계 | 중앙값 | 비중 |
-|---|---:|---:|
-| 쿼리 임베딩 | 5.7ms | 6% |
-| Qdrant dense | 81.3ms | 92% |
-| BM25 | 0.9ms | 1% |
-| **합계** | **88.7ms** | |
+| 항목 | 값 | 측정 |
+|---|---|---|
+| 전체 색인 | PDF 30건 · 925쪽 · 4,616청크 약 61분(4스레드) → 임베딩 8스레드로 **1.30배** | 2026-10-30, 시간의 93% 가 벡터 생성 |
+| 스캔 OCR | 쪽당 약 **3~4초**(A4 스캔 2.8~3.9초, 누운 A6 스캔 137쪽 평균 3.9초) — 색인 뒤 대기열에서 차례로 | 2026-11-13 · 11-17 (DLL 0.1.1) |
+| 워커 메모리 | 1.7B 를 iGPU 에 올린 채 약 4.8GB(그중 생성 모델 1.7GB) | 2026-11-13 |
 
 ---
 
-## 확정 구성
+## 구성
 
 | 항목 | 값 | 근거 |
 |---|---|---|
-| 생성 모델 | **Qwen3-1.7B-Q4_K_M** (GGUF, 기본) · 0.6B(빠름) · Mi:dm 2.0 Mini(한국어) 중 선택 | 1.7B 506문항 정답 377→399(p=0.007), 골든셋 v2 must 57→80. 대신 3초 이내가 97%→72% (REPORT §42·§44·§47) |
-| 추출 | **blocks 엔진** — 문서를 제목·문단·표·목록 블록으로 읽고 절 단위로 조립 (PDF·DOCX·PPTX·XLSX·HWPX·HWP·DOC·HTML 등) | D:\분류함 1,633건 전수 점검. `extract.engine: legacy` 로 예전 평문 추출 |
-| 임베딩 | **e5-small-ko ONNX int8** (384차원) | fp32 대비 2.5배 |
-| 청킹 | **structured 128토큰 / 16 겹침** — 절 경계를 지키고 `[문서명 > 절]` 접두, 표 조각엔 머리글 다시 붙임 | 512 대비 TTFT 3.3배 |
-| 벡터DB | **Qdrant local** (서버 불필요) | 81ms — 전체 예산의 3% |
-| 검색 | dense 10 + BM25 10 → **RRF → top-3** | top-3이 실측 포화점 |
-| 리랭킹 | **bge-reranker-base int8**, RRF 후보 10 → 3 (iGPU 일 때만) | 506문항 +14~15문항(비유의). CPU 에서는 TTFT 3초 목표와 충돌 |
-| 관련 근거 판정 | 리랭커 점수 + 질문·근거 핵심 낱말 겹침으로 판정, 관련 근거가 없으면 답하지 않음("답변할 수 없습니다") | 리랭커 점수만으로는 못 가른다 |
-| 폴더 한정 검색 | `--folder <폴더>` — 그 폴더(하위 포함) 문서만 근거로 | RAGSearchBox 패널 폴더 = 검색 범위 |
-| BM25 | **numpy 역색인 자체 구현** | rank_bm25 대비 294배 |
-| 프롬프트 | **V0 단순 지시** | 인용 강제형은 실문서에서 역효과 |
-| 런타임 | llama.cpp(생성) + onnxruntime(임베딩·리랭킹) | 단계별 최적 런타임이 다름 |
-| 생성 백엔드 | **CPU / iGPU(Vulkan) 자동 선택** — 1.3배 이상 빠를 때만 iGPU | Iris Xe 에서 prefill 2.8배 |
+| 추출 | **struct_docparse.dll** — 문서를 제목 · 문단 · 표 · 목록 블록으로 읽음(PDF · DOCX · PPTX · XLSX · HWPX · HWP · DOC · HTML · MD 등) | 분리 전 내장 파서와 결과 같음(실문서 84건) |
+| OCR | 스캔 PDF 쪽 · 그림 파일 — PP-OCRv6 검출 + 한국어 PP-OCRv5 인식, 누운 쪽은 바로 세워 읽음(DLL 0.1.1) | 운영 PDF 의 8~10% 쪽이 스캔 |
+| 청킹 | structured 128토큰 / 16 겹침 — 절 경계 유지, `[문서명 > 절]` 접두, 표 조각엔 머리글 다시 붙임 | 512 대비 TTFT 3.3배 |
+| 임베딩 | e5-small-ko ONNX int8 (384차원) | fp32 대비 2.5배 |
+| 검색 | dense 10 + BM25 10 → RRF → 리랭킹(bge-reranker-base int8, iGPU 일 때) → 근거 3건 | top-3 이 실측 포화점 |
+| 관련 근거 판정 | 리랭커 점수 + 질문 · 근거 핵심 낱말 겹침 — 관련 근거가 없으면 "답변할 수 없습니다" | 리랭커 점수만으로는 못 가름 |
+| 생성 | llama.cpp GGUF, **CPU / iGPU(Vulkan) 자동 선택**(1.3배 이상 빠를 때만 iGPU) | Iris Xe prefill 2.8배 |
+| 저장 | 벡터 sqlite(메모리 전수 비교) + BM25 역색인 — 서버 없음 | |
 
-| 문서 | 내용 |
+검색 · 청킹 계수, 답변 모델, 시스템 지시문, OCR 옵션은 모두 **`config.yaml`** 에서 코드 수정 없이 바꾼다(우선순위: 환경변수 > config.yaml > 기본값).
+`chunk.*` · `extract.*` 를 바꾸면 다시 색인(`index --rebuild`)해야 하고, 나머지는 다음 실행부터 반영된다.
+
+---
+
+## 빌드 (Rust 판 — Windows x64)
+
+### 준비물
+
+| 필요한 것 | 쓰임 |
 |---|---|
-| [doc/04_구현_명세.md](doc/04_구현_명세.md) | **지금 구현된 것 전체** (as-built 명세 — 여기부터 읽으면 된다) |
-| [doc/02_테스트_가이드.md](doc/02_테스트_가이드.md) | **내 문서로 테스트하는 법** (단계별 확인·진단표) |
-| [doc/03_exe_배포_가이드.md](doc/03_exe_배포_가이드.md) | **exe 빌드·배포** (Python 없는 PC 용) |
-| [plan/설계서.md](plan/설계서.md) | 설계 결정 12개와 근거 |
-| [plan/구조인식_청킹_설계.md](plan/구조인식_청킹_설계.md) | 구조 인식 청킹 설계 |
-| [plan/구조화추출_청킹_재설계서.html](plan/구조화추출_청킹_재설계서.html) | 구조화 추출(blocks 엔진) 재설계 |
-| [plan/답변품질_개선_계획.html](plan/답변품질_개선_계획.html) | 생성 쪽 실험(지시문 · 표 평문화 · Parent-Child · 모델 비교) |
-| [plan/자동인덱싱_설계서.html](plan/자동인덱싱_설계서.html) · [plan/폴더한정검색_설계서.html](plan/폴더한정검색_설계서.html) | 자동 인덱싱 · 폴더 한정 검색 |
-| [RAGSearchBox/README.md](RAGSearchBox/README.md) | 탐색기 옆 대화 패널 앱 (설계: [plan/RAGSearchBox_설계서.html](plan/RAGSearchBox_설계서.html)) |
-| [rust/README.md](rust/README.md) | Rust 판 (`simplerag-rs.exe` · `MoAISearch.exe`) |
-| [results/REPORT.md](results/REPORT.md) | 전체 측정 기록 (47절, 로컬 전용) |
-
----
-
-## 설치
-
-```
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe bench\download_models.py
-```
-
-> **iGPU 를 쓰려면** `runtime\llama_vulkan\` 에 설치된 llama-cpp-python 과 같은 버전(0.3.35)의
-> Vulkan 판 DLL 이 있어야 한다. 없으면 CPU 로만 동작한다. 받는 곳은 `runtime\llama_vulkan\SOURCE.txt`,
-> 설계는 [doc/03 §2](doc/03_exe_배포_가이드.md). 리랭커 모델은 `models\bge-reranker-base-int8\`
-> (없으면 리랭킹이 자동으로 꺼진다).
-
-> **Python 없이 쓰려면** → `.venv\Scripts\python.exe build_exe.py` 로 exe 를 만든다.
-> 자세한 내용은 [doc/03_exe_배포_가이드.md](doc/03_exe_배포_가이드.md).
-
-**전제(소스 실행 시)**: 형제 프로젝트 [MpowerClassify](D:\Project\MpowerClassify)(구 CSOClassify)가
-같은 PC에 있어야 한다. 텍스트 추출 모듈(`csoclassify`)과 임베딩 모델(ONNX)을 복사하지 않고
-경로로 재사용한다. `D:\Project\MpowerClassify` → `D:\Project\CSOClassify` 순으로 찾고,
-경로가 다르면 환경변수로 지정한다:
-
-```
-set SIMPLERAG_CSO_SRC=D:\Project\MpowerClassify\src
-set SIMPLERAG_EMBED_DIR=D:\Project\MpowerClassify\resources\models\e5-small-ko
-```
-
----
-
-## 사용
-
-```
-.venv\Scripts\python.exe src\simplerag\cli.py index --dir "D:\분류함"
-```
-
-```
-.venv\Scripts\python.exe src\simplerag\cli.py chat
-```
-
-`ask` 는 질문 하나마다 모델을 새로 올린다(약 6~7초). **질문을 여러 개 할 때는
-`chat` 을 쓴다** — 한 번만 올리고 계속 묻는다.
-
-| 명령 | 설명 |
-|---|---|
-| `index --dir <폴더>` | 재귀 인덱싱(증분). 폴더와 대조해 **추가·수정·삭제**를 반영한다 — 수정 문서는 새 청크를 먼저 넣고 옛 청크를 지우며, 날짜만 바뀐 문서는 다시 임베딩하지 않는다. 한꺼번에 많이 사라지면(30% 또는 50건 이상) 지우지 않고 멈추므로 정말 지운 것이면 `--allow-delete`. `--rebuild` 로 전체 재구축, `--max-add N` 으로 한 번에 추가할 문서 수 제한 |
-| **`chat`** | **대화형 — 모델 1회 적재 후 계속 질문** (여러 개 물어볼 때 필수). RAGSearchBox 의 워커로도 쓰인다(`/ask` · `/index-doc` 등 명령) |
-| `ask <질문>` | 1회용 질의. 질문을 생략하면 `chat` 으로 들어간다 |
-| `ask --model <별칭> <질문>` | 그 질문만 다른 모델로 — `qwen3-0.6b-q4`(빠름) · `qwen3-1.7b-q4`(기본) · `midm-2.0-mini-q4`(한국어). `--precise` 는 1.7B. `chat` 도 같다 |
-| `ask --folder <폴더> <질문>` | **폴더 한정** — 그 폴더(하위 포함) 문서만 근거로. `search` 도 같다 |
-| `search <질문>` | **검색만** 수행(LLM 미적재) — 원인 진단용 |
-| `extract <파일>` | **추출 미리보기** — 인덱싱 전 확인용. `--blocks` 는 블록·절·청크까지, `--dump <폴더>` 는 파일로 저장 |
-| `clear` | **인덱스 삭제** (`-y` 무인, `--doc <파일>` 1건만) |
-| `status [-v]` | 인덱스 규모, 문서별 청크 수 |
-| `warmup` | 예열만 수행(콜드스타트 측정) |
-| `backend` | **생성 백엔드(CPU/iGPU) 확인** — `--reprobe` 로 다시 측정 |
-
-### 검색·청킹 계수 — `config.yaml`
-
-청크 크기·겹침·코사인/BM25 검색 후보 수·RRF k·리랭커 입력 수·sLLM 근거 수를 **코드 수정 없이**
-`config.yaml` 에서 바꾼다(우선순위 환경변수 > config.yaml > 기본값). 추출 엔진(`extract.engine`),
-생성 모델(`generation.model`), 시스템 지시문(`generation.system_prompt`)도 여기서 고르고,
-실험 옵션(`flatten_tables` · `parent` · `pdf_headings`, 기본 끔)도 주석과 함께 들어 있다.
-`chunk.*`·`extract.*` 를 바꾸면 `index --dir <폴더> --rebuild` 가 필요하고, 나머지는 다음 실행부터 반영된다. 오타·범위 밖 값은
-시작할 때 오류로 알려 준다. 지금 값은 `status` 로 확인한다. 자세한 표는
-[doc/03 §4](doc/03_exe_배포_가이드.md).
-
-> 📘 **내 문서로 처음부터 끝까지 테스트하려면 → [doc/02_테스트_가이드.md](doc/02_테스트_가이드.md)**
-> 단계별 확인 방법, 문제 진단표, 평가셋 만드는 법을 담았다.
-
----
-
-## 폴더 구조
-
-```
-SimpleRAG/
-├─ src/simplerag/
-│  ├─ config.py           실측 확정 상수 (각 값에 근거 주석)
-│  ├─ settings.py         config.yaml 읽기 · 값 검사
-│  ├─ extract.py          추출 계층 (OLE 보정 · 표 정규화 · 문자 정제)
-│  ├─ docmodel/           구조화 추출(blocks 엔진) — pdf · docx · pptx · xlsx · hwpx · doc_bin · html_md · 후처리 · 절 조립
-│  ├─ chunk.py structure.py  청킹 (fixed · structured · blocks)
-│  ├─ tableflat.py        표 평문화(실험)
-│  ├─ embed/              ONNX int8 임베더
-│  ├─ generate/           llama.cpp 래퍼 + 프롬프트 · 채팅 형식 + 백엔드 선택(CPU/iGPU)
-│  ├─ index/              Qdrant · BM25 · 증분 인덱서 · 워커 인덱싱 명령
-│  ├─ retrieve/           hybrid.py(dense + BM25 → RRF · 관련 근거 판정) · reranker.py · parent.py · vector_matrix.py(폴더 한정 검색)
-│  ├─ pipeline.py         2단계 응답 이벤트 스트림
-│  ├─ warmup.py           병렬 예열 (App 조립)
-│  └─ cli.py console.py   CLI 진입점 · 콘솔 출력
-├─ RAGSearchBox/          탐색기 옆 대화 패널 앱 (트레이 상주, 자동 인덱싱)
-├─ rust/                  Rust 판 — simplerag-rs · MoAISearch (빌드: rust/build_dist.ps1 → dist-rust/)
-├─ bench/                 실측 하네스 (회귀 측정용으로 유지)
-├─ doc/04_구현_명세.md     구현 명세 (as-built)
-├─ doc/02_테스트_가이드.md  내 문서로 테스트하는 법
-├─ doc/03_exe_배포_가이드.md exe 빌드·배포
-├─ build_exe.py           PyInstaller 빌드 스크립트
-├─ config.yaml            검색·청킹 계수 (코드 수정 없이 변경)
-├─ runtime/llama_vulkan/  iGPU(Vulkan) 판 llama.cpp DLL
-├─ models/                GGUF · 리랭커 모델
-├─ plan/설계서.md          설계 결정과 근거
-├─ results/REPORT.md      전체 측정 기록 (47절, 로컬 전용)
-├─ qdrant_data/           벡터 인덱스
-├─ bm25_index.npz         BM25 역색인 캐시
-├─ index_state.json       증분 갱신 상태
-└─ gen_backend.json       CPU/iGPU 측정 결과 (자동 생성)
-```
-
----
-
-## RAGSearchBox — 탐색기 옆 대화 패널
-
-탐색기에서 지정한 폴더를 열면 오른쪽에 대화 패널이 붙어, 그 폴더 문서에 대해 묻고 답을 받는다.
-`simplerag chat` 을 워커로 띄워 쓰고, 폴더 변경을 감시해 자동으로 인덱싱한다.
-설치·설정은 [RAGSearchBox/README.md](RAGSearchBox/README.md).
-
-## Rust 판
-
-`src/simplerag` 와 `RAGSearchBox` 를 Rust 로 옮긴 판이 `rust/` 에 있다 — `simplerag-rs.exe`(CLI · 워커)와
-`MoAISearch.exe`(WebView2 패널). 워커 프로토콜 · config.yaml · index_state.json 이 Python 판과 같고,
-추출 결과 · 청크 · 검색 · 답변을 Python 판과 대조해 같음을 확인했다. Python 판 인덱스는 `import` 로 가져온다.
-
-### 빌드 절차 (0.1.5 부터 — 문서 파서 DLL 포함)
-
-0.1.5 부터 문서 파싱 · OCR 은 SimpleRAG 안에 없고, 별도 저장소
-[Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) 가 만드는 **`struct_docparse.dll`** 이 맡는다.
-`simplerag-rs.exe` 는 실행할 때 exe 옆의 이 DLL 을 불러 쓴다(`rust/simplerag/src/docparse.rs`).
-DLL · 런타임 · 모델 같은 바이너리는 이 저장소에 넣지 않으므로, 빌드할 때 아래 순서로 모은다.
-
-**1. 두 저장소를 같은 상위 폴더에 받는다**
+| [Rust](https://rustup.rs) stable (MSVC) + Visual Studio C++ 빌드 도구 | `simplerag-rs.exe` · `MoAISearch.exe` 빌드 |
+| 문서 파서 `struct_docparse.dll` | 아래 1단계 — **Releases 에서 받거나** 소스에서 빌드 |
+| Python 배포본 `dist\simplerag` (처음 한 번) | 런타임 DLL(llama.cpp CPU · Vulkan, VC++ 런타임)과 모델(e5 · bge · GGUF)을 여기서 가져온다 — 아래 2단계 |
+| Microsoft Edge WebView2 런타임 | `MoAISearch.exe` 패널 화면(Windows 11 은 기본 설치) |
+| (선택) [Inno Setup 6](https://jrsoftware.org/isinfo.php) | 설치 파일 만들기 |
 
 ```
 git clone https://github.com/kobongsoo/SimpleRAG.git
-git clone https://github.com/kobongsoo/Struct-DocParse-OCR-rust.git
 ```
+
+### 1단계 — 문서 파서 DLL 준비 (둘 중 하나)
+
+`simplerag-rs.exe` 는 실행할 때 **exe 옆의 `struct_docparse.dll`** 을 불러 쓴다. 이 저장소에는 DLL 이 없다.
+
+**방법 A — GitHub Releases 에서 받기 (빌드 없음, 권장)**
+
+1. [Struct-DocParse-OCR-rust Releases](https://github.com/kobongsoo/Struct-DocParse-OCR-rust/releases) 에서 최신
+   `struct_docparse-<버전>-<커밋>-windows-x64.zip` 을 받는다(지금 **0.1.1**).
+2. 아무 곳에나 푼다. 안에 `struct_docparse-…-windows-x64\lib\struct_docparse.dll` 이 있다
+   (같은 `lib\` 에 pdfium · onnxruntime · OCR 모델도 함께 들어 있다).
+3. 2~3단계를 하기 전에 **`SDP_DIST` 에 그 풀린 폴더**를 알려 준다.
+
+```powershell
+# 예: gh CLI 로 받기 (브라우저로 받아도 된다)
+gh release download v0.1.1 -R kobongsoo/Struct-DocParse-OCR-rust -p "*windows-x64.zip" -D C:\sdp
+Expand-Archive C:\sdp\struct_docparse-0.1.1-a3a7091-windows-x64.zip C:\sdp
+$env:SDP_DIST = "C:\sdp\struct_docparse-0.1.1-a3a7091-windows-x64"
+```
+
+**방법 B — 소스에서 빌드**
+
+SimpleRAG 와 **같은 상위 폴더**에 받아 빌드한다(다른 곳이면 환경변수 `SDP_ROOT` 에 그 경로).
 
 ```
 D:\Project\
 ├─ SimpleRAG\
-└─ Struct-DocParse-OCR-rust\     ← 다른 곳에 두면 환경변수 SDP_ROOT 에 그 경로
+└─ Struct-DocParse-OCR-rust\
 ```
 
-**2. 문서 파서 DLL 을 먼저 빌드한다** (Rust stable + Visual Studio C++ 빌드 도구)
-
-```
+```powershell
+git clone https://github.com/kobongsoo/Struct-DocParse-OCR-rust.git
 cd Struct-DocParse-OCR-rust
-cargo build --release -p sdp-ffi        → target\release\struct_docparse.dll
+cargo build --release -p sdp-ffi        # → target\release\struct_docparse.dll
 ```
 
-**3. 런타임 · 모델을 준비한다** — 저장소에 없는 것들. `build_dist.ps1` 이 처음 한 번 Python 배포본(`dist\simplerag`, [설치](#설치) 후 `build_exe.py`)에서 복사 · 하드 링크한다.
+`SDP_DIST` 가 있으면 방법 A, 없으면 방법 B 의 위치를 쓴다. 어느 쪽에도 DLL 이 없으면 3단계가 "문서 파서 DLL 이 없습니다" 로 멈춘다.
 
-| 파일 | 가져오는 곳 |
-|---|---|
-| `onnxruntime.dll` · `onnxruntime_providers_shared.dll`(1.22 이상, 지금 1.29) · `pdfium.dll` · VC++ 런타임 | `dist\simplerag\_internal\` |
-| llama.cpp CPU · Vulkan DLL | `dist\simplerag\_internal\llama_cpp\lib\` · `dist\simplerag\runtime\llama_vulkan\` |
-| 임베딩 e5 · 리랭커 bge · 답변 모델 GGUF | `dist\simplerag\models\` (`bench\download_models.py` 로 받음) |
-| OCR 모델 3개 | `dist\simplerag\models\ocr\`, 없으면 DLL 저장소 `models\ocr\`(Apache-2.0) |
+### 2단계 — 런타임 · 모델 준비 (처음 한 번)
 
-**4. SimpleRAG 를 빌드해 `dist-rust\` 에 모은다**
+3단계의 `build_dist.ps1` 은 런타임 DLL 과 모델을 **Python 배포본 `dist\simplerag`** 에서 복사 · 하드 링크한다(같은 드라이브면 수 GB 모델이 두 벌 생기지 않는다).
+이미 `dist-rust\` 에 있는 파일은 다시 가져오지 않으므로, 한 번 만든 뒤에는 이 단계가 필요 없다.
 
+| 가져오는 것 | 원본 위치 | 없을 때 |
+|---|---|---|
+| llama.cpp CPU · Vulkan DLL, VC++ 런타임 | `dist\simplerag\_internal\` · `runtime\llama_vulkan\` | — (생성이 안 됨) |
+| onnxruntime(1.29) · pdfium | `dist\simplerag\_internal\` | 방법 A 면 Releases 묶음의 `lib\` |
+| 임베딩 e5-small-ko · 리랭커 bge int8 · 답변 모델 GGUF(1.7B · 4B) | `dist\simplerag\models\` | — (리랭커가 없으면 리랭킹만 꺼짐) |
+| OCR 모델 3개 | `dist\simplerag\models\ocr\` | DLL 저장소 `models\ocr\` 또는 Releases 묶음 `lib\models\ocr\` |
+
+Python 배포본 만들기 — [Python 판](#python-판-측정--비교용) 설치 후:
+
+```powershell
+.venv\Scripts\python.exe bench\download_models.py     # 답변 모델 GGUF 받기(Hugging Face)
+.venv\Scripts\python.exe build_exe.py                  # → dist\simplerag (자세히: doc/03_exe_배포_가이드.md)
 ```
+
+### 3단계 — 빌드해서 `dist-rust\` 에 모으기
+
+```powershell
 cd SimpleRAG
 powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
 ```
 
-`cargo build --release` → `dist-rust\` 에 `simplerag-rs.exe` · `MoAISearch.exe` · `struct_docparse.dll`(DLL 저장소에서 복사) · 런타임 · 모델 · 라이선스 문서.
-DLL 을 못 찾으면 "문서 파서 DLL 이 없습니다 … cargo build -p sdp-ffi --release 를 먼저 하세요" 로 멈춘다.
+`cargo build --release` 뒤 `dist-rust\` 에 `simplerag-rs.exe` · `MoAISearch.exe` · `struct_docparse.dll` · 런타임 · 모델 · 사용 설명서 · 라이선스 문서(`.venv` 가 있을 때)를 모은다.
 
-**5. (선택) 설치 파일을 만든다** — [Inno Setup 6](https://jrsoftware.org/isinfo.php) 필요
+- 설정(`config.yaml` · `RAGSearchBox.ini`)과 색인은 **이미 있으면 덮어쓰지 않는다**.
+- MoAISearch 가 켜져 있으면 잠긴 exe · DLL 만 건너뛰고 알려 준다 — 트레이에서 끄고 다시 실행한다.
+- **DLL 만 바꿀 때**: 1단계(새 Releases 묶음 또는 다시 빌드) 뒤 이 3단계만 다시 한다. DLL 의 `blocks_version` 이 같으면 색인은 그대로 쓴다.
 
-```
+### 4단계 — (선택) 설치 파일
+
+```powershell
 powershell -ExecutionPolicy Bypass -File rust\build_installer.ps1
 ```
 
 → `dist-rust\MoAISearch_Setup_<버전>.exe` (버전은 `rust\ragsearchbox\Cargo.toml`). DLL 도 함께 설치된다.
-
-**DLL 만 고쳤을 때** — DLL 저장소에서 다시 빌드한 뒤 4번(`build_dist.ps1`)을 다시 하면 새 DLL 이 들어간다.
-DLL 의 `blocks_version` 이 바뀌지 않았으면 이미 만든 색인은 그대로 쓴다.
-
-자세한 내용은 [rust/README.md](rust/README.md), DLL 쪽은 DLL 저장소의 `README.md` · `doc\` 설명서.
+자세한 절차는 [doc/MoAISearch-설치파일-빌드-설명서-20261102.html](doc/MoAISearch-설치파일-빌드-설명서-20261102.html).
 
 ---
 
-## 회귀 측정
+## 실행
 
-설정을 바꾼 뒤에는 반드시 돌린다. 벤치 하네스는 구현 후에도 유지한다.
+### 앱 — `MoAISearch.exe`
 
+```powershell
+dist-rust\MoAISearch.exe
 ```
-.venv\Scripts\python.exe bench\eval_large.py --stage retrieval
+
+1. 트레이에 상주한다. 처음 실행하면 환영 화면과 사용 안내가 뜬다.
+2. **설정 > 폴더**에서 검색할 폴더를 추가하면 자동으로 색인한다(폴더 변경도 감시해 반영). 스캔 문서는 색인 뒤 쉬는 동안 OCR 한다.
+3. 탐색기에서 그 폴더를 열면 오른쪽에 **대화 패널**이 붙는다 — 질문하면 근거 3건이 먼저, 답이 뒤따라 나온다. 검색 범위는 그 폴더(하위 포함)다.
+4. 답변 모델은 **설정 > 모델**에서 받고 고른다.
+
+사용법 전체: [doc/MoAISearch-사용자-설명서-20261102.html](doc/MoAISearch-사용자-설명서-20261102.html) (설치본에서는 패널의 [?] → 사용 설명서).
+로그: `%LOCALAPPDATA%\MoAISearch\log\`, 색인 실패 문서는 설정 > 로그.
+
+### CLI — `simplerag-rs.exe`
+
+```powershell
+dist-rust\simplerag-rs.exe index --dir "D:\문서함"      # 색인(증분 — 추가 · 수정 · 삭제 반영)
+dist-rust\simplerag-rs.exe chat                         # 대화형 — 모델을 한 번만 올리고 계속 질문
+dist-rust\simplerag-rs.exe ask "출장비 정산 기한은?"     # 한 번만 묻기(모델 적재 약 6초 포함)
 ```
 
-| 스크립트 | 측정 대상 |
+| 명령 | 설명 |
 |---|---|
-| `bench_pipeline.py` | 실제 패키지 회귀 (기준값 대비 PASS/CHECK) |
-| `eval_large.py` | 45문항 검색·답변 평가 (카테고리별 분해) |
-| `bench_llm.py` | 생성 속도 (prefill / TTFT / decode) |
-| `bench_retrieval.py` | 임베딩·검색 속도 |
-| `bench_e2e.py` | 종단간 |
-| `sysinfo.py` | 실측 환경 수집 |
+| `index --dir <폴더>` | 재귀 · 증분 색인. 한꺼번에 많이 사라지면(30% 또는 50건 이상) 멈춘다 — 정말 지운 것이면 `--allow-delete`. `--rebuild` 전체 재구축 |
+| **`chat`** | 모델을 한 번 올리고 계속 질문 — **여러 개 물을 때는 이것**. MoAISearch 의 워커로도 쓰인다 |
+| `ask <질문>` | 한 번만 묻기. `--model <별칭>` 그 질문만 다른 모델, `--folder <폴더>` 그 폴더 문서만 근거로 |
+| `search <질문>` | 검색만(모델 안 올림) — 원인 진단용 |
+| `extract <파일>` | 추출 미리보기. `--blocks` 블록 · 절 · 청크까지, `--dump <폴더>` 파일로 |
+| `status [-v]` | 색인 규모 · 문서별 청크 수 · 지금 설정 값 |
+| `clear` | 색인 삭제(`-y` 묻지 않음, `--doc <파일>` 한 건만) |
+| `backend [--reprobe]` | 생성 백엔드(CPU / iGPU) 확인 · 다시 측정 |
+| `import --from dist\simplerag` | Python 판 색인 가져오기(다시 임베딩 없음) |
+
+---
+
+## Python 판 (측정 · 비교용)
+
+처음 만든 판이다. 벤치 하네스(`bench/`)와 2단계의 Python 배포본(`dist\simplerag`)을 만드는 데 쓴다.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe bench\download_models.py
+.venv\Scripts\python.exe src\simplerag\cli.py index --dir "D:\문서함"
+.venv\Scripts\python.exe src\simplerag\cli.py chat
+```
+
+- 형제 프로젝트 MpowerClassify(텍스트 추출 모듈 · e5 임베딩 모델)가 같은 PC 에 있어야 한다 —
+  `D:\Project\MpowerClassify` 를 찾고, 다르면 `SIMPLERAG_CSO_SRC` · `SIMPLERAG_EMBED_DIR` 로 지정.
+- iGPU 를 쓰려면 `runtime\llama_vulkan\` 에 같은 버전의 Vulkan 판 llama.cpp DLL 이 있어야 한다(`SOURCE.txt`).
+- 회귀 측정: `.venv\Scripts\python.exe bench\eval_large.py --stage retrieval` (설정을 바꾼 뒤 반드시).
 
 ---
 
@@ -315,68 +233,36 @@ DLL 의 `blocks_version` 이 바뀌지 않았으면 이미 만든 색인은 그�
 
 | 항목 | 내용 |
 |---|---|
-| **스캔 PDF 9건 누락** | 텍스트층이 없어 인덱스에 없음. **계약서 카테고리 전체가 검색 불가.** OCR 없이는 원리상 해결 불가 |
-| **생성 정답률 76%** | 24%는 틀린다. 근거를 항상 함께 노출하는 2단계 UX가 필수 안전장치 |
-| 표 부분 복원 | 셀 병합·불규칙 표는 일부만 복원 |
-| 짧은 질문 검색 실패 | "며칠" 같은 짧고 일반적인 표현은 4만 청크에서 변별력 부족 |
-| 발열 변동 ±15% | 임베딩 처리량이 69→47 chunk/s로 하락. 장시간 작업은 하단값 기준 |
-| iGPU 답변 차이 | iGPU 로 생성하면 CPU 와 답변 문장이 약 70% 달라지고 정답률 −3/−4문항(506문항, 비유의). 1.3배 이상 빠를 때만 iGPU 를 쓰는 이유 |
+| 생성 정답률 약 79% | 약 21% 는 틀린다 — 근거를 항상 먼저 보여 주는 이유 |
+| 첫 글자 3초 | 1.7B 는 3초 안이 약 72% — 빠른 응답이 우선이면 더 작은 모델, 정확도가 우선이면 4B |
+| 표 열 혼동 | 셀 병합 · 불규칙 표에서 열을 헷갈린 답이 나온다(근거 표에는 값이 있어 판정에도 잘 안 잡힘) |
+| 짧은 질문 | "며칠" 같은 짧고 일반적인 질문은 많은 청크 속에서 변별력이 낮다 |
+| OCR 범위 | 스캔 PDF 쪽 · 그림 파일만. docx · pptx 안의 그림, 쪽 안 일부만 누운 표는 읽지 않는다. 쪽당 3~4초 |
+| iGPU 답변 차이 | iGPU 로 생성하면 CPU 와 문장이 달라질 수 있다(정답률 차이는 비유의) |
 
 ---
 
-## 이 프로젝트에서 배운 것
+## 문서
 
-측정하며 세 번 방향이 뒤집혔다. 기록해 둘 가치가 있다.
-
-**1. 합성 데이터로 튜닝한 프롬프트가 실데이터에서 역전됐다.**
-인용 강제형 프롬프트(V3)가 합성 코퍼스에서는 최고였으나, 실문서에서는
-0.6B 정답률을 83%→50%로 무너뜨렸다. 실문서 청크는 여러 조문이 뒤섞인
-덩어리라 "답이 되는 문장 하나만 골라라"는 선택 과제가 감당 불가였다.
-→ **프롬프트 변경은 실코퍼스 평가셋으로만 판단한다.**
-
-**2. 모델 격차의 상당 부분이 데이터 품질 문제였다.**
-45문항에서 0.6B가 1.7B보다 9%p 낮았고, 그 차이는 특정 문서군에 몰려 있었다.
-원인은 CSOClassify의 8바이트 슬라이스 버그 하나 — 모든 OLE 문서(.doc/.xls/
-.ppt/.hwp)가 전용 파서를 건너뛰고 있었다. 고치자 **두 모델이 76% 동률**이
-됐다(McNemar p=1.000). 모델을 3배 키우는 대신 버그 하나를 고쳐 같은 결과를
-얻었고, TTFT는 2.53초 대 6.60초 그대로다.
-→ **"모델이 부족하다"고 판단하기 전에 데이터 파이프라인을 의심한다.**
-
-**3. "느리다"는 관측만으로 원인을 지목하면 엉뚱한 곳을 고친다.**
-검색 322ms를 보고 "Qdrant가 느리다 → 서버 모드"로 갈 뻔했다. 단계를
-분해하니 BM25가 69%였고 Qdrant는 26%였다. BM25를 numpy 역색인으로 바꿔
-264ms→0.9ms가 됐고, 서버 모드는 불필요해졌다.
-→ **집계 지표를 쪼개기 전에는 원인을 안다고 말하지 않는다.**
-
-공통점은 하나다 — **집계 숫자만 보면 원인을 못 찾는다.** 카테고리별로,
-파이프라인 단계별로 쪼개고 실패 사례를 눈으로 확인한 것이 매번 결정적이었다.
-
----
-
-## 다음 과제
-
-| # | 항목 | 비고 |
-|---|---|---|
-| Q8 | 스캔 PDF OCR 도입 여부 | 계약서 카테고리 복구 |
-| Q9 | 생성 정확도 76% 개선 | 남은 실패는 대부분 생성 단계 |
-| Q3 | ~~UI 형태~~ | RAGSearchBox(탐색기 옆 패널)로 해결 |
-| Q5 | 배포 형태 | venv 권장 |
-| — | 짧은 질문 검색 실패 | 검색 단계 개선 |
-
-CSOClassify 본체 버그 2건(OLE 오판, 512토큰 절단)은 별도 과제로 분리했다.
-SimpleRAG는 로컬에서 우회하고 있어 동작에는 지장이 없다.
+| 문서 | 내용 |
+|---|---|
+| [rust/README.md](rust/README.md) | Rust 판 구조 · Python 판과의 호환 · 워커 프로토콜 |
+| [doc/MoAISearch-사용자-설명서-20261102.html](doc/MoAISearch-사용자-설명서-20261102.html) | 앱 사용 설명서 |
+| [doc/MoAISearch-설치파일-빌드-설명서-20261102.html](doc/MoAISearch-설치파일-빌드-설명서-20261102.html) · [doc/MoAISearch-답변모델-배포-설명서-20261113.html](doc/MoAISearch-답변모델-배포-설명서-20261113.html) | 설치 파일 · 답변 모델 설치 파일 만들기 |
+| [doc/04_구현_명세.md](doc/04_구현_명세.md) · [doc/02_테스트_가이드.md](doc/02_테스트_가이드.md) · [doc/03_exe_배포_가이드.md](doc/03_exe_배포_가이드.md) | 구현 명세 · 내 문서로 시험하기 · Python exe 빌드와 `config.yaml` 전체 표 |
+| [plan/](plan/) | 설계서 — 구조화 추출, OCR, 문서 파서 DLL 분리, 색인 속도, 메모리 절감 등 |
+| [Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) | 문서 파서 DLL — 옵션 · 블록 형식 · OCR |
 
 ---
 
 ## 라이선스
 
-이 저장소의 코드(Python `src/` · `RAGSearchBox/` · Rust `rust/` · 스크립트 · 설명서)는 [MIT 라이선스](LICENSE)를 따른다.
-
-저장소에 들어 있지 않은 것들은 각자의 라이선스를 따른다.
+이 저장소의 코드(Rust `rust/` · Python `src/` · `RAGSearchBox/` · 스크립트 · 설명서)는 [MIT 라이선스](LICENSE)를 따른다.
+저장소에 없는 것들은 각자의 라이선스를 따른다.
 
 | 것 | 라이선스 · 위치 |
 |---|---|
 | 문서 파서 `struct_docparse.dll` | MIT — [Struct-DocParse-OCR-rust](https://github.com/kobongsoo/Struct-DocParse-OCR-rust) (pdfium · ONNX Runtime · PP-OCR 모델 포함, 그 저장소의 `third_party/README.md`) |
-| 임베딩 · 리랭커 · 답변 모델(GGUF) · OCR 모델 | 모델마다 다르다 — 배포본의 `LICENSES_MODELS.txt`. 답변 모델 중 일부(EXAONE · Kanana Nano 등)는 **비상업** 조건이라 그 모델을 쓸 때는 그 조건을 따른다 |
+| 임베딩 · 리랭커 · 답변 모델(GGUF) · OCR 모델 | 모델마다 다르다 — 배포본의 `LICENSES_MODELS.txt`. 일부 답변 모델(EXAONE · Kanana Nano 등)은 **비상업** 조건 |
 | 런타임(onnxruntime · pdfium · llama.cpp) · Rust · Python 라이브러리 | 배포본의 `LICENSES_THIRD_PARTY.txt` (`rust/gen_licenses.py` 가 빌드 때 만든다) |
 | `rust/patches/` | llama.cpp(MIT) 에 대는 패치 |

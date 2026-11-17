@@ -7,6 +7,8 @@
 #    이미 있는 파일(설정·인덱스)은 덮어쓰지 않는다.
 #
 # 사용: powershell -ExecutionPolicy Bypass -File rust\build_dist.ps1
+#       문서 파서 DLL 은 (1) 옆 폴더 Struct-DocParse-OCR-rust 에서 빌드한 것(기본, SDP_ROOT 로 위치 변경) 또는
+#       (2) GitHub Releases 묶음을 푼 폴더($env:SDP_DIST) 에서 가져온다
 # ------------------------------------------------------------------
 $ErrorActionPreference = "Stop"
 $rust = $PSScriptRoot
@@ -52,9 +54,21 @@ function Link-IfMissing($src, $dst) {
 # 2-1) 문서 파서 + OCR DLL — 별도 저장소(Struct-DocParse-OCR-rust)에서 빌드한 것을 매번 새로 넣는다(설계서 2026-11-16 §12)
 #      DLL 저장소에서 먼저: cargo build -p sdp-ffi --release  (SDP_ROOT 로 저장소 위치를 바꿀 수 있다)
 # 기본 위치 = SimpleRAG 폴더와 같은 상위 폴더의 Struct-DocParse-OCR-rust
+#      빌드하지 않고 GitHub Releases 묶음(struct_docparse-<버전>-windows-x64.zip)을 쓰려면 SDP_DIST = 그 zip 을 푼 폴더
+#      (그 안 lib\ 의 struct_docparse.dll · OCR 모델 · pdfium · onnxruntime 을 가져온다)
 $sdpRoot = if ($env:SDP_ROOT) { $env:SDP_ROOT } else { Join-Path (Split-Path $root -Parent) "Struct-DocParse-OCR-rust" }
-$sdpDll = Join-Path $sdpRoot "target\release\struct_docparse.dll"
-if (-not (Test-Path $sdpDll)) { throw "문서 파서 DLL 이 없습니다: $sdpDll — DLL 저장소에서 cargo build -p sdp-ffi --release 를 먼저 하세요" }
+if ($env:SDP_DIST) {
+    $sdpLib = Join-Path $env:SDP_DIST "lib"
+    $sdpDll = Join-Path $sdpLib "struct_docparse.dll"
+    $sdpModels = Join-Path $sdpLib "models\ocr"
+    if (-not (Test-Path $sdpDll)) { throw "문서 파서 DLL 이 없습니다: $sdpDll — SDP_DIST 는 Releases zip 을 푼 폴더(그 안에 lib\struct_docparse.dll)여야 합니다" }
+} else {
+    $sdpLib = $null
+    $sdpDll = Join-Path $sdpRoot "target\release\struct_docparse.dll"
+    $sdpModels = Join-Path $sdpRoot "models\ocr"
+    if (-not (Test-Path $sdpDll)) { throw "문서 파서 DLL 이 없습니다: $sdpDll — DLL 저장소에서 cargo build -p sdp-ffi --release 를 먼저 하거나, Releases 묶음을 풀고 SDP_DIST 에 그 폴더를 주세요" }
+}
+"문서 파서 DLL: $sdpDll"
 foreach ($d in (Join-Path $rust "target\release"), $dist) {
     try { Copy-Item $sdpDll $d -Force; "배치: struct_docparse.dll → $d" }
     catch [System.IO.IOException] { $skipped += "struct_docparse.dll"; "건너뜀(실행 중이라 잠김): struct_docparse.dll" }
@@ -64,6 +78,10 @@ foreach ($d in (Join-Path $rust "target\release"), $dist) {
 Copy-IfMissing "$py\_internal\onnxruntime\capi\onnxruntime.dll" "$dist\onnxruntime.dll"
 Copy-IfMissing "$py\_internal\onnxruntime\capi\onnxruntime_providers_shared.dll" "$dist\onnxruntime_providers_shared.dll"
 Copy-IfMissing "$py\_internal\pypdfium2_raw\pdfium.dll" "$dist\pdfium.dll"
+# Python 배포본이 없으면 Releases 묶음(SDP_DIST)의 것을 쓴다 — 같은 onnxruntime 1.29 · pdfium
+if ($sdpLib) {
+    foreach ($f in "onnxruntime.dll", "onnxruntime_providers_shared.dll", "pdfium.dll") { Copy-IfMissing "$sdpLib\$f" "$dist\$f" }
+}
 # Visual C++ 런타임 — 설치되지 않은 PC 에서도 뜨도록 exe 옆에 둔다
 foreach ($v in "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "vcomp140.dll") { Copy-IfMissing "$py\_internal\$v" "$dist\$v" }
 foreach ($sub in "runtime\llama_cpu", "runtime\llama_vulkan") { New-Item -ItemType Directory -Force "$dist\$sub" | Out-Null }
@@ -79,8 +97,8 @@ foreach ($g in "Qwen3-1.7B-Q4_K_M.gguf", "Qwen3-4B-Q4_K_M.gguf") { Link-IfMissin
 foreach ($m in "e5-small-ko", "bge-reranker-base-int8", "ocr") {
     Get-ChildItem "$py\models\$m\*" -ErrorAction SilentlyContinue | ForEach-Object { Link-IfMissing $_.FullName "$dist\models\$m\$($_.Name)" }
 }
-# OCR 모델 — Python 배포본에 없으면 문서 파서 저장소(Struct-DocParse-OCR-rust)의 models\ocr 에서(Apache-2.0, 라이선스 문서 포함)
-Get-ChildItem "$sdpRoot\models\ocr\*" -ErrorAction SilentlyContinue | ForEach-Object { Copy-IfMissing $_.FullName "$dist\models\ocr\$($_.Name)" }
+# OCR 모델 — Python 배포본에 없으면 문서 파서 저장소(Struct-DocParse-OCR-rust)의 models\ocr, 또는 Releases 묶음의 lib\models\ocr 에서(Apache-2.0, 라이선스 문서 포함)
+Get-ChildItem "$sdpModels\*" -ErrorAction SilentlyContinue | ForEach-Object { Copy-IfMissing $_.FullName "$dist\models\ocr\$($_.Name)" }
 
 # 기본 동의어 사전 — 배포 때마다 새것으로(사용자 사전 synonyms.yaml 은 건드리지 않는다)
 Copy-Item (Join-Path $root "synonyms.default.yaml") $dist -Force
