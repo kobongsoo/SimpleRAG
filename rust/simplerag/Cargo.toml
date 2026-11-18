@@ -4,6 +4,8 @@ version = "0.1.6"
 edition = "2021"
 license = "MIT"
 description = "SimpleRAG(로컬 문서 RAG) 의 Rust 판 — Python simplerag CLI 와 같은 입출력"
+# build.rs — exe 에 버전 정보(파일 버전·제품 이름·저작권·언어) 리소스를 넣는다
+build = "build.rs"
 
 [lib]
 name = "simplerag"
@@ -35,3 +37,6 @@ cfb = "0.10"
 libloading = "0.8"
 unicode-normalization = "0.1"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_WindowsProgramming", "Win32_System_Registry", "Win32_System_Memory"] }
+
+[build-dependencies]
+embed-resource = "2"

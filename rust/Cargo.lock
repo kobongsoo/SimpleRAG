@@ -3291,6 +3291,7 @@ version = "0.1.6"
 dependencies = [
  "cfb",
  "chrono",
+ "embed-resource",
  "encoding_rs",
  "fancy-regex",
  "libloading",
