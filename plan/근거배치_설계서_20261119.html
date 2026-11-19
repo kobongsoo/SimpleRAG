@@ -219,7 +219,50 @@ tr.pick td { background: var(--good-soft); }
   <li>골든 100 과 합치면 +13 / −5 (138문항, p≈0.10). 손해 쪽 증거는 없고 이득은 골든 문항에서 나온다.</li>
 </ul>
 
-<h3>4-5. 주의할 점</h3>
+<h3>4-5. 일상어 세트 100문항 — Qwen3-1.7B (2026-11-19, 0.1.7 배포 뒤)</h3>
+<p>일상어 세트를 100문항(골든 문항을 바꾼 96 + 새 4)으로 늘리고 핵심어를 붙여 다시 쟀다(<code>bench/paraphrase/make_set.py</code>, 채점 96문항).
+실험 폴더 <code>pp100_rank_1119</code> · <code>pp100_config_1119</code>.</p>
+<div class="tw"><table>
+<tr><th>배치</th><th class="n">핵심어 정답</th><th class="n">회피</th><th class="n">문서 적중</th><th class="n">새로 맞힘 / 놓침</th><th class="n">p</th><th class="n">답 길이(평균)</th></tr>
+<tr><td>rank</td><td class="n">32 / 96</td><td class="n">1</td><td class="n">85</td><td class="n">—</td><td class="n">—</td><td class="n">156자</td></tr>
+<tr><td>reverse_keepnum (지금 설정)</td><td class="n">28 / 96</td><td class="n">1</td><td class="n">85</td><td class="n">+6 / −10</td><td class="n">0.45</td><td class="n">136자</td></tr>
+</table></div>
+<ul>
+  <li><b>일상어 100문항에서는 역순이 조금 나쁜 쪽이다(유의하지 않음).</b> 앞의 42문항 부분은 14 대 14 그대로였고, 새로 더한 58문항에서 18 → 14(+2 / −6)였다.
+      유형별로는 단순 질문 28 → 21, 여러 근거 4 → 4, 계산·추론 0 → 3.</li>
+  <li><b>놓친 10문항 가운데 약 4개는 채점 규칙 탓이다.</b> 역순 답이 더 짧고(평균 156 → 136자) 근거 글을 덜 옮겨 적어,
+      뜻은 맞아도 핵심어 글자가 빠졌다(예: "1년에 1회" 대신 "매년 1회", "10인 이상" 대신 "10명 이상"). 나머지 6개는 실제로 내용 하나를 빠뜨리거나 틀렸다.</li>
+  <li>근거 문서는 100문항 모두 같았다. 모델 첫 글자 4.18 → 4.04초로 차이 없음, 답 완료는 13.4 → 10.8초(답이 짧아서).</li>
+  <li><b>골든 100 과 합치면 +15 / −11 (196문항, p≈0.56) — 전체로는 유의한 차이가 없다.</b> 골든 문항의 이득(+9 / −1)이 일상어 문항에서 이어지지 않았다.</li>
+</ul>
+<div class="callout warn">결론을 고친다: 1.7B 에서도 이득이 질문 모양에 따라 달라, "좋아진다"고 말할 근거가 약하다.
+규칙 채점은 답을 길게 옮겨 적을수록 유리해 짧아진 역순 답을 깎는 쪽으로 치우쳐 있으므로, 뜻으로 채점하는 판정(RAGAS Answer Correctness 등)으로 한 번 더 보고
+켬/끔을 정한다. 0.1.7 은 켬으로 배포됐다.</div>
+
+<h3>4-6. 뜻 채점 — Claude 판정 RAGAS (2026-11-19)</h3>
+<p>규칙 채점이 긴 답에 유리하게 치우칠 수 있어, 4개 실험(골든 100 기존·역순, 일상어 100 기존·역순)의 답 400건을 Claude 판정자 8개가 나눠 판정했다
+(<code>bench/ragas_claude.py</code>, 폴더 <code>results/ragas_golden/claude_judge_ctx</code>). 같은 문항의 두 답을 한 묶음에 A·B 로 섞어 넣어 어느 쪽이 역순인지 판정자는 모른다.
+RAGAS 4지표에 더해, 답이 정답의 핵심 사실을 모두 담고 어긋나지 않는지(<b>뜻 정답</b>, 표현이 달라도 뜻이 같으면 맞음)를 함께 판정했다.</p>
+<div class="tw"><table>
+<tr><th>세트</th><th>배치</th><th class="n">뜻 정답</th><th class="n">새로 맞힘 / 놓침</th><th class="n">p</th><th class="n">F</th><th class="n">AR</th><th class="n">CP</th><th class="n">CR</th></tr>
+<tr><td rowspan="2">골든 100</td><td>rank</td><td class="n">46</td><td class="n">—</td><td class="n">—</td><td class="n">0.729</td><td class="n">0.662</td><td class="n">0.880</td><td class="n">0.822</td></tr>
+<tr class="pick"><td>reverse_keepnum</td><td class="n">53</td><td class="n">+10 / −3</td><td class="n">0.09</td><td class="n">0.735</td><td class="n">0.661</td><td class="n">0.880</td><td class="n">0.822</td></tr>
+<tr><td rowspan="2">일상어 100</td><td>rank</td><td class="n">30</td><td class="n">—</td><td class="n">—</td><td class="n">0.593</td><td class="n">0.600</td><td class="n">0.618</td><td class="n">0.613</td></tr>
+<tr class="pick"><td>reverse_keepnum (지금 설정)</td><td class="n">36</td><td class="n">+11 / −5</td><td class="n">0.21</td><td class="n">0.595</td><td class="n">0.608</td><td class="n">0.618</td><td class="n">0.613</td></tr>
+<tr><td colspan="2"><b>합계 200문항</b></td><td class="n"><b>76 → 89</b></td><td class="n"><b>+21 / −8</b></td><td class="n"><b>0.02</b></td><td colspan="4">—</td></tr>
+</table></div>
+<ul>
+  <li><b>뜻으로 채점하면 두 세트 모두 역순이 낫다.</b> 일상어 세트에서 규칙 채점은 32 → 28 이었지만 뜻 채점은 30 → 36 으로 방향이 뒤집혔다 —
+      4-5 에서 본 대로 역순 답이 짧아 핵심어 글자가 빠졌을 뿐 뜻은 맞은 경우가 많았다.</li>
+  <li>두 세트를 합치면 +21 / −8, p=0.02 로 유의하다.</li>
+  <li>RAGAS F(근거 충실)·AR(질문 관련)은 차이가 없다(짝 부호 검정 p≈1). 지어내거나 엉뚱하게 답하는 정도는 같고, 답이 정답을 맞히는지만 달라졌다.
+      CP·CR 은 두 배치의 근거가 같아 값이 같다(근거만 보는 지표).</li>
+  <li>판정자는 Claude 한 종류다. 공용 판정 서버(qwen3.6-35b) 점수와는 섞어 비교하지 않는다.</li>
+</ul>
+<div class="callout good">결론(최종): 4-5 의 경고를 거둔다. 뜻으로 채점하면 Qwen3-1.7B 에서 역순 배치가 골든 · 일상어 모두 정답을 늘리고(합계 +21 / −8, p=0.02),
+근거 충실도·질문 관련성은 그대로다. 0.1.7 의 기본 켬(<code>reverse_context_models: [qwen3-1.7b-q4]</code>)을 유지한다.</div>
+
+<h3>4-7. 주의할 점</h3>
 <div class="callout warn">
 <ul>
   <li><b>같은 날 실행끼리만 비교했다.</b> 기존 순서(rank) 점수가 지난 실측과 달랐다:
