@@ -333,7 +333,7 @@ pub fn probe_main(args: &[String]) -> i32 {
         out.insert("load_s".into(), pyutil::jf(pyutil::round_to(t0.elapsed().as_secs_f64(), 2)));
         let body = "출장여비 규정에 따라 국내출장 숙박비 상한액은 서울특별시 70,000원, 광역시 60,000원, 그 밖의 지역 50,000원으로 하고 일비는 1일 20,000원을 지급한다. ";
         let prompt = |i: usize| super::prompts::build_prompt(super::prompts::SYSTEM_PROMPT, &super::prompts::build_user_message(
-            &format!("측정 질문 {}번 — 서울특별시 숙박비 상한액은 얼마인가요?", i), &vec![body.repeat(2); 3]));
+            &format!("측정 질문 {}번 — 서울특별시 숙박비 상한액은 얼마인가요?", i), &vec![body.repeat(2); 3], false));
         let n_tok = m.tokenize(&prompt(0), false, true).len();
         let mut times = vec![];
         for i in 0..3 {

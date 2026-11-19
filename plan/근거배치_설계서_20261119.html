@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>근거 배치 설계서</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground: #f5f7fa; --surface: #ffffff; --sunken: #eceff4; --ink: #19212d; --ink-2: #3c4656;
+  --muted: #647083; --rule: #d9dee6; --accent: #2c5aa0; --accent-soft: #e3ebf7;
+  --good: #2a7a57; --good-soft: #e2f1ea; --warn: #a8701a; --warn-soft: #f7ecd8;
+  --bad: #b0463b; --bad-soft: #f6e3e0; --brand: #e5163f;
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: "IBM Plex Mono", "D2Coding", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+    --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+    --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #11151b; --surface: #181e26; --sunken: #1f2630; --ink: #e4e8ee; --ink-2: #c2c9d3;
+  --muted: #8f9aa9; --rule: #2b3441; --accent: #86a9e3; --accent-soft: #1f2c42; --good: #6cc39a;
+  --good-soft: #17322a; --warn: #e0ad5c; --warn-soft: #3a2d17; --bad: #e58a7f; --bad-soft: #3b1f1c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body { margin: 0; padding-inline: 16px; background: var(--ground); color: var(--ink);
+  font-family: var(--sans); font-size: 15.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1px 5px; border-radius: 4px; color: var(--ink-2); }
+pre { font-family: var(--mono); font-size: 13px; background: var(--sunken); padding: 12px 14px; border-radius: 6px; overflow-x: auto; line-height: 1.55; color: var(--ink-2); }
+h1, h2, h3 { line-height: 1.3; margin: 0; text-wrap: balance; }
+.shell { max-width: 1040px; margin: 0 auto; padding: 40px 0 80px; }
+header.top { border-bottom: 1px solid var(--rule); padding-bottom: 22px; margin-bottom: 28px; }
+.eyebrow { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+h1 { font-size: 30px; margin: 6px 0 10px; }
+.lede { color: var(--ink-2); max-width: 760px; margin: 0; }
+section { margin: 40px 0; }
+h2 { font-size: 21px; margin-bottom: 12px; padding-top: 6px; }
+h3 { font-size: 16.5px; margin: 22px 0 8px; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+.toc { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 20px; }
+.toc ol { margin: 0; columns: 2; column-gap: 32px; }
+@media (max-width: 640px) { .toc ol { columns: 1; } }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; }
+.card b { display: block; margin-bottom: 4px; }
+.card .s { color: var(--muted); font-size: 14px; }
+.tw { overflow-x: auto; margin: 12px 0; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { background: var(--sunken); font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+.tag { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 10px; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.tag.w { background: var(--warn-soft); color: var(--warn); }
+.tag.e { background: var(--bad-soft); color: var(--bad); }
+.tag.g { background: var(--good-soft); color: var(--good); }
+.dec { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+.dec b.q { display: block; }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--rule); padding-top: 16px; margin-top: 50px; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.pick td { background: var(--good-soft); }
+.prompt { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 12px 0; }
+.prompt pre { margin: 0; }
+.prompt .cap { font-size: 13.5px; color: var(--muted); margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="top">
+  <div class="eyebrow">SimpleRAG · MoAI-S (Python 판 + Rust 판) · 설계서 · 2026-11-19 · 설계 확정 · 구현함(2026-11-19)</div>
+  <h1>근거 배치 — 1위 근거를 질문 바로 앞에</h1>
+  <p class="lede">답변 모델에게 근거 3개를 줄 때, 지금은 1위 → 2위 → 3위 → 질문 순서로 넣는다.
+  작은 모델은 질문 바로 앞 내용을 더 잘 쓴다는 주장이 있어 골든셋으로 재 보았다.
+  <b>Qwen3-1.7B 는 정답 46 → 54 로 좋아졌지만, Mi:dm 은 그대로이고 Qwen3.5-4B 는 62 → 56 으로 나빠졌다.</b>
+  그래서 이 배치를 모든 모델에 켜지 않고, <code>config.yaml</code> 에 적은 모델에만 켠다.
+  기본으로는 Qwen3-1.7B 하나만 적는다.</p>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">한눈에 보기</a></li>
+  <li><a href="#s2">배경 — 검색해 온 방법 검토</a></li>
+  <li><a href="#s3">측정 방법</a></li>
+  <li><a href="#s4">측정 결과</a></li>
+  <li><a href="#s5">설정 — config.yaml</a></li>
+  <li><a href="#s6">동작 규칙</a></li>
+  <li><a href="#s7">지금 구조 (조사 결과)</a></li>
+  <li><a href="#s8">고칠 파일</a></li>
+  <li><a href="#s9">영향 범위</a></li>
+  <li><a href="#s10">확인 방법</a></li>
+  <li><a href="#s11">정한 것</a></li>
+</ol></nav>
+
+<section id="s1">
+<h2>1. 한눈에 보기</h2>
+<div class="cards">
+  <div class="card"><b>무엇을</b><span class="s">근거 순서만 뒤집어 1위 근거를 질문 바로 앞에 둔다. 번호는 순위 그대로([1] = 1위).</span></div>
+  <div class="card"><b>어느 모델에</b><span class="s"><code>generation.reverse_context_models</code> 에 적은 모델만. 기본은 <code>qwen3-1.7b-q4</code> 하나 — 키가 없는 기존 PC 도 같다.</span></div>
+  <div class="card"><b>어디에</b><span class="s">질문 답변에만. 문서 개요(올린 문서 설명)는 지금 순서 그대로.</span></div>
+  <div class="card"><b>왜</b><span class="s">Qwen3-1.7B 골든 100문항 정답 46 → 54 (+9 / −1, p=0.02). 인용 번호도 그대로 맞다.</span></div>
+  <div class="card"><b>왜 모델별로</b><span class="s">Mi:dm 60 → 59 (차이 없음), Qwen3.5-4B 62 → 56 (+1 / −7, 나빠지는 쪽).</span></div>
+</div>
+<div class="prompt">
+  <div><p class="cap">지금 (모든 모델)</p>
+<pre>[근거]
+[1] 1위 근거
+[2] 2위 근거
+[3] 3위 근거
+
+[질문]
+…</pre></div>
+  <div><p class="cap">바꾼 뒤 (목록에 적힌 모델만)</p>
+<pre>[근거]
+[3] 3위 근거
+[2] 2위 근거
+[1] 1위 근거
+
+[질문]
+…</pre></div>
+</div>
+</section>
+
+<section id="s2">
+<h2>2. 배경 — 검색해 온 방법 검토</h2>
+<p>검색해 온 글은 2B 급 작은 모델의 RAG 정확도를 올리는 방법으로 두 가지를 들었다.</p>
+<div class="tw"><table>
+<tr><th>글의 주장</th><th>검토</th><th>결론</th></tr>
+<tr><td>가장 관련도 높은 1위 근거를 맨 마지막(질문 바로 앞)에 둔다.
+ 모델은 입력의 앞·끝은 잘 쓰고 가운데는 놓친다.</td>
+<td>"Lost in the Middle"(2023) 연구가 근거다. 다만 그 연구는 문서 10~30개짜리 긴 입력이었다.
+ 우리는 짧은 근거 3개(2048 토큰 안)라 효과가 작을 것으로 봤지만, 재 보니 1.7B 에서는 뚜렷했다.</td>
+<td><span class="tag g">모델별로 채택</span></td></tr>
+<tr><td>근거에 [문서1]·[문서2] 번호를 붙이고 문장마다 근거 번호를 달게 하면 환각이 70% 이상 준다.</td>
+<td>번호 붙이기와 "마지막에 근거 번호" 지시는 이미 하고 있다(<code>SYSTEM_PROMPT</code>).
+ "70%" 는 출처가 없다. 문장마다 번호를 강제하면 작은 모델이 지시문을 따라 적는 잡음이 늘 수 있다
+ (설계서 R9: 인용 강제형 지시문으로 정답률 83% → 50% 전례).</td>
+<td><span class="tag">지금 그대로</span></td></tr>
+</table></div>
+</section>
+
+<section id="s3">
+<h2>3. 측정 방법</h2>
+<ul>
+  <li><b>문항</b>: <code>dataset/golden_pdf30.jsonl</code> 골든 100문항 (sample PDF 30건)</li>
+  <li><b>인덱스</b>: <code>dist/simplerag</code> (SIMPLERAG_HOME), 근거 3개(<code>top_k: 3</code>), 리랭커 후보 10개</li>
+  <li><b>도구</b>: <code>bench/ragas_golden.py collect --ctx-order rank|reverse|reverse_keepnum</code> — 이번에 넣은 실험용 옵션.
+      제품 코드는 그대로 두고, 프롬프트 조립 함수만 바꿔 끼운다. 검색·리랭킹 결과는 같다(1.7B 두 실험의 근거 문서 100/100 일치).</li>
+  <li><b>채점</b>: <code>bench/score_rule.py</code> 규칙 지표 — 답에 핵심어(must)가 모두 들어 있으면 정답. 판정 LLM(RAGAS)은 쓰지 않았다.</li>
+  <li><b>짝 비교</b>: 같은 문항을 한쪽만 맞힌 개수(새로 맞힘 / 놓침)와 McNemar 정확검정 p 값</li>
+  <li><b>실험 폴더</b>: <code>results/ragas_golden/ord_*_1118</code>(1.7B), <code>ord_*_1119</code>(Mi:dm · Qwen3.5-4B)</li>
+</ul>
+<p>세 가지 배치를 비교했다.</p>
+<div class="tw"><table>
+<tr><th>이름</th><th>배치</th><th>번호</th></tr>
+<tr><td><code>rank</code> (지금)</td><td>[1] 1위 → [2] 2위 → [3] 3위 → 질문</td><td>순위 = 자리</td></tr>
+<tr><td><code>reverse</code></td><td>[1] 3위 → [2] 2위 → [3] 1위 → 질문</td><td>자리대로 다시 매김 (1위가 [3])</td></tr>
+<tr><td><code>reverse_keepnum</code> (채택)</td><td>[3] 3위 → [2] 2위 → [1] 1위 → 질문</td><td>순위 그대로 (1위가 [1])</td></tr>
+</table></div>
+</section>
+
+<section id="s4">
+<h2>4. 측정 결과</h2>
+
+<h3>4-1. Qwen3-1.7B — 세 배치 비교 (2026-11-18)</h3>
+<div class="tw"><table>
+<tr><th>배치</th><th class="n">핵심어 정답</th><th class="n">회피</th><th class="n">지금 대비</th><th class="n">p</th><th class="n">모델 첫 글자</th><th class="n">화면 첫 글자</th><th class="n">답 완료</th></tr>
+<tr><td>rank (지금)</td><td class="n">46</td><td class="n">1</td><td class="n">—</td><td class="n">—</td><td class="n">4.24초</td><td class="n">5.79초</td><td class="n">13.39초</td></tr>
+<tr><td>reverse</td><td class="n">56</td><td class="n">1</td><td class="n">+10 / −0</td><td class="n">0.002</td><td class="n">4.72초</td><td class="n">7.92초</td><td class="n">15.54초</td></tr>
+<tr class="pick"><td>reverse_keepnum</td><td class="n">54</td><td class="n">1</td><td class="n">+9 / −1</td><td class="n">0.02</td><td class="n">4.18초</td><td class="n">6.12초</td><td class="n">12.47초</td></tr>
+</table></div>
+<ul>
+  <li>두 역순끼리는 차이가 없다(reverse → reverse_keepnum +1 / −3, p=0.63).</li>
+  <li>시간은 중앙값이다. reverse 만 느린 것은 검색 단계까지 함께 느렸던 것(1.14 → 2.41초)이라 배치와 상관없는 PC 부하로 본다.
+      측정 중 트레이의 MoAISearch 와 그 워커가 떠 있었다.</li>
+</ul>
+
+<h3>4-2. 인용 번호 — reverse 를 고르지 않은 이유</h3>
+<div class="tw"><table>
+<tr><th>배치</th><th class="n">1위 근거의 번호를 인용</th><th class="n">첫 인용이 [1]</th><th>뜻</th></tr>
+<tr><td>rank</td><td class="n">92 ([1])</td><td class="n">92</td><td>—</td></tr>
+<tr><td>reverse</td><td class="n">30 ([3])</td><td class="n">88</td><td>모델은 자리와 상관없이 [1] 부터 단다. [1] 이 3위 근거라서 <b>화면의 출처 표시가 틀린다.</b></td></tr>
+<tr class="pick"><td>reverse_keepnum</td><td class="n">92 ([1])</td><td class="n">92</td><td>지금과 같다. 인용 정리·화면 출처 코드를 바꿀 필요가 없다.</td></tr>
+</table></div>
+
+<h3>4-3. 다른 모델 — rank vs reverse_keepnum (2026-11-19)</h3>
+<div class="tw"><table>
+<tr><th>모델</th><th class="n">rank</th><th class="n">reverse_keepnum</th><th class="n">새로 맞힘 / 놓침</th><th class="n">p</th><th class="n">1위 [1] 인용</th><th>판단</th></tr>
+<tr class="pick"><td>Qwen3-1.7B (기본 모델)</td><td class="n">46</td><td class="n">54</td><td class="n">+9 / −1</td><td class="n">0.02</td><td class="n">92 → 92</td><td><span class="tag g">켠다</span></td></tr>
+<tr><td>Mi:dm 2.0 Mini</td><td class="n">60</td><td class="n">59</td><td class="n">+2 / −3</td><td class="n">1.0</td><td class="n">94 → 93</td><td><span class="tag">차이 없음 — 끈다</span></td></tr>
+<tr><td>Qwen3.5-4B</td><td class="n">62</td><td class="n">56</td><td class="n">+1 / −7</td><td class="n">0.07</td><td class="n">36 → 28</td><td><span class="tag e">나빠지는 쪽 — 끈다</span></td></tr>
+</table></div>
+<div class="callout">작은 모델일수록 질문 바로 앞 근거에 기대는 경향이 크다는 해석과 맞는다.
+큰 모델(Qwen3.5-4B)은 1위 근거가 앞에 있을 때 더 잘 답한다. 그래서 한 가지 배치를 모든 모델에 쓰지 않는다.</div>
+
+<h3>4-4. 일상어 세트 — Qwen3-1.7B (2026-11-19, 구현 뒤)</h3>
+<p><code>dataset/paraphrase_pdf30.jsonl</code> 42문항(골든 문항을 직원이 실제로 물을 법한 말로 바꾼 것). 핵심어가 없어 원래 골든 문항(<code>origin_id</code>)의 핵심어를 붙여 같은 규칙으로 채점했다.
+원래 문항이 없는 새 문항 4개(ppn01~04)는 뺐다(38문항). 실험 폴더 <code>pp42_rank_1119</code> · <code>pp42_config_1119</code>.</p>
+<div class="tw"><table>
+<tr><th>배치</th><th class="n">핵심어 정답</th><th class="n">회피</th><th class="n">문서 적중</th><th class="n">새로 맞힘 / 놓침</th><th class="n">p</th><th class="n">1위 [1] 인용</th></tr>
+<tr><td>rank</td><td class="n">14 / 38</td><td class="n">0</td><td class="n">27</td><td class="n">—</td><td class="n">—</td><td class="n">34</td></tr>
+<tr><td>reverse_keepnum (지금 설정)</td><td class="n">14 / 38</td><td class="n">0</td><td class="n">27</td><td class="n">+4 / −4</td><td class="n">1.0</td><td class="n">31</td></tr>
+</table></div>
+<ul>
+  <li><b>일상어 질문에서는 차이가 없다.</b> 이 세트는 검색이 정답 문서를 가져온 문항이 27/38 뿐이라, 답변 단계에서 나아질 여지가 작다(문서 적중 27문항만 보면 13 대 13).</li>
+  <li>근거 문서는 42문항 모두 같았다 — 검색은 그대로이고 모델에 넣는 순서만 바뀐다.</li>
+  <li>골든 100 과 합치면 +13 / −5 (138문항, p≈0.10). 손해 쪽 증거는 없고 이득은 골든 문항에서 나온다.</li>
+</ul>
+
+<h3>4-5. 주의할 점</h3>
+<div class="callout warn">
+<ul>
+  <li><b>같은 날 실행끼리만 비교했다.</b> 기존 순서(rank) 점수가 지난 실측과 달랐다:
+      1.7B 51(11-13) → 46 (+9 / −14), Mi:dm 55 → 60 (+10 / −5), Qwen3.5-4B 60 → 62 (+9 / −7).
+      그 사이 코드 변경이나 실행마다의 흔들림으로 보이며, 이번 결론은 같은 날 짝지은 비교에서 나왔다.</li>
+  <li><b>골든셋 하나, 모델 셋</b>만 재었다. Kanana·EXAONE·0.6B 등 다른 모델은 재지 않았으므로 기본으로 끈다.</li>
+  <li>측정은 <b>Python 판</b>으로 했다. Rust 판은 같은 프롬프트를 만들도록 구현한 뒤 글자 단위로 맞는지 확인한다(10장).</li>
+</ul></div>
+</section>
+
+<section id="s5">
+<h2>5. 설정 — config.yaml</h2>
+<p><code>generation:</code> 절에 모델 별칭 목록을 하나 더한다. 저장소의 <code>config.yaml</code>(배포본 원본)에는 Qwen3-1.7B 를 기본으로 적는다.</p>
+<pre>generation:
+  ...
+  reverse_context_models: [qwen3-1.7b-q4]
+                                # 근거를 거꾸로 넣을 답변 모델 별칭 목록 — [3] 3위 → [2] 2위 → [1] 1위 → [질문]
+                                #   1위 근거가 질문 바로 앞에 오고, 번호는 순위 그대로라 인용 번호·화면 출처는 같다.
+                                #   골든 100문항(2026-11-18~19, 규칙 지표): Qwen3-1.7B 46 → 54(+9/−1, p=0.02),
+                                #   Mi:dm 2.0 Mini 60 → 59(차이 없음), Qwen3.5-4B 62 → 56(+1/−7, 나빠짐) → 모델별로만 켠다.
+                                #   빈 목록 [] 이면 모든 모델이 지금처럼 1위부터 넣는다.
+                                #   ⚠️ 목록에 모델을 더하려면 골든셋으로 다시 재 보고 넣을 것</pre>
+<ul>
+  <li><b>키 이름</b>: <code>reverse_context_models</code> (11장 ③)</li>
+  <li><b>키가 없을 때</b>: 코드 기본값도 <code>[qwen3-1.7b-q4]</code> 다(11장 ①). 그래서 설치 파일이 config.yaml 을 덮어쓰지 않는 기존 PC 도 업데이트만으로 켜진다.
+      끄려면 <code>reverse_context_models: []</code> 를 적는다. 저장소 config.yaml 의 값과 코드 기본값을 늘 같게 둔다.</li>
+  <li><b>값</b>: 모델 별칭 목록. <code>generation.model</code> 과 같은 별칭 규칙(소문자 영숫자 · <code>.</code> · <code>-</code>, 64자까지)을 따른다.
+      받기로 더한 모델(<code>models/&lt;별칭&gt;.model.json</code>)의 별칭도 적을 수 있다.</li>
+  <li><b>모델 선택은 건드리지 않는다</b>: <code>generation.model</code> 줄은 그대로다. 설정 &gt; 모델에서 다른 모델로 바꾸면 그 모델이 목록에 없으므로 자동으로 지금 배치로 돌아간다.</li>
+</ul>
+</section>
+
+<section id="s6">
+<h2>6. 동작 규칙</h2>
+<ol>
+  <li>근거를 받은 생성기가 <b>지금 답하는 모델의 별칭</b>이 목록에 있는지 본다. 비교는 소문자·앞뒤 공백 제거 후 같은지로 한다.</li>
+  <li><b>질문 답변일 때만</b> 뒤집는다 — 생성기에 지시문을 따로 넘기지 않은 호출(<code>system = None</code>, 설정의 답변 지시문을 쓰는 경우)이다.
+      문서 개요처럼 지시문을 따로 넘긴 호출(<code>Some(OVERVIEW_SYSTEM)</code>)은 목록과 상관없이 지금 순서다(11장 ②).</li>
+  <li>뒤집을 때는 근거 순서만 바꾼다. 각 근거의 번호는 순위 번호를 그대로 쓴다: <code>[n] n위 … [1] 1위</code>.</li>
+  <li>표 펴기(<code>flatten_tables</code>)·근거 줄이기(n_ctx 넘칠 때 가장 긴 근거를 20%씩 깎기)는 지금과 같다. 순서만 다르다.</li>
+  <li>목록에 없으면, 또는 <code>[]</code> 이면 지금과 글자 하나까지 같은 프롬프트를 만든다. 키가 없으면 <code>[qwen3-1.7b-q4]</code> 로 본다.</li>
+  <li>모델을 정하는 방식은 그대로다: <code>generation.model</code>, 정밀 모드, 명령의 <code>--model</code> 로 한 번 바꾸기 — 어느 경로든 <b>실제로 답하는 모델</b>의 별칭으로 판단한다.</li>
+</ol>
+<p><b>잘못된 값</b>은 다른 설정과 같은 방식으로 다룬다(Python <code>settings.py</code> 스키마 · Rust 판 설정 검사표): 목록이 아니거나 별칭 규칙에 어긋나는 항목이 있으면
+<b>설정 오류</b>로 알리고 시작하지 않는다(어느 항목이 틀렸는지 오류문에 밝힌다). 값을 비워 두면(<code>reverse_context_models:</code>) 코드 기본값을 쓴다.
+목록에 적힌 별칭이 설치돼 있지 않은 것은 오류가 아니다(그 모델을 고르지 않으면 쓰이지 않을 뿐).</p>
+</section>
+
+<section id="s7">
+<h2>7. 지금 구조 (조사 결과)</h2>
+<div class="tw"><table>
+<tr><th>할 일</th><th>Python 판</th><th>Rust 판</th></tr>
+<tr><td>근거에 번호를 붙여 사용자 메시지를 만든다</td>
+<td><code>src/simplerag/generate/prompts.py</code> <code>build_user_message(query, chunks)</code></td>
+<td><code>rust/simplerag/src/generate/prompts.rs:47</code> <code>build_user_message(query, chunks)</code></td></tr>
+<tr><td>답변 생성 — 모델 별칭(<code>self.alias</code>)을 안다</td>
+<td><code>generate/gguf_generator.py</code> <code>_fit_prompt</code> (160·179행에서 호출)</td>
+<td><code>generate/generator.rs</code> (212·233행에서 호출)</td></tr>
+<tr><td>백엔드 고르기용 속도 측정(같은 길이 프롬프트)</td>
+<td><code>generate/backend.py:492</code></td>
+<td><code>generate/backend.rs:335</code></td></tr>
+<tr><td>설정 읽기</td>
+<td><code>src/simplerag/config.py</code> — <code>_YAML.get("generation.…")</code></td>
+<td><code>rust/simplerag/src/config.rs</code> — <code>Config</code> 필드 + 검사표(<code>("generation", vec![…])</code>, <code>enum Check</code>)</td></tr>
+<tr><td>문서 개요(올린 문서 설명)</td>
+<td>—</td>
+<td><code>app.rs:400~</code> — <code>generator.stream(…, Some(OVERVIEW_SYSTEM))</code>, 같은 <code>[근거]/[질문]</code> 틀</td></tr>
+<tr><td>배포본 config.yaml</td>
+<td colspan="2">저장소 <code>config.yaml</code> → <code>dist/simplerag</code> → <code>dist-rust</code> (<code>build_dist.ps1</code> 은 <b>없을 때만</b> 복사) → 설치 파일 <code>installer.iss</code> 도 <code>onlyifdoesntexist</code></td></tr>
+</table></div>
+<div class="callout">조립 함수는 모델 이름을 모르고, 모델 이름은 생성기가 안다.
+그래서 <b>생성기가 "뒤집을지"를 정해 조립 함수에 넘긴다</b>. 조립 함수가 설정을 직접 읽게 하지 않는다 — 그러면 워밍업 측정이나 다른 호출자까지 의도치 않게 바뀐다.</div>
+</section>
+
+<section id="s8">
+<h2>8. 고칠 파일</h2>
+<div class="tw"><table>
+<tr><th>파일</th><th>바꿀 것</th></tr>
+<tr><td><code>config.yaml</code></td><td><code>generation.reverse_context_models: [qwen3-1.7b-q4]</code> 줄과 설명 주석 추가 (5장). <code>generation.model</code> 은 건드리지 않는다.</td></tr>
+<tr><td><code>src/simplerag/config.py</code></td><td><code>REVERSE_CONTEXT_MODELS</code> — 목록을 읽어 소문자·공백 정리한 집합. 키가 없으면 <code>{"qwen3-1.7b-q4"}</code>.</td></tr>
+<tr><td><code>src/simplerag/generate/prompts.py</code></td><td><code>build_user_message(query, chunks, reverse=False)</code> — reverse 면 <code>[n] n위 … [1] 1위</code>. 기본값 False 라 다른 호출자는 그대로.</td></tr>
+<tr><td><code>src/simplerag/generate/gguf_generator.py</code></td><td><code>stream</code> 에서 <code>reverse = system is None and self.alias in config.REVERSE_CONTEXT_MODELS</code> 를 정해 <code>_fit_prompt</code> 두 곳의 조립 호출로 넘긴다.</td></tr>
+<tr><td><code>rust/simplerag/src/config.rs</code></td><td><code>Config.reverse_context_models: Vec&lt;String&gt;</code>(키가 없으면 <code>["qwen3-1.7b-q4"]</code>), 검사표 <code>("reverse_context_models", Check::AliasList)</code>, <code>enum Check</code> 에 <code>AliasList</code> 추가(각 항목에 <code>Alias</code> 규칙).</td></tr>
+<tr><td><code>rust/simplerag/src/generate/prompts.rs</code></td><td><code>build_user_message(query, chunks, reverse: bool)</code> — Python 과 글자까지 같게.</td></tr>
+<tr><td><code>rust/simplerag/src/generate/generator.rs</code></td><td><code>stream</code> 에서 <code>reverse = system.is_none() &amp;&amp; 목록에 self.alias</code> 를 정해 <code>fit_prompt</code> 의 212·233행 조립 호출로 넘긴다.
+ 개요(<code>app.rs:450</code>, <code>Some(OVERVIEW_SYSTEM)</code>)는 그래서 바뀌지 않는다.</td></tr>
+<tr><td><code>generate/backend.py</code> · <code>backend.rs</code></td><td>워밍업 측정 호출에 <code>False</code> — 길이가 같아 측정값은 그대로.</td></tr>
+<tr><td><code>bench/ragas_golden.py</code></td><td><code>--ctx-order</code> 옵션을 새 설정으로 바꾼다: <code>rank</code> = 빈 목록, <code>reverse_keepnum</code> = 그 모델만 목록. 번호까지 뒤집는 <code>reverse</code> 는 재현용으로만 남긴다.</td></tr>
+<tr><td><code>bench/test_config_yaml.py</code> · Rust 시험</td><td>새 키 읽기·잘못된 값 경고, 조립 결과가 Python·Rust 같은지(10장).</td></tr>
+</table></div>
+<p>모든 새 함수·바뀐 함수에는 저장소 규칙대로 한글 헤더 주석을 단다.</p>
+</section>
+
+<section id="s9">
+<h2>9. 영향 범위</h2>
+<div class="tw"><table>
+<tr><th>부분</th><th>영향</th></tr>
+<tr><td>검색·리랭킹·화면의 근거 목록</td><td>없음. 모델에 보여 주는 순서만 바뀐다.</td></tr>
+<tr><td>인용 번호 정리(없는 번호·중복 지우기)</td><td>없음. 번호가 순위 그대로라 [1] 은 여전히 1위 근거다.</td></tr>
+<tr><td>지시문 되뱉기 지우기</td><td>없음. 지시문(system) 글은 그대로다.</td></tr>
+<tr><td>멀티턴(앞 질문 이어 붙이기)</td><td>없음. 검색 질의만 바뀌는 기능이다.</td></tr>
+<tr><td>속도</td><td>근거 길이가 같아 프롬프트 길이가 같다. 측정에서도 모델 첫 글자 4.24 → 4.18초로 차이 없음.</td></tr>
+<tr><td>문서 개요(올린 문서 설명, Rust 판)</td><td>없음. 지시문을 따로 넘기는 호출이라 지금 순서 그대로다(11장 ②).</td></tr>
+<tr><td>예열(워밍업) 생성</td><td>지시문 없이 부르므로 1.7B 면 뒤집힌 순서로 예열한다. 결과를 버리는 호출이라 영향 없음.</td></tr>
+<tr><td>이미 설치된 PC</td><td>config.yaml 에 키가 없어도 코드 기본값으로 켜진다. 기본 모델(1.7B)을 쓰는 사용자는 업데이트만으로 바뀐다(11장 ①).</td></tr>
+</table></div>
+</section>
+
+<section id="s10">
+<h2>10. 확인 방법</h2>
+<ol>
+  <li><b>조립 결과 시험</b>: 근거 3개·1개·0개, 표가 든 근거로 Python·Rust 의 <code>build_user_message</code> 결과가 글자까지 같은지. reverse=False 결과는 지금 함수와 같아야 한다.</li>
+  <li><b>설정 시험</b>: 키 없음 / <code>[]</code> / <code>[qwen3-1.7b-q4]</code> / 대문자 별칭 / 목록 아닌 값 / 규칙 어긋난 별칭.</li>
+  <li><b>골든 재현</b>: Python 판으로 1.7B 골든 100문항을 한 번 더 돌려 54 근처(같은 날 rank 대비 +8 이상)가 나오는지.
+      Rust 판(<code>simplerag-rs</code>)으로도 같은 문항을 돌려 답이 Python 과 같은지 확인한다.</li>
+  <li><b>다른 모델 그대로</b>: Mi:dm 으로 몇 문항을 돌려 프롬프트가 지금과 같은지(로그 또는 시험).</li>
+  <li><b>개요 그대로</b>: 1.7B 로 문서 개요를 만들 때 프롬프트가 지금과 같은지(<code>Some(OVERVIEW_SYSTEM)</code> 경로 시험).</li>
+  <li><b>화면 확인</b>: MoAISearch 에서 질문해 답의 [1] 이 1위 근거를 가리키는지.</li>
+  <li>(선택) 일반어 세트(<code>paraphrase_pdf30</code>, 42문항)는 핵심어가 없어 규칙 채점이 안 된다. 원하시면 RAGAS 판정 서버로 채점한다.</li>
+</ol>
+</section>
+
+<section id="s11">
+<h2>11. 정한 것 (2026-11-19)</h2>
+<div class="dec"><b class="q">① config.yaml 에 키가 없을 때 — 코드 기본값도 <code>[qwen3-1.7b-q4]</code></b>
+기존 사용자 PC 는 설치 파일이 config.yaml 을 덮어쓰지 않아 새 키가 없다. 코드 기본값을 저장소 config.yaml 과 같게 두어,
+업데이트만으로 기본 모델 사용자가 좋아지게 한다. 끄려면 <code>reverse_context_models: []</code> 를 적는다.
+<br><span class="tag">고른 것 외</span> 빈 목록(기본 끔) — 새로 설치한 PC 와 줄을 적은 PC 만 켜진다.</div>
+
+<div class="dec"><b class="q">② 질문 답변에만 적용 — 문서 개요는 지금 순서</b>
+개요는 같은 문서의 앞부분 조각들로 3~5문장 설명을 쓰는 글이라 순위보다 문서 순서가 중요하고, 재지도 않았다.
+생성기에 지시문을 따로 넘기지 않은 호출(<code>system = None</code>)만 뒤집어 개요(<code>Some(OVERVIEW_SYSTEM)</code>)와 나눈다.
+<br><span class="tag">고른 것 외</span> 개요에도 적용.</div>
+
+<div class="dec"><b class="q">③ 키 이름 — <code>generation.reverse_context_models</code></b></div>
+</section>
+
+<footer>측정 자료: <code>results/ragas_golden/ord_rank_1118</code> · <code>ord_reverse_1118</code> · <code>ord_reverse_keepnum_1118</code> ·
+<code>ord_midm_rank_1119</code> · <code>ord_midm_reverse_keepnum_1119</code> · <code>ord_q35_4b_rank_1119</code> · <code>ord_q35_4b_reverse_keepnum_1119</code>
+— 채점 <code>bench/score_rule.py</code>, 측정 도구 <code>bench/ragas_golden.py --ctx-order</code>.</footer>
+</div>
+</body>
+</html>

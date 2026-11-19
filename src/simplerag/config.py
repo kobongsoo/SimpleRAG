@@ -506,6 +506,13 @@ else:
     _nb = str(_YAML.get("generation.neighbors", "auto"))
     NEIGHBORS = (_nb == "1") if _nb in ("0", "1") else (DEFAULT_GEN_MODEL in NEIGHBOR_MODELS)
 
+# 근거를 거꾸로 넣을 답변 모델(generation.reverse_context_models, 근거배치 설계서 20261119) — Rust 판 config.rs 와 같다.
+#   목록에 든 모델이 질문에 답할 때만 [3] 3위 → [2] 2위 → [1] 1위 → [질문] 순서로 넣는다(번호는 순위 그대로).
+#   골든 100문항: Qwen3-1.7B 46 → 54 · Mi:dm 60 → 59 · Qwen3.5-4B 62 → 56 → 1.7B 만 기본으로 켠다.
+#   줄이 없으면(설치 파일이 덮어쓰지 않는 기존 config.yaml) 아래 기본값, [] 이면 모두 끈다
+REVERSE_CONTEXT_DEFAULT = ("qwen3-1.7b-q4",)
+REVERSE_CONTEXT_MODELS = frozenset(_YAML.get("generation.reverse_context_models", REVERSE_CONTEXT_DEFAULT))
+
 GEN_THREADS = 8             # prefill 이 8스레드에서 가장 빠름(REPORT §6)
 GEN_N_CTX = 2048            # top-3 x 128토큰이면 충분. 크게 잡을수록 손해
 GEN_N_BATCH = 512

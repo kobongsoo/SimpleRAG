@@ -97,6 +97,31 @@ def _alias(v):
 
 
 #------------------------------------------------------------------
+# 모델 별칭 목록 검사 — 근거 배치(generation.reverse_context_models)
+#=> YAML 목록([a, b])만 받고, 각 항목은 _alias 와 같은 규칙으로 본다.
+#    1) 목록이 아니면 오류 — 별칭 하나만 쓰더라도 [qwen3-1.7b-q4] 처럼 대괄호로 쓴다
+#    2) 항목마다 소문자·앞뒤 공백 정리, 규칙에 어긋나면 오류
+#    3) 빈 목록 [] 은 "모든 모델 끔" 이라 그대로 받는다
+#
+# -in: v = 값
+#
+# -out: (소문자 별칭 목록, 오류문 또는 None)
+# -out: error = 없음 (잘못된 값은 오류문으로 돌려준다)
+#------------------------------------------------------------------
+def _alias_list(v):
+    if not isinstance(v, list):
+        return v, "모델 별칭 목록(예: [qwen3-1.7b-q4])이어야 합니다"
+    out = []
+    for item in v:
+        s, err = _alias(item)
+        # 한 항목이라도 틀리면 어느 값이 틀렸는지 알려 준다
+        if err:
+            return v, "'{}' — {}".format(item, err)
+        out.append(s)
+    return out, None
+
+
+#------------------------------------------------------------------
 # 참/거짓 검사
 #
 # -in: v = 값
@@ -281,6 +306,8 @@ SCHEMA = {
         "precision": _bool,
         # 근거에 이웃 청크 붙이기 — auto(모델마다, 기본) | on | off
         "neighbors": _rerank_mode,
+        # 근거를 거꾸로(1위가 질문 바로 앞) 넣을 답변 모델 별칭 목록 — 근거배치 설계서 20261119
+        "reverse_context_models": _alias_list,
         "multiturn": _bool,
         # Parent-Child 실험 A — sLLM 에 청크 대신 그 청크의 절(부모)을 넣는다(재설계서 §12)
         "parent": _parent_mode,                     # off | section — YAML 의 off(=false)도 받는다

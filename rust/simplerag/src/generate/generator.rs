@@ -205,11 +205,12 @@ impl Generator {
 
     //------------------------------------------------------------------
     // 컨텍스트에 맞춰 프롬프트 만들기 — 넘치면 가장 긴 근거를 20%씩 깎는다
+    //   reverse = 근거를 거꾸로(1위가 질문 바로 앞) — build_user_message 로 그대로 넘긴다(Python _fit_prompt 와 같다)
     //------------------------------------------------------------------
-    fn fit_prompt(&self, m: &Model, system: &str, query: &str, chunks: &[String], max_tokens: usize) -> String {
+    fn fit_prompt(&self, m: &Model, system: &str, query: &str, chunks: &[String], max_tokens: usize, reverse: bool) -> String {
         let budget = std::cmp::max(128, m.n_ctx as i64 - max_tokens as i64 - 16) as usize;
         let mut texts: Vec<String> = chunks.to_vec();
-        let mut prompt = build_chat_prompt(system, &build_user_message(query, &texts), &self.alias);
+        let mut prompt = build_chat_prompt(system, &build_user_message(query, &texts, reverse), &self.alias);
         if pyutil::clen(&prompt) <= budget {
             return prompt;
         }
@@ -230,7 +231,7 @@ impl Generator {
                 break;
             }
             texts[i] = pyutil::head(&texts[i], cut).to_string();
-            prompt = build_chat_prompt(system, &build_user_message(query, &texts), &self.alias);
+            prompt = build_chat_prompt(system, &build_user_message(query, &texts, reverse), &self.alias);
         }
         prompt
     }
@@ -249,8 +250,12 @@ impl Generator {
         let mut u = self.lock_model()?;
         let m = u.m();
         let n_out = max_tokens.unwrap_or(cfg().gen_max_tokens as usize);
+        // 근거 배치(근거배치 설계서 20261119) — 질문 답변(지시문을 따로 받지 않은 호출)이고 이 모델이
+        //   generation.reverse_context_models 에 있을 때만 1위를 질문 바로 앞에 둔다.
+        //   지시문을 따로 받은 호출(문서 개요 OVERVIEW_SYSTEM)은 문서 순서가 중요해 그대로 둔다
+        let reverse = system.is_none() && cfg().reverse_context_models.iter().any(|a| a == &self.alias);
         let sys = system.map(|s| s.to_string()).unwrap_or_else(active_system_prompt);
-        let prompt = self.fit_prompt(m, &sys, query, chunks, n_out);
+        let prompt = self.fit_prompt(m, &sys, query, chunks, n_out, reverse);
         self.run_prompt(m, &prompt, n_out, None, on_piece)
     }
 

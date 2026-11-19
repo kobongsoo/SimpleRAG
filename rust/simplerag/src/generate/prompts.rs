@@ -43,12 +43,24 @@ pub fn active_system_prompt() -> String {
 
 //------------------------------------------------------------------
 // 사용자 메시지 — 근거에 번호를 매긴다(설정이 켜져 있으면 표를 평문으로 편다)
+//=> 번호는 순위 그대로([1] = 1위). reverse 면 놓는 순서만 뒤집어 1위를 질문 바로 앞에 둔다:
+//   [3] 3위 → [2] 2위 → [1] 1위 → [질문]. 작은 모델(Qwen3-1.7B)이 질문 바로 앞 근거를 더 잘 쓴다
+//   (골든 100문항 46 → 54, 근거배치 설계서 20261119). Python prompts.build_user_message 와 글자까지 같다.
+//
+// -in: query = 질문 / chunks = 근거(순위 순) / reverse = true 면 1위가 맨 뒤(false = 종전과 같다)
+//
+// -out: 사용자 메시지 본문
+// -out: error = 없음
 //------------------------------------------------------------------
-pub fn build_user_message(query: &str, chunks: &[String]) -> String {
-    let blocks: Vec<String> = chunks.iter().enumerate().map(|(i, c)| {
+pub fn build_user_message(query: &str, chunks: &[String], reverse: bool) -> String {
+    let mut blocks: Vec<String> = chunks.iter().enumerate().map(|(i, c)| {
         let c = if cfg().flatten_tables { super::tableflat::flatten_tables(c) } else { c.clone() };
         format!("[{}] {}", i + 1, c)
     }).collect();
+    // 번호는 이미 순위대로 붙었다 — 뒤집을 때는 놓는 순서만 바꾼다
+    if reverse {
+        blocks.reverse();
+    }
     format!("[근거]\n{}\n\n[질문]\n{}", blocks.join("\n\n"), query)
 }
 
@@ -490,5 +502,16 @@ mod tests {
         let (b, c) = parse_answer("**답** 입니다 [2][1]", Some(3));
         assert_eq!(b, "답 입니다 [2][1]");
         assert_eq!(c, vec![1, 2]);
+    }
+
+    // 근거 배치 — Python bench/test_ctx_order.py 와 같은 입력·기대 글(두 판이 글자까지 같아야 한다)
+    #[test]
+    fn ctx_order() {
+        let chunks: Vec<String> = ["가 근거", "나 근거", "다 근거"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(build_user_message("질문?", &chunks, false),
+                   "[근거]\n[1] 가 근거\n\n[2] 나 근거\n\n[3] 다 근거\n\n[질문]\n질문?");
+        assert_eq!(build_user_message("질문?", &chunks, true),
+                   "[근거]\n[3] 다 근거\n\n[2] 나 근거\n\n[1] 가 근거\n\n[질문]\n질문?");
+        assert_eq!(build_user_message("질문?", &["하나".to_string()], true), "[근거]\n[1] 하나\n\n[질문]\n질문?");
     }
 }

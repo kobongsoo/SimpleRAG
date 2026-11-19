@@ -148,16 +148,17 @@ class GgufGenerator(Generator):
     # -in: query      = 사용자 질문
     # -in: chunks     = 근거 텍스트 목록
     # -in: max_tokens = 생성할 답변 토큰 상한(이만큼 자리를 비워둬야 한다)
+    # -in: reverse    = True 면 근거를 거꾸로(1위가 질문 바로 앞) — build_user_message 로 그대로 넘긴다
     #
     # -out: prompt = n_ctx 안에 들어가는 프롬프트 문자열
     # -out: error = 없음 (아무리 잘라도 안 들어가면 최선의 시도를 그대로 반환)
     #------------------------------------------------------------------
-    def _fit_prompt(self, system, query, chunks, max_tokens):
+    def _fit_prompt(self, system, query, chunks, max_tokens, reverse=False):
         # 답변용 자리 + 여유(BOS/특수토큰 등)를 뺀 나머지가 프롬프트 예산
         budget = max(128, self.n_ctx - max_tokens - 16)
 
         texts = list(chunks)
-        prompt = build_chat_prompt(system, build_user_message(query, texts), self.alias)
+        prompt = build_chat_prompt(system, build_user_message(query, texts, reverse), self.alias)
 
         # 싼 검사 — 한글/영문 어느 쪽이든 1토큰이 1자보다 짧아지진 않으므로
         # '글자 수 <= 예산'이면 토큰 수도 반드시 예산 이하다. 대부분의 질의가
@@ -176,7 +177,7 @@ class GgufGenerator(Generator):
             if cut < 40:
                 break
             texts[i] = texts[i][:cut]
-            prompt = build_chat_prompt(system, build_user_message(query, texts), self.alias)
+            prompt = build_chat_prompt(system, build_user_message(query, texts, reverse), self.alias)
 
         return prompt
 
@@ -205,9 +206,13 @@ class GgufGenerator(Generator):
         self.ensure_loaded()
 
         n_out = max_tokens or config.GEN_MAX_TOKENS
+        # 근거 배치(근거배치 설계서 20261119) — 질문 답변(지시문을 따로 받지 않은 호출)이고
+        #   이 모델이 generation.reverse_context_models 에 있을 때만 1위를 질문 바로 앞에 둔다.
+        #   지시문을 따로 받은 호출(문서 개요 등)은 문서 순서가 중요해 그대로 둔다
+        reverse = system is None and self.alias in config.REVERSE_CONTEXT_MODELS
         # 긴 근거가 들어와도 컨텍스트를 넘겨 죽지 않게 맞춰준다
         # 지시문은 설정에서 고른다(계획서 1-3 실험) — 기본 V0 는 종전과 글자까지 같다
-        prompt = self._fit_prompt(system or active_system_prompt(), query, chunks, n_out)
+        prompt = self._fit_prompt(system or active_system_prompt(), query, chunks, n_out, reverse)
 
         self.last_note = None
         # 남길 답 — 반복·상한으로 잘라 낸 뒤의 글. 이미 흘려보낸 조각보다 짧을 수 있다(파이프라인이 이것을 쓴다)

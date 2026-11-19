@@ -78,19 +78,29 @@ def active_system_prompt(name=None):
 #------------------------------------------------------------------
 # 사용자 메시지 조립
 #=> [근거] 블록 + [질문] 형태. 근거에 번호를 매겨 모델이 출처를 표기할 수 있게 한다.
+#    1) 표가 든 근거는 설정에 따라 평문으로 편다
+#    2) 근거마다 순위 번호를 붙인다 — [1] 이 1위
+#    3) reverse 면 순서만 뒤집어 1위를 질문 바로 앞에 둔다: [3] 3위 → [2] 2위 → [1] 1위
+#       작은 모델(Qwen3-1.7B)은 질문 바로 앞 근거를 더 잘 쓴다(골든 100문항 46 → 54, 근거배치 설계서 20261119).
+#       번호는 순위 그대로라 인용 번호 [1] 은 여전히 1위 근거를 가리킨다.
 #
-# -in: query  = 사용자 질문
-# -in: chunks = 검색된 청크 텍스트 목록(순위 순)
+# -in: query   = 사용자 질문
+# -in: chunks  = 검색된 청크 텍스트 목록(순위 순)
+# -in: reverse = True 면 1위가 맨 뒤(질문 바로 앞). 기본 False = 1위부터(종전과 글자까지 같다)
 #
 # -out: user_msg = 사용자 메시지 본문
+# -out: error = 없음
 #------------------------------------------------------------------
-def build_user_message(query, chunks):
+def build_user_message(query, chunks, reverse=False):
     # 표가 든 근거는 "머리글: 값" 행 평문으로 펴서 넣는다(계획서 3-3).
     #   색인은 건드리지 않고 모델에 보여 줄 때만 바꾸므로 검색 결과는 그대로다.
     if config.FLATTEN_TABLES:
         from ..tableflat import flatten_tables
         chunks = [flatten_tables(c) for c in chunks]
+    # 번호는 먼저 순위대로 매기고, 뒤집을 때는 놓는 순서만 바꾼다
     blocks = ["[{}] {}".format(i + 1, c) for i, c in enumerate(chunks)]
+    if reverse:
+        blocks.reverse()
     return "[근거]\n" + "\n\n".join(blocks) + "\n\n[질문]\n" + query
 
 

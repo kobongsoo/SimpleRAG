@@ -144,6 +144,10 @@ pub fn model_runtime(alias: &str) -> Option<&'static str> {
     extra_models().iter().find(|m| m.0 == alias).map(|m| m.4).filter(|r| !r.is_empty())
 }
 
+// 근거를 거꾸로 넣을 답변 모델 — config.yaml 에 generation.reverse_context_models 줄이 없을 때의 기본값.
+//   골든 100문항(2026-11-18~19): Qwen3-1.7B 46 → 54 · Mi:dm 60 → 59 · Qwen3.5-4B 62 → 56 → 1.7B 만(Python config.py 와 같다)
+pub const REVERSE_CONTEXT_DEFAULT: &[&str] = &["qwen3-1.7b-q4"];
+
 // 고정 상수(Python config.py 와 같은 값 — 실측 근거는 원본 주석 참고)
 pub const EMBED_DIM: usize = 384;
 pub const PASSAGE_PREFIX: &str = "passage: ";
@@ -241,6 +245,9 @@ pub struct Config {
     pub prompt: String,
     pub system_prompt_text: String,
     pub flatten_tables: bool,
+    // 근거를 거꾸로(1위가 질문 바로 앞) 넣을 답변 모델 별칭(generation.reverse_context_models) — 근거배치 설계서 20261119.
+    //   줄이 없으면 REVERSE_CONTEXT_DEFAULT, [] 이면 모두 끔. 질문 답변에만 쓴다(generator.rs stream)
+    pub reverse_context_models: Vec<String>,
     // 지시문 되뱉기 거르기(generation.echo_filter, 기본 끔) — 켜면 화면 첫 글자가 약 2초 늦어진다
     pub echo_filter: bool,
     pub parent_mode: String,
@@ -533,6 +540,11 @@ fn build() -> Result<Config, ConfigError> {
         Some(v) => v != "0",
         None => pick_bool(&y, "generation.flatten_tables", false),
     };
+    // 근거 배치 — 목록은 검사기(Check::AliasList)가 소문자 별칭을 쉼표로 이어 둔 글로 넣는다(별칭엔 쉼표가 없다)
+    let reverse_context_models: Vec<String> = match y.get("generation.reverse_context_models") {
+        Some(SVal::Str(s)) => s.split(',').filter(|a| !a.is_empty()).map(|a| a.to_string()).collect(),
+        _ => REVERSE_CONTEXT_DEFAULT.iter().map(|a| a.to_string()).collect(),
+    };
     // 지시문 되뱉기 거르기 — 기본 끔. 켜면 스트리밍 출력기가 되뱉기인지 판정하려고 첫 문장(최대 56자)을
     //   붙들어 화면 첫 글자가 TTFT 보다 약 2초 늦어진다(골든셋 100문항 실측 2026-10-26). Python 판과 같은 규칙
     let echo_filter = match env("SIMPLERAG_ECHO_FILTER") {
@@ -645,6 +657,7 @@ fn build() -> Result<Config, ConfigError> {
         prompt,
         system_prompt_text,
         flatten_tables,
+        reverse_context_models,
         echo_filter,
         parent_mode,
         parent_max_tokens,
@@ -779,6 +792,8 @@ enum Check {
     Threads,
     // 모델 별칭 — 소문자 영숫자 · '.' · '-' 만(64자까지)
     Alias,
+    // 모델 별칭 목록 — YAML 목록만, 항목마다 Alias 규칙(근거 배치 generation.reverse_context_models)
+    AliasList,
 }
 
 // 섹션 → 키 → 검사기. 여기에 없는 키는 오타로 보고 오류를 낸다
@@ -844,6 +859,7 @@ fn schema() -> Vec<(&'static str, Vec<(&'static str, Check)>)> {
             ("echo_filter", Check::Bool),
             ("precision", Check::Bool),
             ("neighbors", Check::RerankMode),
+            ("reverse_context_models", Check::AliasList),
             ("multiturn", Check::Bool),
             ("parent", Check::ParentMode),
             ("parent_max_tokens", Check::Int(64, 1500)),
@@ -955,6 +971,24 @@ fn run_check(ch: &Check, v: &Y) -> Result<Option<SVal>, String> {
             } else {
                 Err("모델 별칭(예: qwen3-1.7b-q4)이어야 합니다".into())
             }
+        }
+        Check::AliasList => {
+            // 목록만 받는다 — 별칭 하나여도 [qwen3-1.7b-q4] 처럼 대괄호로 쓴다(settings.py _alias_list 와 같다)
+            let items = match v {
+                Y::Sequence(items) => items,
+                _ => return Err("모델 별칭 목록(예: [qwen3-1.7b-q4])이어야 합니다".into()),
+            };
+            let mut out = vec![];
+            for it in items {
+                // 항목마다 Alias 규칙 — 틀린 항목을 오류문에 밝힌다
+                match run_check(&Check::Alias, it) {
+                    Ok(Some(SVal::Str(a))) => out.push(a),
+                    Err(e) => return Err(format!("'{}' — {}", yshow(it), e)),
+                    _ => return Err("모델 별칭(예: qwen3-1.7b-q4)이어야 합니다".into()),
+                }
+            }
+            // 쉼표로 이어 한 값으로 둔다 — build() 가 다시 나눈다(빈 목록은 빈 글 = 모두 끔)
+            Ok(Some(SVal::Str(out.join(","))))
         }
         Check::Threads => match v {
             // auto 는 값을 넣지 않는다(코드 기본값 = auto)
@@ -1193,6 +1227,22 @@ mod tests {
         assert_eq!(got, vec![("new-1b-q4", "New-1B.gguf", "qwen3", true, ""), ("rt-1b-q5", "rt.gguf", "qwen3", false, "llama_rt2")]);
         assert_eq!(skipped.len(), 3);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // 근거 배치 모델 목록 — 목록만 받고 항목은 별칭 규칙(settings.py _alias_list 와 같다)
+    #[test]
+    fn alias_list_check() {
+        let y = |t: &str| serde_yaml::from_str::<Y>(t).unwrap();
+        let ok = |t: &str| match run_check(&Check::AliasList, &y(t)) {
+            Ok(Some(SVal::Str(s))) => s,
+            other => panic!("{:?}", other.is_ok()),
+        };
+        assert_eq!(ok("[qwen3-1.7b-q4]"), "qwen3-1.7b-q4");
+        assert_eq!(ok("[' Qwen3-1.7B-Q4 ', midm-2.0-mini-q4]"), "qwen3-1.7b-q4,midm-2.0-mini-q4");
+        assert_eq!(ok("[]"), "");
+        assert!(run_check(&Check::AliasList, &y("qwen3-1.7b-q4")).unwrap_err().contains("모델 별칭 목록"));
+        assert!(run_check(&Check::AliasList, &y("[qwen3 1.7b]")).unwrap_err().contains("qwen3 1.7b"));
+        assert_eq!(REVERSE_CONTEXT_DEFAULT, &["qwen3-1.7b-q4"]);
     }
 
     #[test]

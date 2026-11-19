@@ -31,7 +31,7 @@ KEYS = ["CHUNK_TOKENS", "CHUNK_OVERLAP", "CHUNK_MODE", "MIN_CHUNK_TOKENS",
         "TABLE_HEADER_MAX_TOKENS", "DENSE_TOP_K", "BM25_TOP_K", "RRF_K", "BM25_K1",
         "BM25_B", "DEDUP_EVIDENCE", "RERANK", "RERANK_POOL", "TOP_K", "GEN_MAX_TOKENS", "PROMPT", "DEFAULT_GEN_MODEL",
         "PARENT_MODE", "PARENT_MAX_TOKENS", "FLATTEN_TABLES", "PDF_INFER_HEADINGS",
-        "SYSTEM_PROMPT_TEXT", "NEIGHBORS"]
+        "SYSTEM_PROMPT_TEXT", "NEIGHBORS", "REVERSE_CONTEXT_MODELS"]
 
 
 #------------------------------------------------------------------
@@ -71,9 +71,10 @@ def load_in_child(yaml_text=None, env=None, tmp=None):
         with open(path, "w", encoding="utf-8") as f:
             f.write(yaml_text)
         e["SIMPLERAG_CONFIG"] = path
+    # 근거 배치 모델 목록(frozenset)은 JSON 에 없는 형이라 default=sorted 로 정렬한 목록으로 내보낸다
     code = ("import json,sys; sys.path.insert(0,'src'); from simplerag import config as c; "
             "print(json.dumps({k: getattr(c, k) for k in %r} | "
-            "{'CONFIG_PATH': c.CONFIG_PATH, 'CONFIG_WARNINGS': c.CONFIG_WARNINGS}))" % KEYS)
+            "{'CONFIG_PATH': c.CONFIG_PATH, 'CONFIG_WARNINGS': c.CONFIG_WARNINGS}, default=sorted))" % KEYS)
     r = subprocess.run([PY, "-c", code], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", env=e)
     vals = None

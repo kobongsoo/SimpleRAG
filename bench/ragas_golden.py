@@ -108,6 +108,64 @@ def load_golden(limit=0, path=None):
 
 
 #------------------------------------------------------------------
+# 근거 배치 정하기 (실험용)
+#=> 운영 설정(generation.reverse_context_models)과 다른 배치로 재 보고 싶을 때 쓴다.
+#   검색·리랭킹 결과와 화면용 근거 목록은 그대로이고, 모델에 보여 주는 프롬프트만 달라진다.
+#    1) config          : 설정 그대로(기본) — 목록에 든 모델이면 거꾸로, 아니면 1위부터
+#    2) rank            : 이 모델도 1위부터 — [1] 1위 → [2] 2위 → [3] 3위 → [질문]
+#    3) reverse_keepnum : 이 모델도 거꾸로, 번호는 순위대로 — [3] 3위 → [2] 2위 → [1] 1위 → [질문] (운영 방식)
+#    4) reverse         : 거꾸로, 번호도 자리대로 — [1] 3위 → [2] 2위 → [3] 1위 → [질문]
+#                         (2026-11-18 재현용. 인용 번호가 틀어져 운영에 쓰지 않는다)
+#   2)·3) 은 config.REVERSE_CONTEXT_MODELS 를 바꾸고, 4) 는 조립 함수를 바꿔 끼운다
+#   (이름을 직접 가져간 gguf_generator 쪽도 함께).
+#
+# -in: order = config | rank | reverse | reverse_keepnum
+# -in: model = 이번에 답할 모델 별칭
+#
+# -out: 없음
+# -out: error = 모르는 값이면 SystemExit
+#------------------------------------------------------------------
+def patch_ctx_order(order, model):
+    from simplerag import config
+    if order == "config":
+        return
+    if order == "rank":
+        # 목록을 비우면 어떤 모델도 뒤집지 않는다
+        config.REVERSE_CONTEXT_MODELS = frozenset()
+        return
+    if order == "reverse_keepnum":
+        # 이 모델만 목록에 — 운영 코드가 그대로 뒤집는다
+        config.REVERSE_CONTEXT_MODELS = frozenset([model])
+        return
+    if order != "reverse":
+        raise SystemExit("--ctx-order 는 config | rank | reverse | reverse_keepnum: %r" % order)
+    from simplerag.generate import prompts, gguf_generator
+
+    #------------------------------------------------------------------
+    # 바꿔 끼울 사용자 메시지 조립 함수 (reverse 재현용)
+    #=> 원래 함수와 같은 틀([근거] … [질문])에 순서를 뒤집고 번호를 자리대로 다시 매긴다.
+    #
+    # -in: query   = 질문
+    # -in: chunks  = 근거 글 목록(1위부터)
+    # -in: reverse = 원래 함수의 인자 — 무시하고 늘 뒤집는다
+    #
+    # -out: str = 사용자 메시지
+    # -out: error = 없음
+    #------------------------------------------------------------------
+    def build(query, chunks, reverse=False):
+        # 표 펴기는 원래 함수와 똑같이 먼저 한다
+        if config.FLATTEN_TABLES:
+            from simplerag.tableflat import flatten_tables
+            chunks = [flatten_tables(c) for c in chunks]
+        # 자리 번호를 1부터 다시 붙인다 — 1위가 맨 뒤 [n]
+        blocks = ["[{}] {}".format(i + 1, c) for i, c in enumerate(reversed(chunks))]
+        return "[근거]\n" + "\n\n".join(blocks) + "\n\n[질문]\n" + query
+
+    prompts.build_user_message = build
+    gguf_generator.build_user_message = build
+
+
+#------------------------------------------------------------------
 # 1단계 — 파이프라인으로 답변·근거 수집
 #=> 운영과 같은 설정(config.yaml: 리랭커 풀 10 → 근거 3건, 기본 모델)으로 문항을 하나씩 돌린다.
 #    1) App 을 띄우고 워밍업·리랭커 적재를 기다린다 — 첫 문항 시간이 튀지 않게
@@ -133,6 +191,8 @@ def stage_collect(args):
     model = args.model or config.DEFAULT_GEN_MODEL
     if model not in config.GEN_MODELS:
         raise SystemExit("--model 은 %s 중 하나: %r" % (" | ".join(config.GEN_MODELS), model))
+    # 근거 배치 실험이면 모델을 띄우기 전에 정해 둔다(모델 별칭이 필요해 여기서)
+    patch_ctx_order(args.ctx_order, model)
     app = App(model)
     out = []
     try:
@@ -142,7 +202,7 @@ def stage_collect(args):
         warm_sec = round(time.time() - t_warm, 2)
         # 결과 dict 에 JSON 으로 못 쓰는 값이 섞일 수 있어 문자열로 바꿔 둔다
         save_json(os.path.join(out_dir, "warmup.json"), {
-            "model": model, "wall_sec": warm_sec,
+            "model": model, "wall_sec": warm_sec, "ctx_order": args.ctx_order,
             "backend": getattr(getattr(app, "generator", None), "backend", None),
             "result": json.loads(json.dumps(warm, ensure_ascii=False, default=str)) if warm is not None else None})
         print("[collect] {}문항 / 모델 {} / 근거 {}건 / 리랭커 풀 {} / 워밍업 {}초".format(
@@ -458,6 +518,8 @@ def main():
     p.add_argument("--responses", default="", help="score 전용: 채점할 responses.json 경로(다른 실험 답변 재채점)")
     p.add_argument("--model", default="", help="collect 전용: 생성 모델 별칭(생략 시 config.DEFAULT_GEN_MODEL)")
     p.add_argument("--golden", default="", help="collect 전용: 골든셋 jsonl 경로(생략 시 dataset/golden_dataset.jsonl)")
+    p.add_argument("--ctx-order", default="config",
+                   help="collect 전용: 근거 배치 config(설정 그대로) | rank | reverse_keepnum | reverse (실험용)")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     return stage_collect(args) if args.stage == "collect" else stage_score(args)
